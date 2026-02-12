@@ -1,0 +1,39 @@
+name: Update Alpha Market Data
+
+on:
+  schedule:
+    - cron: '*/30 * * * *' # Chạy mỗi 30 phút
+  workflow_dispatch: # Nút chạy tay
+
+permissions:
+  contents: read # Đổi thành read vì không cần ghi vào GitHub nữa
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10' # Đã nâng cấp lên 3.10 cho chuẩn
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Run Fetch Script (R2 Mode)
+      env: 
+        BINANCE_INTERNAL_AGG_API: ${{ secrets.BINANCE_INTERNAL_AGG_API }}
+        BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+        PROXY_WORKER_URL: ${{ secrets.PROXY_WORKER_URL }}
+        R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      run: |
+        python scripts/fetch_alpha.py
+    
