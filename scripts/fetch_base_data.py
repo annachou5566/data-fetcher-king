@@ -68,15 +68,29 @@ def fetch_binance_history(alpha_id, start_ts):
         # Lấy mốc 00:00 UTC hôm nay
         today_start_ts = int(datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
+        # Xử lý Total Volume
         if res and res.get("success") and res.get("data"):
-            for k in res["data"]["klineInfos"]:
+            k_infos_total = []
+            if isinstance(res["data"], list):
+                k_infos_total = res["data"]
+            elif isinstance(res["data"], dict) and "klineInfos" in res["data"]:
+                k_infos_total = res["data"]["klineInfos"]
+
+            for k in k_infos_total:
                 k_ts = int(k[0])
                 if k_ts >= start_ts and k_ts < today_start_ts:
                     date_str = datetime.utcfromtimestamp(k_ts/1000).strftime('%Y-%m-%d')
                     history_total.append({"date": date_str, "vol": float(k[5])})
 
+        # Xử lý Limit Volume
         if res_lim and res_lim.get("success") and res_lim.get("data"):
-            for k in res_lim["data"]["klineInfos"]:
+            k_infos_limit = []
+            if isinstance(res_lim["data"], list):
+                k_infos_limit = res_lim["data"]
+            elif isinstance(res_lim["data"], dict) and "klineInfos" in res_lim["data"]:
+                k_infos_limit = res_lim["data"]["klineInfos"]
+
+            for k in k_infos_limit:
                 k_ts = int(k[0])
                 if k_ts >= start_ts and k_ts < today_start_ts:
                     date_str = datetime.utcfromtimestamp(k_ts/1000).strftime('%Y-%m-%d')
