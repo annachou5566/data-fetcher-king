@@ -68,8 +68,9 @@ def fetch_binance_history(alpha_id, start_ts):
         # Lấy mốc 00:00 UTC hôm nay
         today_start_ts = int(datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
-        # Xử lý Total Volume
-        if res and res.get("success") and res.get("data"):
+        # 1. Xử lý Total Volume
+        # ĐÃ SỬA: Đổi từ res.get("success") thành kiểm tra "code" == "000000"
+        if res and res.get("code") == "000000" and res.get("data"):
             k_infos_total = []
             if isinstance(res["data"], list):
                 k_infos_total = res["data"]
@@ -80,10 +81,12 @@ def fetch_binance_history(alpha_id, start_ts):
                 k_ts = int(k[0])
                 if k_ts >= start_ts and k_ts < today_start_ts:
                     date_str = datetime.utcfromtimestamp(k_ts/1000).strftime('%Y-%m-%d')
-                    history_total.append({"date": date_str, "vol": float(k[5])})
+                    # ĐÃ SỬA: Lấy k[7] (Volume USD) thay vì k[5] (Volume Token)
+                    history_total.append({"date": date_str, "vol": float(k[7])})
 
-        # Xử lý Limit Volume
-        if res_lim and res_lim.get("success") and res_lim.get("data"):
+        # 2. Xử lý Limit Volume
+        # ĐÃ SỬA: Đổi kiểm tra "success" thành "code"
+        if res_lim and res_lim.get("code") == "000000" and res_lim.get("data"):
             k_infos_limit = []
             if isinstance(res_lim["data"], list):
                 k_infos_limit = res_lim["data"]
@@ -94,7 +97,8 @@ def fetch_binance_history(alpha_id, start_ts):
                 k_ts = int(k[0])
                 if k_ts >= start_ts and k_ts < today_start_ts:
                     date_str = datetime.utcfromtimestamp(k_ts/1000).strftime('%Y-%m-%d')
-                    history_limit.append({"date": date_str, "vol": float(k[5])})
+                    # ĐÃ SỬA: Lấy k[7] (Volume USD) thay vì k[5] (Volume Token)
+                    history_limit.append({"date": date_str, "vol": float(k[7])})
                     
         return history_total, history_limit
     except Exception as e:
