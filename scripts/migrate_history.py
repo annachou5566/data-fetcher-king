@@ -82,15 +82,13 @@ def main():
                 continue
 
             # --- 3. XỬ LÝ KEY CHO DATA TRÊN R2 ---
+            object_key = str(db_id)
+
             alpha_id = data.get("alphaId")
-            
             if alpha_id:
-            
-                object_key = f"{alpha_id}_{db_id}" 
                 count_standard += 1
             else:
-                object_key = f"ALPHA_{db_id}"
-                data["alphaId"] = object_key 
+                data["alphaId"] = f"ALPHA_{db_id}" 
                 count_legacy += 1
 
             # --- 4. CHUẨN HÓA DATA ---
