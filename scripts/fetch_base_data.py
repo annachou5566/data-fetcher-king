@@ -26,7 +26,6 @@ s3 = boto3.client('s3', endpoint_url=R2_ENDPOINT,
                   aws_access_key_id=R2_ACCESS_KEY_ID, aws_secret_access_key=R2_SECRET_ACCESS_KEY,
                   config=Config(signature_version='s3v4'))
 
-# Setup Scraper chống block giống code cũ của bạn
 session = cloudscraper.create_scraper()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36",
@@ -53,56 +52,44 @@ def fetch_smart(target_url, retries=3):
         time.sleep(1)
     return None
 
-def fetch_binance_history(alpha_id, start_ts):
+# [ĐÃ SỬA]: Tra bằng chain_id và contract thay vì alpha_id
+def fetch_binance_history(chain_id, contract, start_ts):
     """ Lấy volume klines 1 ngày từ Start Date đến Hết ngày hôm qua """
     try:
-        url = f"https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines?symbol={alpha_id}USDT&interval=1d&limit=100&dataType=aggregate"
-        res = fetch_smart(url)
+        # 1. Gọi API Total (CEX + On-chain)
+        url_tot = f"https://www.binance.com/bapi/defi/v1/public/alpha-trade/agg-klines?chainId={chain_id}&interval=1d&limit=100&tokenAddress={contract}&dataType=aggregate"
+        res_tot = fetch_smart(url_tot)
         
-        url_lim = f"https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines?symbol={alpha_id}USDT&interval=1d&limit=100&dataType=limit"
+        # 2. Gọi API Limit (Bao trọn USDT + USDC + BNB...)
+        url_lim = f"https://www.binance.com/bapi/defi/v1/public/alpha-trade/agg-klines?chainId={chain_id}&interval=1d&limit=100&tokenAddress={contract}&dataType=limit"
         res_lim = fetch_smart(url_lim)
         
         history_total = []
         history_limit = []
         
-        # Lấy mốc 00:00 UTC hôm nay
         today_start_ts = int(datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
-        # 1. Xử lý Total Volume
-        # ĐÃ SỬA: Đổi từ res.get("success") thành kiểm tra "code" == "000000"
-        if res and res.get("code") == "000000" and res.get("data"):
-            k_infos_total = []
-            if isinstance(res["data"], list):
-                k_infos_total = res["data"]
-            elif isinstance(res["data"], dict) and "klineInfos" in res["data"]:
-                k_infos_total = res["data"]["klineInfos"]
-
+        # Xử lý Total Volume (Lấy k[5] làm USD)
+        if res_tot and res_tot.get("code") == "000000" and res_tot.get("data"):
+            k_infos_total = res_tot["data"].get("klineInfos", [])
             for k in k_infos_total:
                 k_ts = int(k[0])
                 if k_ts >= start_ts and k_ts < today_start_ts:
                     date_str = datetime.utcfromtimestamp(k_ts/1000).strftime('%Y-%m-%d')
-                    # ĐÃ SỬA: Lấy k[7] (Volume USD) thay vì k[5] (Volume Token)
-                    history_total.append({"date": date_str, "vol": float(k[7])})
+                    history_total.append({"date": date_str, "vol": float(k[5])})
 
-        # 2. Xử lý Limit Volume
-        # ĐÃ SỬA: Đổi kiểm tra "success" thành "code"
+        # Xử lý Limit Volume (Lấy k[5] làm USD)
         if res_lim and res_lim.get("code") == "000000" and res_lim.get("data"):
-            k_infos_limit = []
-            if isinstance(res_lim["data"], list):
-                k_infos_limit = res_lim["data"]
-            elif isinstance(res_lim["data"], dict) and "klineInfos" in res_lim["data"]:
-                k_infos_limit = res_lim["data"]["klineInfos"]
-
+            k_infos_limit = res_lim["data"].get("klineInfos", [])
             for k in k_infos_limit:
                 k_ts = int(k[0])
                 if k_ts >= start_ts and k_ts < today_start_ts:
                     date_str = datetime.utcfromtimestamp(k_ts/1000).strftime('%Y-%m-%d')
-                    # ĐÃ SỬA: Lấy k[7] (Volume USD) thay vì k[5] (Volume Token)
-                    history_limit.append({"date": date_str, "vol": float(k[7])})
+                    history_limit.append({"date": date_str, "vol": float(k[5])})
                     
         return history_total, history_limit
     except Exception as e:
-        print(f"Error fetching {alpha_id}: {e}")
+        print(f"Error fetching {contract}: {e}")
         return [], []
 
 def main():
@@ -121,7 +108,6 @@ def main():
             alpha_id = meta.get("alphaId")
             if not alpha_id: continue 
 
-            # LỌC ACTIVE
             is_active = True
             if meta.get("ai_prediction", {}).get("status_label") == "FINALIZED":
                 is_active = False
@@ -132,13 +118,26 @@ def main():
 
             print(f"-> Xử lý Base Volume: {meta.get('name')} ({alpha_id})...")
             
+            # [ĐÃ SỬA]: Mapping lại ChainId và Contract cẩn thận
+            contract = meta.get("contract", "").strip().lower()
+            chain_id = meta.get("chainId")
+            if not chain_id and meta.get("chain"):
+                c_str = str(meta.get("chain")).lower().strip()
+                chain_map = {'bsc': 56, 'bnb': 56, 'eth': 1, 'ethereum': 1, 'arb': 42161, 'arbitrum': 42161, 'base': 8453, 'op': 10, 'optimism': 10, 'polygon': 137, 'matic': 137}
+                chain_id = chain_map.get(c_str)
+
+            if not chain_id or not contract:
+                print(f"Bỏ qua {alpha_id} do thiếu chainId hoặc contract")
+                continue
+
             start_str = meta.get("start")
             start_time_str = meta.get("startTime", "00:00")
             if len(start_time_str) == 5: start_time_str += ":00"
             start_dt = datetime.strptime(f"{start_str}T{start_time_str}Z", "%Y-%m-%dT%H:%M:%SZ")
             start_ts = int(start_dt.timestamp() * 1000)
 
-            hist_total, hist_limit = fetch_binance_history(alpha_id, start_ts)
+            # [ĐÃ SỬA]: Gọi hàm với chain_id và contract
+            hist_total, hist_limit = fetch_binance_history(chain_id, contract, start_ts)
             
             export_data[alpha_id] = {
                 "base_total_vol": sum(item['vol'] for item in hist_total),
@@ -152,7 +151,6 @@ def main():
         except Exception as e:
             print(f"Lỗi tại {t.get('name')}: {e}")
 
-    # Đẩy file lên R2 cho Node.js đọc
     s3.put_object(
         Bucket=R2_BUCKET,
         Key='tournaments-base.json',
