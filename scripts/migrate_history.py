@@ -85,10 +85,10 @@ def main():
             alpha_id = data.get("alphaId")
             
             if alpha_id:
-                object_key = alpha_id
+            
+                object_key = f"{alpha_id}_{db_id}" 
                 count_standard += 1
             else:
-                # SỬA LỖI CHÍ MẠNG: Dùng prefix ALPHA_ thay vì legacy_
                 object_key = f"ALPHA_{db_id}"
                 data["alphaId"] = object_key 
                 count_legacy += 1
