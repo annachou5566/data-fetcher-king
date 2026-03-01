@@ -2,7 +2,7 @@ import json
 import os
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import requests 
 import cloudscraper
@@ -305,6 +305,69 @@ def process_single_token(item):
         "chart": chart_data
     }
 
+# --- [MỚI] THUẬT TOÁN TÍNH CÁI ĐUÔI 1440 PHÚT ---
+def build_suffix_sum(klines, yesterday_str):
+    arr = [0.0] * 1440
+    if not klines: return arr
+    minute_map = [0.0] * 1440
+    
+    for k in klines:
+        try:
+            candle_ts = int(k[0])
+            dt = datetime.utcfromtimestamp(candle_ts / 1000.0)
+            if dt.strftime('%Y-%m-%d') == yesterday_str:
+                start_min = dt.hour * 60 + dt.minute
+                vol_per_min = float(k[5] or 0) / 5.0
+                for i in range(5):
+                    if start_min + i < 1440:
+                        minute_map[start_min + i] += vol_per_min
+        except: pass
+        
+    running_sum = 0.0
+    for i in range(1439, -1, -1):
+        running_sum += minute_map[i]
+        arr[i] = round(running_sum, 2) # Làm tròn 2 số thập phân để siêu nén JSON
+    return arr
+
+def generate_and_upload_tails(r2_client, raw_tokens):
+    print("\n🦊 Bắt đầu quét Cái Đuôi 5m cho toàn thị trường...")
+    yesterday_str = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    tails_total, tails_limit = {}, {}
+    valid_tokens = [t for t in raw_tokens if safe_float(t.get("volume24h")) > 0]
+    
+    for idx, t in enumerate(valid_tokens):
+        aid = t.get("alphaId")
+        chain_id = t.get("chainId")
+        contract = t.get("contractAddress")
+        if not aid or not contract: continue
+        
+        if idx % 50 == 0: print(f"   Đang xử lý {idx}/{len(valid_tokens)} token...")
+        
+        clean_addr = str(contract)
+        if chain_id not in ["CT_501", "CT_784"]: clean_addr = clean_addr.lower()
+        
+        base_url = f"{API_AGG_KLINES}?chainId={chain_id}&interval=5m&limit=1000&tokenAddress={clean_addr}"
+        
+        try:
+            res_tot = fetch_smart(f"{base_url}&dataType=aggregate", retries=1)
+            if res_tot and "data" in res_tot and "klineInfos" in res_tot["data"]:
+                tails_total[aid] = build_suffix_sum(res_tot["data"]["klineInfos"], yesterday_str)
+                
+            res_lim = fetch_smart(f"{base_url}&dataType=limit", retries=1)
+            if res_lim and "data" in res_lim and "klineInfos" in res_lim["data"]:
+                tails_limit[aid] = build_suffix_sum(res_lim["data"]["klineInfos"], yesterday_str)
+        except: pass
+        time.sleep(0.1) # Lách Ban IP mượt mà
+        
+    print("☁️ Đang Upload Tails lên R2...")
+    json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
+    try:
+        r2_client.put_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json', Body=json_str.encode('utf-8'), ContentType='application/json')
+        print("✅ Đã lưu tails_cache.json thành công!")
+    except Exception as e: print(f"❌ Upload Tails Failed: {e}")
+
+
 def fetch_data():
     global ACTIVE_SPOT_SYMBOLS, OLD_DATA_MAP
     start = time.time()
@@ -372,6 +435,7 @@ def fetch_data():
             ContentType='application/json'
         )
         print(f"✅ Uploaded history/{today_str}.json")
+generate_and_upload_tails(r2, target_tokens)
 
     except Exception as e:
         print(f"❌ R2 Upload Failed: {e}")
