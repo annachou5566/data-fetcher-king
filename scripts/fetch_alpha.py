@@ -301,8 +301,20 @@ def build_suffix_sum(klines, yesterday_str):
     return arr
 
 def generate_and_upload_tails(r2_client, raw_tokens):
-    print("\n🦊 Bắt đầu quét Cái Đuôi 5m cho toàn thị trường...")
+    today_str = datetime.utcnow().strftime('%Y-%m-%d')
     yesterday_str = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    # --- CHỐT 2: KIỂM TRA XEM HÔM NAY ĐÃ TÍNH ĐUÔI CHƯA ---
+    try:
+        head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json')
+        last_modified = head['LastModified'] # Giờ UTC
+        if last_modified.strftime('%Y-%m-%d') == today_str:
+            print("⏭️ File tails_cache.json của hôm nay đã có sẵn. BỎ QUA quét để bảo vệ Proxy!")
+            return
+    except Exception as e:
+        print("🔍 Chưa có file Tails của hôm nay, bắt đầu tiến hành quét...")
+    
+    print("\n🦊 Bắt đầu quét Cái Đuôi 5m cho toàn thị trường (Chế độ CHẬM để bảo vệ Realtime)...")
     
     tails_total, tails_limit = {}, {}
     valid_tokens = [t for t in raw_tokens if safe_float(t.get("volume24h")) > 0]
@@ -313,7 +325,7 @@ def generate_and_upload_tails(r2_client, raw_tokens):
         contract = t.get("contractAddress")
         if not aid or not contract: continue
         
-        if idx % 50 == 0: print(f"   Đang xử lý {idx}/{len(valid_tokens)} token...")
+        if idx % 10 == 0: print(f"   Đang xử lý {idx}/{len(valid_tokens)} token...")
         
         clean_addr = str(contract)
         if chain_id not in ["CT_501", "CT_784"]: clean_addr = clean_addr.lower()
@@ -328,15 +340,20 @@ def generate_and_upload_tails(r2_client, raw_tokens):
             res_lim = fetch_smart(f"{base_url}&dataType=limit", retries=1)
             if res_lim and "data" in res_lim and "klineInfos" in res_lim["data"]:
                 tails_limit[aid] = build_suffix_sum(res_lim["data"]["klineInfos"], yesterday_str)
-        except: pass
-        time.sleep(0.1) 
+        except Exception as e: 
+            pass
+            
+        # --- CHỐT 1: KÉO GIÃN NHỊP ĐỘ ---
+        # Nghỉ 2 giây để nhường đường cho Node.js Realtime phi qua Proxy
+        time.sleep(2) 
         
     print("☁️ Đang Upload Tails lên R2...")
     json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
     try:
         r2_client.put_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json', Body=json_str.encode('utf-8'), ContentType='application/json')
         print("✅ Đã lưu tails_cache.json thành công!")
-    except Exception as e: print(f"❌ Upload Tails Failed: {e}")
+    except Exception as e: 
+        print(f"❌ Upload Tails Failed: {e}")
 
 # --- HÀM CHÍNH ---
 def fetch_data():
