@@ -63,43 +63,36 @@ KEY_MAP = {
     "offline": "off", "listingCex": "cex",
     "onlineTge": "tge",
     "onlineAirdrop": "air",
-    # [MỚI] Thêm Mul Point
     "mul_point": "mp"
 }
 
 def minify_token_data(token):
     minified = {}
-    # 1. Các trường cơ bản
     minified[KEY_MAP["id"]] = token.get("id")
     minified[KEY_MAP["symbol"]] = token.get("symbol")
     minified[KEY_MAP["name"]] = token.get("name")
     minified[KEY_MAP["icon"]] = token.get("icon")
     
-    # 2. Các trường Chain (Mạng lưới) - ĐÃ BỔ SUNG ĐẦY ĐỦ
-    minified[KEY_MAP["chain"]] = token.get("chain")           # Tên mạng
-    minified[KEY_MAP["chain_icon"]] = token.get("chain_icon") # Logo mạng (Cái bạn đang tìm)
+    minified[KEY_MAP["chain"]] = token.get("chain")
+    minified[KEY_MAP["chain_icon"]] = token.get("chain_icon")
     minified[KEY_MAP["contract"]] = token.get("contract")
 
-    # 3. Trạng thái & Giá
     minified[KEY_MAP["status"]] = token.get("status")
     minified[KEY_MAP["price"]] = token.get("price")
     minified[KEY_MAP["change_24h"]] = token.get("change_24h")
-    minified[KEY_MAP["mul_point"]] = token.get("mul_point")   # [MỚI] Điểm nhân
+    minified[KEY_MAP["mul_point"]] = token.get("mul_point")
 
-    # 4. Số liệu tài chính (Ép kiểu int cho gọn nếu số lớn)
     minified[KEY_MAP["market_cap"]] = int(token.get("market_cap", 0))
     minified[KEY_MAP["holders"]] = int(token.get("holders", 0))
     minified[KEY_MAP["liquidity"]] = int(token.get("liquidity", 0))
     minified[KEY_MAP["tx_count"]] = int(token.get("tx_count", 0))
     
-    # 5. Thông tin Listing / Offline
     minified[KEY_MAP["listing_time"]] = token.get("listing_time")
     minified[KEY_MAP["offline"]] = 1 if token.get("offline") else 0
     minified[KEY_MAP["listingCex"]] = 1 if token.get("listingCex") else 0
     minified[KEY_MAP["onlineTge"]] = 1 if token.get("onlineTge") else 0
     minified[KEY_MAP["onlineAirdrop"]] = 1 if token.get("onlineAirdrop") else 0
 
-    # 6. Volume (Giữ nguyên cấu trúc object con)
     vol = token.get("volume", {})
     minified[KEY_MAP["volume"]] = {
         KEY_MAP["rolling_24h"]: int(vol.get("rolling_24h", 0)),
@@ -108,12 +101,9 @@ def minify_token_data(token):
         KEY_MAP["daily_onchain"]: int(vol.get("daily_onchain", 0))
     }
     
-    # 7. Biểu đồ
     minified[KEY_MAP["chart"]] = token.get("chart", [])
-    
     return minified
 
-# --- HÀM GỌI API ---
 def fetch_smart(target_url, retries=3):
     is_render = "onrender.com" in (PROXY_WORKER_URL or "")
     if not target_url or "None" in target_url: return None
@@ -147,26 +137,16 @@ def safe_float(v):
     try: return float(v) if v else 0.0
     except: return 0.0
 
-# --- TẢI DATA CŨ TỪ R2 (THAY VÌ LOAD LOCAL) ---
 def load_old_data_from_r2(r2_client):
     if not r2_client: return {}
     try:
-        # Tải file market-data.json từ R2 về bộ nhớ
         obj = r2_client.get_object(Bucket=R2_BUCKET_NAME, Key='market-data.json')
         data = json.loads(obj['Body'].read().decode('utf-8'))
-        
-        # Vì dữ liệu cũ trên R2 đã bị Minify (làm rối), ta cần map ngược lại ID
-        # để code logic hiểu được. (Tuy nhiên, logic check limit chủ yếu cần ID,
-        # nếu minify ID vẫn giữ nguyên thì OK).
-        # Ở đây đơn giản hóa: Nếu đã minify thì ID là key "i"
-        
         tokens = data.get('data', [])
         mapped_data = {}
         for t in tokens:
-            # Map key 'i' (minified) hoặc 'id' (legacy)
             tid = t.get('i') or t.get('id')
             if tid: mapped_data[tid] = t
-            
         return mapped_data
     except Exception as e:
         print(f"⚠️ Không tải được cache từ R2 (Lần đầu chạy?): {e}")
@@ -232,16 +212,11 @@ def process_single_token(item):
             status = "PRE_DELISTED"
             need_limit_check = True
 
-    # --- [MỚI] LOGIC CACHE: CHẶN TOKEN ĐÃ CHẾT TỪ LẦN TRƯỚC ---
-    # Mục đích: Nếu lịch sử (OLD_DATA_MAP) ghi nhận là DELISTED thì bỏ qua luôn.
-    # Lưu ý: OLD_DATA_MAP dùng key đã minify (ví dụ: KEY_MAP["status"] = "st")
     if OLD_DATA_MAP and aid in OLD_DATA_MAP:
         old_item = OLD_DATA_MAP[aid]
-        # Kiểm tra trạng thái cũ
         if old_item.get(KEY_MAP["status"]) == "DELISTED":
             status = "DELISTED"
-            need_limit_check = False  # Tắt cờ check limit để không chui vào should_fetch
-    # -----------------------------------------------------------
+            need_limit_check = False 
 
     should_fetch = False
     if vol_rolling > 0 and (status == "ALPHA" or status == "PRE_DELISTED"):
@@ -249,9 +224,6 @@ def process_single_token(item):
     
     daily_total, daily_limit, daily_onchain = 0.0, 0.0, 0.0
     chart_data = []
-    
-    # Logic Cache: Cần xử lý khéo hơn vì key cache đã bị minify
-    # Nhưng để an toàn cho phiên bản này, ta tạm ưu tiên fetch mới.
     
     if should_fetch:
         print(f"📡 {symbol}...", end=" ", flush=True)
@@ -277,7 +249,6 @@ def process_single_token(item):
         daily_total = vol_rolling
         if status == "PRE_DELISTED": status = "DELISTED"
         
-        # [MỚI] Tái sử dụng Chart cũ nếu có (để không bị mất biểu đồ khi skip fetch)
         if status == "DELISTED" and OLD_DATA_MAP and aid in OLD_DATA_MAP:
             old_item = OLD_DATA_MAP[aid]
             if old_item.get(KEY_MAP["chart"]):
@@ -326,7 +297,7 @@ def build_suffix_sum(klines, yesterday_str):
     running_sum = 0.0
     for i in range(1439, -1, -1):
         running_sum += minute_map[i]
-        arr[i] = round(running_sum, 2) # Làm tròn 2 số thập phân để siêu nén JSON
+        arr[i] = round(running_sum, 2)
     return arr
 
 def generate_and_upload_tails(r2_client, raw_tokens):
@@ -358,7 +329,7 @@ def generate_and_upload_tails(r2_client, raw_tokens):
             if res_lim and "data" in res_lim and "klineInfos" in res_lim["data"]:
                 tails_limit[aid] = build_suffix_sum(res_lim["data"]["klineInfos"], yesterday_str)
         except: pass
-        time.sleep(0.1) # Lách Ban IP mượt mà
+        time.sleep(0.1) 
         
     print("☁️ Đang Upload Tails lên R2...")
     json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
@@ -367,7 +338,7 @@ def generate_and_upload_tails(r2_client, raw_tokens):
         print("✅ Đã lưu tails_cache.json thành công!")
     except Exception as e: print(f"❌ Upload Tails Failed: {e}")
 
-
+# --- HÀM CHÍNH ---
 def fetch_data():
     global ACTIVE_SPOT_SYMBOLS, OLD_DATA_MAP
     start = time.time()
@@ -398,7 +369,6 @@ def fetch_data():
 
     results.sort(key=lambda x: x["volume"]["daily_total"], reverse=True)
 
-    # --- MINIFY DATA ---
     print(f"🔒 Minifying...")
     minified_results = [minify_token_data(t) for t in results]
 
@@ -413,20 +383,17 @@ def fetch_data():
     
     json_str = json.dumps(final_output, ensure_ascii=False, separators=(',', ':'))
 
-    # --- UPLOAD TO CLOUDFLARE R2 ---
     print("☁️ Uploading to Cloudflare R2...")
     try:
-        # 1. Upload File Mới Nhất
         r2.put_object(
             Bucket=R2_BUCKET_NAME,
             Key='market-data.json',
             Body=json_str.encode('utf-8'),
             ContentType='application/json',
-            CacheControl='max-age=60' # Cache 1 phút
+            CacheControl='max-age=60'
         )
         print("✅ Uploaded market-data.json")
 
-        # 2. Upload File Lịch Sử
         today_str = datetime.now().strftime("%Y-%m-%d")
         r2.put_object(
             Bucket=R2_BUCKET_NAME,
@@ -435,10 +402,12 @@ def fetch_data():
             ContentType='application/json'
         )
         print(f"✅ Uploaded history/{today_str}.json")
-generate_and_upload_tails(r2, target_tokens)
 
     except Exception as e:
         print(f"❌ R2 Upload Failed: {e}")
+
+    # Chạy hàm lấy Đuôi sau khi file chính đã upload xong để an toàn
+    generate_and_upload_tails(r2, target_tokens)
 
     print(f"🏁 DONE! Total: {time.time()-start:.1f}s")
 
