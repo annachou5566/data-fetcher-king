@@ -56,6 +56,7 @@ KEY_MAP = {
     "chain": "cn", "chain_icon": "ci", "contract": "ct",
     "status": "st", "price": "p", "change_24h": "c",
     "market_cap": "mc", "liquidity": "l", "volume": "v",
+    "holders": "h",
     "rolling_24h": "r24", "daily_total": "dt",
     "daily_limit": "dl", "daily_onchain": "do",
     "chart": "ch", "listing_time": "lt", "tx_count": "tx",
@@ -87,6 +88,7 @@ def minify_token_data(token):
 
     # 4. Số liệu tài chính (Ép kiểu int cho gọn nếu số lớn)
     minified[KEY_MAP["market_cap"]] = int(token.get("market_cap", 0))
+    minified[KEY_MAP["holders"]] = int(token.get("holders", 0))
     minified[KEY_MAP["liquidity"]] = int(token.get("liquidity", 0))
     minified[KEY_MAP["tx_count"]] = int(token.get("tx_count", 0))
     
@@ -295,6 +297,7 @@ def process_single_token(item):
         "change_24h": safe_float(item.get("percentChange24h")),
         "liquidity": safe_float(item.get("liquidity")),
         "market_cap": safe_float(item.get("marketCap")),
+        "holders": safe_float(item.get("holders")),
         "volume": {
             "rolling_24h": vol_rolling, "daily_total": daily_total,
             "daily_limit": daily_limit, "daily_onchain": daily_onchain
