@@ -138,7 +138,7 @@ def get_active_tournaments():
                             "quoteAsset": meta.get("quoteAsset", "USDT"),
                             "logo": logo_url,
                             "chainLogo": chain_icon,
-                            "end_at": end_at_iso  # <--- QUAN TRỌNG: Truyền mốc thời gian UTC xuống Client
+                            "end_at": end_at_iso  # <--- QUAN TRỌNG: Truyền mốc thời gian UTC xuống Client test
                         })
                     else:
                         print(f"⚠️ {name}: Thiếu chainId")
