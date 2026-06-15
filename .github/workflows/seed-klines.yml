@@ -1,0 +1,59 @@
+name: Seed Klines to D1
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: 'Symbol cụ thể (để trống = tất cả)'
+        required: false
+        default: ''
+      interval:
+        description: 'Interval cụ thể (để trống = tất cả)'
+        required: false
+        default: ''
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # max 6 tiếng cho full download
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run seed script
+        run: |
+          if [ -n "${{ github.event.inputs.symbol }}" ] && [ -n "${{ github.event.inputs.interval }}" ]; then
+            python scripts/seed_klines.py ${{ github.event.inputs.symbol }} ${{ github.event.inputs.interval }}
+          elif [ -n "${{ github.event.inputs.symbol }}" ]; then
+            python scripts/seed_klines.py ${{ github.event.inputs.symbol }}
+          else
+            python scripts/seed_klines.py
+          fi
+
+      - name: Setup Node (Wrangler)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Import SQL files to D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: bash import_to_d1.sh
+
+      - name: Upload SQL files as artifact (backup)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: klines-sql-${{ github.run_id }}
+          path: klines_sql/
+          retention-days: 7
