@@ -4,18 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       symbol:
-        description: 'Symbol cụ thể (để trống = tất cả)'
+        description: 'Symbol cụ thể, ví dụ BTCUSDT (để trống = tất cả top 100)'
         required: false
         default: ''
       interval:
-        description: 'Interval cụ thể (để trống = tất cả)'
+        description: 'Interval cụ thể: 1d 4h 1h 30m 15m 5m 1m (để trống = tất cả)'
+        required: false
+        default: ''
+      quote:
+        description: 'Quote asset: USDT USDC BTC ETH (để trống = tất cả 4 pairs)'
         required: false
         default: ''
 
 jobs:
   seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # max 6 tiếng cho full download
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
@@ -28,13 +32,10 @@ jobs:
 
       - name: Run seed script
         run: |
-          if [ -n "${{ github.event.inputs.symbol }}" ] && [ -n "${{ github.event.inputs.interval }}" ]; then
-            python scripts/seed_klines.py ${{ github.event.inputs.symbol }} ${{ github.event.inputs.interval }}
-          elif [ -n "${{ github.event.inputs.symbol }}" ]; then
-            python scripts/seed_klines.py ${{ github.event.inputs.symbol }}
-          else
-            python scripts/seed_klines.py
-          fi
+          python scripts/seed_klines.py \
+            "${{ github.event.inputs.symbol }}" \
+            "${{ github.event.inputs.interval }}" \
+            "${{ github.event.inputs.quote }}"
 
       - name: Setup Node (Wrangler)
         uses: actions/setup-node@v4
@@ -50,10 +51,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: bash import_to_d1.sh
 
-      - name: Upload SQL files as artifact (backup)
+      - name: Upload artifacts (backup + valid pairs list)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: klines-sql-${{ github.run_id }}
-          path: klines_sql/
+          name: klines-data-${{ github.run_id }}
+          path: |
+            klines_sql/
+            valid_pairs.json
           retention-days: 7
