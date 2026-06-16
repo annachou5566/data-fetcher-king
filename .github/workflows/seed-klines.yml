@@ -3,16 +3,22 @@ name: Seed Klines to D1
 on:
   workflow_dispatch:
     inputs:
-      symbol:
-        description: 'Symbol cụ thể, ví dụ BTCUSDT (để trống = tất cả top 100)'
-        required: false
-        default: ''
-      interval:
-        description: 'Interval cụ thể: 1d 4h 1h 30m 15m 5m 1m (để trống = tất cả)'
-        required: false
-        default: ''
+      batch:
+        description: 'Chọn batch cần chạy'
+        required: true
+        type: choice
+        options:
+          - 'batch1_1w_1d'
+          - 'batch2_4h_2h'
+          - 'batch3_1h'
+          - 'batch4_30m_15m'
+          - 'batch5_5m_1m'
       quote:
-        description: 'Quote asset: USDT USDC BTC ETH (để trống = tất cả 4 pairs)'
+        description: 'Quote asset: USDT USDC BTC ETH (trống = tất cả)'
+        required: false
+        default: 'USDT'
+      resume_from:
+        description: 'Bắt đầu từ symbol nào (trống = từ đầu, ví dụ: SCUSDT)'
         required: false
         default: ''
 
@@ -30,14 +36,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run seed script
-        run: |
-          python scripts/seed_klines.py \
-            "${{ github.event.inputs.symbol }}" \
-            "${{ github.event.inputs.interval }}" \
-            "${{ github.event.inputs.quote }}"
-
-      - name: Setup Node (Wrangler)
+      - name: Setup Node (Wrangler) — cài sẵn
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -45,18 +44,47 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler
 
-      - name: Import SQL files to D1
+      - name: Set intervals for batch
+        id: set_intervals
+        run: |
+          case "${{ github.event.inputs.batch }}" in
+            batch1_1w_1d)   echo "intervals=1w 1d" >> $GITHUB_OUTPUT ;;
+            batch2_4h_2h)   echo "intervals=4h 2h" >> $GITHUB_OUTPUT ;;
+            batch3_1h)      echo "intervals=1h"    >> $GITHUB_OUTPUT ;;
+            batch4_30m_15m) echo "intervals=30m 15m" >> $GITHUB_OUTPUT ;;
+            batch5_5m_1m)   echo "intervals=5m 1m"   >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Run seed + import per interval
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: bash import_to_d1.sh
+        run: |
+          for INTERVAL in ${{ steps.set_intervals.outputs.intervals }}; do
+            echo "════════════════════════════════"
+            echo "  Interval: $INTERVAL"
+            echo "════════════════════════════════"
 
-      - name: Upload artifacts (backup + valid pairs list)
+            # Download data cho interval này
+            python scripts/seed_klines.py \
+              "" \
+              "$INTERVAL" \
+              "${{ github.event.inputs.quote }}" \
+              "${{ github.event.inputs.resume_from }}"
+
+            # Import ngay vào D1 sau mỗi interval
+            echo "📦 Importing $INTERVAL to D1..."
+            bash import_to_d1.sh
+
+            # Xóa SQL files đã import để tiết kiệm disk
+            rm -rf ./klines_sql/*.sql
+            echo "✅ $INTERVAL done & imported"
+          done
+
+      - name: Upload valid_pairs list
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: klines-data-${{ github.run_id }}
-          path: |
-            klines_sql/
-            valid_pairs.json
-          retention-days: 7
+          name: valid-pairs-${{ github.event.inputs.batch }}-${{ github.run_id }}
+          path: valid_pairs.json
+          retention-days: 30
