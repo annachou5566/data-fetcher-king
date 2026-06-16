@@ -245,12 +245,14 @@ def main():
     filter_symbol   = sys.argv[1].upper() if len(sys.argv) > 1 and sys.argv[1] else None
     filter_interval = sys.argv[2]         if len(sys.argv) > 2 and sys.argv[2] else None
     filter_quote    = sys.argv[3].upper() if len(sys.argv) > 3 and sys.argv[3] else None
+    resume_from     = sys.argv[4].upper() if len(sys.argv) > 4 and sys.argv[4] else None
 
     print("=" * 60)
     print("  Binance Vision Klines Seeder v2")
     print(f"  Symbol filter : {filter_symbol or 'ALL'}")
     print(f"  Interval filter: {filter_interval or 'ALL'}")
     print(f"  Quote filter  : {filter_quote or 'ALL (USDT/USDC/BTC/ETH)'}")
+    print(f"  Resume from   : {resume_from or 'beginning'}")
     print("=" * 60)
 
     # Nếu filter theo symbol cụ thể thì dùng thẳng, không scan
