@@ -1,0 +1,59 @@
+name: Update Tails Cache (Daily)
+
+on:
+  schedule:
+    - cron: '15 0 * * *'  # 00:15 UTC = 07:15 Việt Nam, chạy mỗi ngày
+  workflow_dispatch:
+    inputs:
+      force_tails:
+        description: 'Force tạo lại tails dù đã chạy hôm nay?'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+concurrency:
+  group: update-tails-cache
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update-tails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run — Tails Only
+      env:
+        RUN_MODE: tails_update
+        MAX_WORKERS: '6'
+        MAX_CONCURRENT: '4'
+        FORCE_TAILS: ${{ github.event.inputs.force_tails || 'false' }}
+        BINANCE_INTERNAL_AGG_API:    ${{ secrets.BINANCE_INTERNAL_AGG_API }}
+        BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+        PROXY_WORKER_URL:            ${{ secrets.PROXY_WORKER_URL }}
+        R2_ACCESS_KEY_ID:            ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY:        ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:             ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:              ${{ secrets.R2_BUCKET_NAME }}
+      run: python scripts/fetch_alpha.py
