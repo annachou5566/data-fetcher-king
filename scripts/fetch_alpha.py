@@ -1,31 +1,74 @@
 import json
 import os
 import time
+import threading
+import random
 import urllib.parse
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
-import requests 
+import requests
 import cloudscraper
-import boto3 
+import boto3
 from botocore.config import Config
 
-# --- 1. CẤU HÌNH ---
+# ─────────────────────────────────────────────
+# 1. CẤU HÌNH
+# ─────────────────────────────────────────────
 load_dotenv()
 
-R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
+# RUN_MODE: "market_data" | "tails_update" | "full"
+RUN_MODE = os.getenv("RUN_MODE", "full")
+
+# MAX_WORKERS  : số thread xử lý token song song (nên > MAX_CONCURRENT để thread luôn sẵn sàng)
+# MAX_CONCURRENT: số HTTP request đồng thời tới Binance (đây là van an toàn thực sự)
+MAX_WORKERS    = int(os.getenv("MAX_WORKERS", "6"))
+MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "4"))  # ← valve an toàn chống ban
+
+R2_ACCESS_KEY_ID     = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
-R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL")
-R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
+R2_ENDPOINT_URL      = os.getenv("R2_ENDPOINT_URL")
+R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME")
 
 PROXY_WORKER_URL = os.getenv("PROXY_WORKER_URL")
-API_AGG_TICKER = os.getenv("BINANCE_INTERNAL_AGG_API")
-API_AGG_KLINES = os.getenv("BINANCE_INTERNAL_KLINES_API")
-API_PUBLIC_SPOT = "https://api.binance.com/api/v3/exchangeInfo"
+API_AGG_TICKER   = os.getenv("BINANCE_INTERNAL_AGG_API")
+API_AGG_KLINES   = os.getenv("BINANCE_INTERNAL_KLINES_API")
+API_PUBLIC_SPOT  = "https://api.binance.com/api/v3/exchangeInfo"
 
 ACTIVE_SPOT_SYMBOLS = set()
-OLD_DATA_MAP = {}
+OLD_DATA_MAP        = {}
 
-# --- KHỞI TẠO KẾT NỐI R2 (OBJECT STORAGE) ---
+# ─────────────────────────────────────────────
+# 2. THREAD-SAFE INFRASTRUCTURE
+# ─────────────────────────────────────────────
+
+# Semaphore: giới hạn số HTTP request đồng thời tới Binance
+# Dù MAX_WORKERS=6, chỉ tối đa MAX_CONCURRENT=4 request được gọi Binance cùng lúc
+_request_semaphore = None  # khởi tạo trong fetch_data() sau khi đọc env
+
+# Thread-local session: mỗi thread có cloudscraper riêng, tránh race condition
+_thread_local = threading.local()
+
+def get_session():
+    """Lấy cloudscraper session của thread hiện tại. Tạo mới nếu chưa có."""
+    if not hasattr(_thread_local, 'session'):
+        s = cloudscraper.create_scraper(
+            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+        )
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/121.0.0.0 Safari/537.36",
+            "Referer": "https://www.binance.com/en/alpha",
+            "Origin":  "https://www.binance.com",
+            "Accept":  "application/json",
+        })
+        _thread_local.session = s
+    return _thread_local.session
+
+# ─────────────────────────────────────────────
+# 3. R2 CLIENT
+# ─────────────────────────────────────────────
 def get_r2_client():
     if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
         print("⚠️ Thiếu R2 Credentials! Kiểm tra GitHub Secrets.")
@@ -38,22 +81,14 @@ def get_r2_client():
         config=Config(signature_version='s3v4')
     )
 
-# --- KHỞI TẠO SESSION REQUESTS ---
-session = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-)
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Referer": "https://www.binance.com/en/alpha",
-    "Origin": "https://www.binance.com",
-    "Accept": "application/json"
-})
-
+# ─────────────────────────────────────────────
+# 4. KEY MAP + MINIFY (giữ nguyên từ bản gốc)
+# ─────────────────────────────────────────────
 KEY_MAP = {
     "id": "i", "symbol": "s", "name": "n", "icon": "ic",
     "chain": "cn", "chain_icon": "ci", "contract": "ct",
     "status": "st", "price": "p", "change_24h": "c",
-    "market_cap": "mc", "fdv": "f", "liquidity": "l", "volume": "v", 
+    "market_cap": "mc", "fdv": "f", "liquidity": "l", "volume": "v",
     "holders": "h",
     "rolling_24h": "r24", "daily_total": "dt",
     "daily_limit": "dl", "daily_onchain": "do",
@@ -66,88 +101,124 @@ KEY_MAP = {
 
 def minify_token_data(token):
     minified = {}
-    minified[KEY_MAP["id"]] = token.get("id")
-    minified[KEY_MAP["symbol"]] = token.get("symbol")
-    minified[KEY_MAP["name"]] = token.get("name")
-    minified[KEY_MAP["icon"]] = token.get("icon")
-    
-    minified[KEY_MAP["chain"]] = token.get("chain")
+    minified[KEY_MAP["id"]]       = token.get("id")
+    minified[KEY_MAP["symbol"]]   = token.get("symbol")
+    minified[KEY_MAP["name"]]     = token.get("name")
+    minified[KEY_MAP["icon"]]     = token.get("icon")
+    minified[KEY_MAP["chain"]]    = token.get("chain")
     minified[KEY_MAP["chain_icon"]] = token.get("chain_icon")
     minified[KEY_MAP["contract"]] = token.get("contract")
 
-    minified[KEY_MAP["status"]] = token.get("status")
-    minified[KEY_MAP["price"]] = token.get("price")
+    minified[KEY_MAP["status"]]     = token.get("status")
+    minified[KEY_MAP["price"]]      = token.get("price")
     minified[KEY_MAP["change_24h"]] = token.get("change_24h")
-    minified[KEY_MAP["mul_point"]] = token.get("mul_point")
+    minified[KEY_MAP["mul_point"]]  = token.get("mul_point")
 
     minified[KEY_MAP["market_cap"]] = int(token.get("market_cap", 0))
-    minified[KEY_MAP["fdv"]] = int(token.get("fdv", 0)) 
-    minified[KEY_MAP["holders"]] = int(token.get("holders", 0))
-    minified[KEY_MAP["liquidity"]] = int(token.get("liquidity", 0))
-    minified[KEY_MAP["tx_count"]] = int(token.get("tx_count", 0))
-    
-    minified[KEY_MAP["listing_time"]] = token.get("listing_time")
-    minified[KEY_MAP["offline"]] = 1 if token.get("offline") else 0
-    minified[KEY_MAP["listingCex"]] = 1 if token.get("listingCex") else 0
-    minified[KEY_MAP["onlineTge"]] = 1 if token.get("onlineTge") else 0
-    minified[KEY_MAP["onlineAirdrop"]] = 1 if token.get("onlineAirdrop") else 0
+    minified[KEY_MAP["fdv"]]        = int(token.get("fdv", 0))
+    minified[KEY_MAP["holders"]]    = int(token.get("holders", 0))
+    minified[KEY_MAP["liquidity"]]  = int(token.get("liquidity", 0))
+    minified[KEY_MAP["tx_count"]]   = int(token.get("tx_count", 0))
+
+    minified[KEY_MAP["listing_time"]]   = token.get("listing_time")
+    minified[KEY_MAP["offline"]]        = 1 if token.get("offline")       else 0
+    minified[KEY_MAP["listingCex"]]     = 1 if token.get("listingCex")    else 0
+    minified[KEY_MAP["onlineTge"]]      = 1 if token.get("onlineTge")     else 0
+    minified[KEY_MAP["onlineAirdrop"]]  = 1 if token.get("onlineAirdrop") else 0
 
     vol = token.get("volume", {})
     minified[KEY_MAP["volume"]] = {
-        KEY_MAP["rolling_24h"]: int(vol.get("rolling_24h", 0)),
-        KEY_MAP["daily_total"]: int(vol.get("daily_total", 0)),
-        KEY_MAP["daily_limit"]: int(vol.get("daily_limit", 0)),
-        KEY_MAP["daily_onchain"]: int(vol.get("daily_onchain", 0))
+        KEY_MAP["rolling_24h"]:  int(vol.get("rolling_24h", 0)),
+        KEY_MAP["daily_total"]:  int(vol.get("daily_total", 0)),
+        KEY_MAP["daily_limit"]:  int(vol.get("daily_limit", 0)),
+        KEY_MAP["daily_onchain"]:int(vol.get("daily_onchain", 0)),
     }
-    
     minified[KEY_MAP["chart"]] = token.get("chart", [])
-    
     return minified
 
+# ─────────────────────────────────────────────
+# 5. FETCH SMART — có Semaphore + Jitter + 429 Backoff
+# ─────────────────────────────────────────────
 def fetch_smart(target_url, retries=3):
-    is_render = "onrender.com" in (PROXY_WORKER_URL or "")
-    if not target_url or "None" in target_url: return None
+    """
+    Gọi Binance internal API qua proxy.
+    - Semaphore giới hạn đồng thời tối đa MAX_CONCURRENT requests
+    - Jitter 0.3–0.8s trước mỗi request → trông giống human traffic
+    - 429/503 → sleep 30s rồi retry (tránh bị ban IP proxy)
+    """
+    if not target_url or "None" in target_url:
+        return None
 
-    for i in range(retries):
-        if PROXY_WORKER_URL:
+    is_render = "onrender.com" in (PROXY_WORKER_URL or "")
+    session   = get_session()
+
+    for attempt in range(retries):
+        # Acquire semaphore: nếu đã có 4 threads đang gọi API, thread này đợi
+        with _request_semaphore:
+            # Jitter: thêm delay ngẫu nhiên 0.3–0.8s để tránh burst đồng loạt
+            time.sleep(random.uniform(0.3, 0.8))
+
+            # --- Thử qua Proxy trước ---
+            if PROXY_WORKER_URL:
+                try:
+                    encoded    = urllib.parse.quote(target_url, safe='')
+                    proxy_url  = f"{PROXY_WORKER_URL}?url={encoded}"
+                    timeout    = 60 if (is_render and attempt == 0) else 30
+                    res        = session.get(proxy_url, timeout=timeout)
+
+                    if res.status_code == 200:
+                        data = res.json()
+                        if isinstance(data, dict):
+                            if "symbols" in data:            return data
+                            if data.get("code") == "000000": return data
+
+                    elif res.status_code in (429, 503):
+                        # Rate-limit hoặc overload: dừng toàn bộ 30s
+                        print(f"\n⚠️ HTTP {res.status_code} — đang nghỉ 30s để tránh ban...", flush=True)
+                        time.sleep(30)
+                        continue  # retry ngay sau khi hết 30s
+
+                    elif res.status_code == 502:
+                        time.sleep(2)  # proxy tạm lỗi, thử lại nhanh
+
+                except Exception:
+                    pass
+
+            # --- Fallback: gọi thẳng Binance không qua proxy ---
             try:
-                encoded_target = urllib.parse.quote(target_url, safe='')
-                proxy_final_url = f"{PROXY_WORKER_URL}?url={encoded_target}"
-                current_timeout = 60 if (is_render and i == 0) else 30
-                res = session.get(proxy_final_url, timeout=current_timeout)
+                res = session.get(target_url, timeout=15)
                 if res.status_code == 200:
                     data = res.json()
-                    if isinstance(data, dict):
-                        if "symbols" in data: return data 
-                        if data.get("code") == "000000": return data
-                elif res.status_code == 502: time.sleep(3)
-            except: pass
-        
-        try:
-            res = session.get(target_url, timeout=15)
-            if res.status_code == 200:
-                data = res.json()
-                if "symbols" in data: return data
-                if data.get("code") == "000000": return data
-        except: pass
-        time.sleep(1)
+                    if "symbols" in data:            return data
+                    if data.get("code") == "000000": return data
+
+                elif res.status_code in (429, 503):
+                    print(f"\n⚠️ Direct HTTP {res.status_code} — đang nghỉ 30s...", flush=True)
+                    time.sleep(30)
+                    continue
+
+            except Exception:
+                pass
+
+        # Delay nhỏ giữa các lần retry (ngoài semaphore để không block slot)
+        if attempt < retries - 1:
+            time.sleep(1)
+
     return None
 
+# ─────────────────────────────────────────────
+# 6. HELPERS (giữ nguyên từ bản gốc)
+# ─────────────────────────────────────────────
 def safe_float(v):
-    try: return float(v) if v else 0.0
+    try:   return float(v) if v else 0.0
     except: return 0.0
 
 def load_old_data_from_r2(r2_client):
     if not r2_client: return {}
     try:
-        obj = r2_client.get_object(Bucket=R2_BUCKET_NAME, Key='market-data.json')
+        obj  = r2_client.get_object(Bucket=R2_BUCKET_NAME, Key='market-data.json')
         data = json.loads(obj['Body'].read().decode('utf-8'))
-        tokens = data.get('data', [])
-        mapped_data = {}
-        for t in tokens:
-            tid = t.get('i') or t.get('id')
-            if tid: mapped_data[tid] = t
-        return mapped_data
+        return {(t.get('i') or t.get('id')): t for t in data.get('data', []) if t.get('i') or t.get('id')}
     except Exception as e:
         print(f"⚠️ Không tải được cache từ R2 (Lần đầu chạy?): {e}")
         return {}
@@ -160,93 +231,96 @@ def get_active_spot_symbols():
             res = {s["baseAsset"] for s in data["symbols"] if s["status"] == "TRADING"}
             print(f"OK ({len(res)})")
             return res
-    except: pass
+    except Exception:
+        pass
     return set()
 
 def fetch_details_optimized(chain_id, contract_addr):
+    """Giữ nguyên logic gốc — chỉ dùng thread-local session thông qua fetch_smart."""
     if not API_AGG_KLINES: return 0, 0, 0, [], False
+
     no_lower_chains = ["CT_501", "CT_784"]
     clean_addr = str(contract_addr)
-    if chain_id not in no_lower_chains: clean_addr = clean_addr.lower()
-    
-    base_url = f"{API_AGG_KLINES}?chainId={chain_id}&interval=1d&limit=30&tokenAddress={clean_addr}"
-    d_total, d_limit = 0.0, 0.0
-    chart_data = []
-    
-    # CỜ ĐÁNH DẤU CÓ LIMIT VOLUME KHÔNG
+    if chain_id not in no_lower_chains:
+        clean_addr = clean_addr.lower()
+
+    base_url      = f"{API_AGG_KLINES}?chainId={chain_id}&interval=1d&limit=30&tokenAddress={clean_addr}"
+    d_total       = 0.0
+    d_limit       = 0.0
+    chart_data    = []
     has_limit_vol = False
 
     try:
         res_limit = fetch_smart(f"{base_url}&dataType=limit")
         if res_limit and res_limit.get("data") and res_limit["data"].get("klineInfos"):
             k_infos = res_limit["data"]["klineInfos"]
-            if k_infos: 
+            if k_infos:
                 d_limit = safe_float(k_infos[-1][5])
-                # [THUỐC GIẢI 1] Chống false positive lúc 00:00 UTC
                 if d_limit > 0:
                     has_limit_vol = True
                 elif len(k_infos) > 1 and safe_float(k_infos[-2][5]) > 0:
                     has_limit_vol = True
-    except: pass
+    except Exception:
+        pass
 
     try:
         res_agg = fetch_smart(f"{base_url}&dataType=aggregate")
         if res_agg and res_agg.get("data") and res_agg["data"].get("klineInfos"):
             k_infos = res_agg["data"]["klineInfos"]
             if k_infos:
-                d_total = safe_float(k_infos[-1][5])
+                d_total    = safe_float(k_infos[-1][5])
                 chart_data = [{"p": safe_float(k[4]), "v": safe_float(k[5])} for k in k_infos]
-    except: pass
+    except Exception:
+        pass
 
-    d_market = d_total - d_limit
-    if d_market < 0: d_market = 0 
+    d_market = max(d_total - d_limit, 0)
     return d_total, d_limit, d_market, chart_data, has_limit_vol
 
+# ─────────────────────────────────────────────
+# 7. PROCESS SINGLE TOKEN (logic giữ nguyên gốc, bỏ sleep)
+# ─────────────────────────────────────────────
 def process_single_token(item):
+    """Xử lý 1 token song song. Throttle nằm trong fetch_smart, không cần sleep ở đây."""
     aid = item.get("alphaId")
     if not aid: return None
 
-    vol_rolling = safe_float(item.get("volume24h"))
-    symbol = item.get("symbol")
-    contract = item.get("contractAddress")
-    chain_id = item.get("chainId")
-    is_offline = item.get("offline", False)
+    vol_rolling    = safe_float(item.get("volume24h"))
+    symbol         = item.get("symbol")
+    contract       = item.get("contractAddress")
+    chain_id       = item.get("chainId")
+    is_offline     = item.get("offline", False)
     is_listing_cex = item.get("listingCex", False)
-    
-    status = "ALPHA"
-    need_limit_check = False 
-    if is_offline:
-        if is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS: status = "SPOT"
-        else:
-            status = "PRE_DELISTED"
-            need_limit_check = True
 
-    # [THUỐC GIẢI 2] Gỡ bỏ khoá vĩnh viễn DELISTED từ file cache. Vẫn giữ lại status cũ nhưng bắt check lại
+    status           = "ALPHA"
+    need_limit_check = False
+
+    if is_offline:
+        if is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS:
+            status = "SPOT"
+        else:
+            status            = "PRE_DELISTED"
+            need_limit_check  = True
+
     if OLD_DATA_MAP and aid in OLD_DATA_MAP:
         old_item = OLD_DATA_MAP[aid]
         if old_item.get(KEY_MAP["status"]) == "DELISTED":
             status = "DELISTED"
-            # Ép check lại xem có sống lại chưa
             if is_offline and not is_listing_cex and symbol not in ACTIVE_SPOT_SYMBOLS:
                 need_limit_check = True
 
-    should_fetch = False
-    # Luôn fetch nếu đang có volume HOẶC cần check sống chết
-    if vol_rolling > 0 or need_limit_check:
-        should_fetch = True
-    
-    daily_total, daily_limit, daily_onchain = 0.0, 0.0, 0.0
-    chart_data = []
-    
+    should_fetch = vol_rolling > 0 or need_limit_check
+
+    daily_total = daily_limit = daily_onchain = 0.0
+    chart_data  = []
+
     if should_fetch:
         print(f"📡 {symbol}...", end=" ", flush=True)
         try:
             d_t, d_l, d_m, chart, has_limit = fetch_details_optimized(chain_id, contract)
             daily_total, daily_limit, daily_onchain = d_t, d_l, d_m
             chart_data = chart
-            
+
             if need_limit_check:
-                # Dùng has_limit (kiểm tra cả hôm nay và hôm qua) thay vì d_limit đơn thuần
                 if has_limit:
                     status = "ALPHA"
                     print("✅ ALIVE (Revived)")
@@ -256,8 +330,9 @@ def process_single_token(item):
             else:
                 if status == "DELISTED": status = "ALPHA"
                 print("OK")
-                
+
             if daily_total <= 0: daily_total = vol_rolling
+
         except Exception as e:
             print(f"⚠️ Err: {e}")
             daily_total = vol_rolling
@@ -265,7 +340,6 @@ def process_single_token(item):
     else:
         daily_total = vol_rolling
         if status == "PRE_DELISTED": status = "DELISTED"
-        
         if status == "DELISTED" and OLD_DATA_MAP and aid in OLD_DATA_MAP:
             old_item = OLD_DATA_MAP[aid]
             if old_item.get(KEY_MAP["chart"]):
@@ -276,180 +350,262 @@ def process_single_token(item):
         "icon": item.get("iconUrl"), "chain": item.get("chainName", ""),
         "chain_icon": item.get("chainIconUrl"), "contract": contract,
         "offline": is_offline, "listingCex": is_listing_cex, "status": status,
-        "onlineTge": item.get("onlineTge", False),
+        "onlineTge":    item.get("onlineTge", False),
         "onlineAirdrop": item.get("onlineAirdrop", False),
-        "mul_point": safe_float(item.get("mulPoint")),
+        "mul_point":    safe_float(item.get("mulPoint")),
         "listing_time": item.get("listingTime", 0),
-        "tx_count": safe_float(item.get("count24h")),
-        "price": safe_float(item.get("price")),
-        "change_24h": safe_float(item.get("percentChange24h")),
-        "liquidity": safe_float(item.get("liquidity")),
-        "market_cap": safe_float(item.get("marketCap")),
-        "fdv": safe_float(item.get("fdv")),
-        "holders": safe_float(item.get("holders")),
+        "tx_count":     safe_float(item.get("count24h")),
+        "price":        safe_float(item.get("price")),
+        "change_24h":   safe_float(item.get("percentChange24h")),
+        "liquidity":    safe_float(item.get("liquidity")),
+        "market_cap":   safe_float(item.get("marketCap")),
+        "fdv":          safe_float(item.get("fdv")),
+        "holders":      safe_float(item.get("holders")),
         "volume": {
-            "rolling_24h": vol_rolling, "daily_total": daily_total,
-            "daily_limit": daily_limit, "daily_onchain": daily_onchain
+            "rolling_24h":   vol_rolling,
+            "daily_total":   daily_total,
+            "daily_limit":   daily_limit,
+            "daily_onchain": daily_onchain,
         },
-        "chart": chart_data
+        "chart": chart_data,
     }
 
+# ─────────────────────────────────────────────
+# 8. TAILS (giữ nguyên logic gốc, thêm parallel)
+# ─────────────────────────────────────────────
 def build_suffix_sum(klines, yesterday_str):
-    arr = [0.0] * 1440
-    if not klines: return arr
+    arr        = [0.0] * 1440
     minute_map = [0.0] * 1440
-    
+    if not klines: return arr
+
     for k in klines:
         try:
-            candle_ts = int(k[0])
-            dt = datetime.utcfromtimestamp(candle_ts / 1000.0)
+            dt = datetime.utcfromtimestamp(int(k[0]) / 1000.0)
             if dt.strftime('%Y-%m-%d') == yesterday_str:
-                start_min = dt.hour * 60 + dt.minute
+                start_min   = dt.hour * 60 + dt.minute
                 vol_per_min = float(k[5] or 0) / 5.0
                 for i in range(5):
                     if start_min + i < 1440:
                         minute_map[start_min + i] += vol_per_min
-        except: pass
-        
+        except Exception:
+            pass
+
     running_sum = 0.0
     for i in range(1439, -1, -1):
         running_sum += minute_map[i]
-        arr[i] = round(running_sum, 2)
+        arr[i]       = round(running_sum, 2)
     return arr
 
-# [THUỐC GIẢI CHỐNG TREO 407]: Truyền thêm "results" vào để phân biệt Token Sống / Chết
+def _fetch_tail_single(t, yesterday_str):
+    """Worker function cho 1 token tails — throttle nằm trong fetch_smart."""
+    aid      = t.get("alphaId")
+    chain_id = t.get("chainId")
+    contract = t.get("contractAddress")
+
+    if not aid or not contract:
+        return aid, t.get("symbol"), None, None
+
+    clean_addr = str(contract)
+    if chain_id not in ["CT_501", "CT_784"]:
+        clean_addr = clean_addr.lower()
+
+    base_url = (
+        f"{API_AGG_KLINES}?chainId={chain_id}"
+        f"&interval=5m&limit=1000&tokenAddress={clean_addr}"
+    )
+    t_total = t_limit = None
+
+    try:
+        res_tot = fetch_smart(f"{base_url}&dataType=aggregate", retries=1)
+        if res_tot and "data" in res_tot and "klineInfos" in res_tot["data"]:
+            t_total = build_suffix_sum(res_tot["data"]["klineInfos"], yesterday_str)
+    except Exception:
+        pass
+
+    try:
+        res_lim = fetch_smart(f"{base_url}&dataType=limit", retries=1)
+        if res_lim and "data" in res_lim and "klineInfos" in res_lim["data"]:
+            t_limit = build_suffix_sum(res_lim["data"]["klineInfos"], yesterday_str)
+    except Exception:
+        pass
+
+    return aid, t.get("symbol"), t_total, t_limit
+
 def generate_and_upload_tails(r2_client, raw_tokens, results):
-    today_str = datetime.utcnow().strftime('%Y-%m-%d')
+    today_str     = datetime.utcnow().strftime('%Y-%m-%d')
     yesterday_str = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
-    
+    force_tails   = os.getenv("FORCE_TAILS", "false").lower() == "true"
+
     try:
         head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json')
-        if head['LastModified'].strftime('%Y-%m-%d') == today_str:
-            print("\n⏭️ File tails_cache.json hôm nay đã có. Bỏ qua quét Đuôi để bảo vệ Proxy Realtime!")
+        if not force_tails and head['LastModified'].strftime('%Y-%m-%d') == today_str:
+            print("\n⏭️ tails_cache.json hôm nay đã có. Bỏ qua.")
+            print("   (Set FORCE_TAILS=true để chạy lại thủ công)")
             return
-    except Exception as e:
-        pass 
-        
-    print("\n🦊 Bắt đầu quét Cái Đuôi 5m cho toàn thị trường...")
-    
-    tails_total, tails_limit = {}, {}
-    
-    # 🚀 LỌC SIÊU TỐC: Chỉ lấy ID của những token đang SỐNG từ results để đi cắt Đuôi!
-    # Từ bỏ hoàn toàn những token rác/delisted gây treo timeout.
-    alive_aids = {r["id"] for r in results if r.get("status") in ["ALPHA", "PRE_DELISTED"]}
+    except Exception:
+        pass
+
+    alive_aids   = {r["id"] for r in results if r.get("status") in ["ALPHA", "PRE_DELISTED"]}
     valid_tokens = [t for t in raw_tokens if t.get("alphaId") in alive_aids]
-    
-    for idx, t in enumerate(valid_tokens):
-        aid = t.get("alphaId")
-        chain_id = t.get("chainId")
-        contract = t.get("contractAddress")
-        symbol = t.get("symbol")
-        
-        if not aid or not contract: continue
-        
-        # In ra từng token để bạn thấy code đang phi ầm ầm chứ không hề bị treo
-        print(f"   [{idx+1}/{len(valid_tokens)}] Cắt đuôi {symbol}...", end=" ", flush=True)
-        
-        clean_addr = str(contract)
-        if chain_id not in ["CT_501", "CT_784"]: clean_addr = clean_addr.lower()
-        
-        base_url = f"{API_AGG_KLINES}?chainId={chain_id}&interval=5m&limit=1000&tokenAddress={clean_addr}"
-        
-        try:
-            res_tot = fetch_smart(f"{base_url}&dataType=aggregate", retries=1)
-            if res_tot and "data" in res_tot and "klineInfos" in res_tot["data"]:
-                tails_total[aid] = build_suffix_sum(res_tot["data"]["klineInfos"], yesterday_str)
-                
-            res_lim = fetch_smart(f"{base_url}&dataType=limit", retries=1)
-            if res_lim and "data" in res_lim and "klineInfos" in res_lim["data"]:
-                tails_limit[aid] = build_suffix_sum(res_lim["data"]["klineInfos"], yesterday_str)
-            print("OK")
-        except: 
-            print("SKIP")
-            
-        time.sleep(1.5) 
-        
+    total_count  = len(valid_tokens)
+
+    print(f"\n🦊 Bắt đầu cắt Đuôi 5m — {total_count} tokens alive (parallel, concurrent={MAX_CONCURRENT})")
+
+    tails_total = {}
+    tails_limit = {}
+    completed   = [0]
+    _lock       = threading.Lock()
+
+    def worker_wrapper(t):
+        aid, symbol, t_total, t_limit = _fetch_tail_single(t, yesterday_str)
+        with _lock:
+            completed[0] += 1
+            status = "OK" if (t_total is not None or t_limit is not None) else "SKIP"
+            print(f"   [{completed[0]}/{total_count}] Cắt đuôi {symbol}... {status}", flush=True)
+        return aid, t_total, t_limit
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(worker_wrapper, t) for t in valid_tokens]
+        for future in as_completed(futures):
+            try:
+                aid, t_total, t_limit = future.result()
+                if aid:
+                    if t_total is not None: tails_total[aid] = t_total
+                    if t_limit is not None: tails_limit[aid] = t_limit
+            except Exception as e:
+                print(f"⚠️ Tail worker error: {e}")
+
     print("☁️ Đang Upload Tails lên R2...")
     json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
     try:
-        r2_client.put_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json', Body=json_str.encode('utf-8'), ContentType='application/json')
-        print("✅ Đã lưu tails_cache.json thành công!")
-    except Exception as e: print(f"❌ Upload Tails Failed: {e}")
-
-# --- HÀM CHÍNH ---
-def fetch_data():
-    global ACTIVE_SPOT_SYMBOLS, OLD_DATA_MAP
-    start = time.time()
-    
-    r2 = get_r2_client()
-    if not r2: return
-
-    OLD_DATA_MAP = load_old_data_from_r2(r2)
-    ACTIVE_SPOT_SYMBOLS = get_active_spot_symbols()
-    
-    print("⏳ List...", end=" ", flush=True)
-    try: raw_res = fetch_smart(API_AGG_TICKER)
-    except: return
-    if not raw_res: return
-    
-    raw_data = raw_res.get("data", [])
-    print(f"Done ({len(raw_data)})")
-
-    target_tokens = raw_data
-    target_tokens.sort(key=lambda x: safe_float(x.get("volume24h")), reverse=True)
-    
-    results = []
-    print(f"🚀 Processing {len(target_tokens)} Tokens (R2 Storage Mode)...")
-    
-    for t in target_tokens:
-        r = process_single_token(t)
-        if r: results.append(r)
-        
-        time.sleep(1.5) 
-        
-    results.sort(key=lambda x: x["volume"]["daily_total"], reverse=True)
-
-    print(f"🔒 Minifying...")
-    minified_results = [minify_token_data(t) for t in results]
-
-    final_output = {
-        "meta": {
-            "u": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "t": len(minified_results),
-            "c": "WaveAlpha Data"
-        },
-        "data": minified_results
-    }
-    
-    json_str = json.dumps(final_output, ensure_ascii=False, separators=(',', ':'))
-
-    print("☁️ Uploading to Cloudflare R2...")
-    try:
-        r2.put_object(
+        r2_client.put_object(
             Bucket=R2_BUCKET_NAME,
-            Key='market-data.json',
-            Body=json_str.encode('utf-8'),
-            ContentType='application/json',
-            CacheControl='max-age=60' 
-        )
-        print("✅ Uploaded market-data.json")
-
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        r2.put_object(
-            Bucket=R2_BUCKET_NAME,
-            Key=f'history/{today_str}.json',
+            Key='tails_cache.json',
             Body=json_str.encode('utf-8'),
             ContentType='application/json'
         )
-        print(f"✅ Uploaded history/{today_str}.json")
-
+        print("✅ Đã lưu tails_cache.json thành công!")
     except Exception as e:
-        print(f"❌ R2 Upload Failed: {e}")
-        
-    # Gọi hàm Cắt Đuôi với bộ lọc token Sống (results)
-    generate_and_upload_tails(r2, target_tokens, results)
+        print(f"❌ Upload Tails Failed: {e}")
 
-    print(f"🏁 DONE! Total: {time.time()-start:.1f}s")
+# ─────────────────────────────────────────────
+# 9. HÀM CHÍNH
+# ─────────────────────────────────────────────
+def fetch_data():
+    global ACTIVE_SPOT_SYMBOLS, OLD_DATA_MAP, _request_semaphore
+    start = time.time()
+
+    # Khởi tạo semaphore ở đây (sau khi đọc env)
+    _request_semaphore = threading.Semaphore(MAX_CONCURRENT)
+
+    print(f"⚙️  RUN_MODE={RUN_MODE}  workers={MAX_WORKERS}  concurrent={MAX_CONCURRENT}")
+    print(f"   Rate: ~{MAX_CONCURRENT} req / 1.2s avg ≈ {MAX_CONCURRENT * 50:.0f} req/phút (an toàn)")
+
+    r2 = get_r2_client()
+    if not r2: return
+
+    results       = []
+    target_tokens = []
+
+    # ═══════════════════════════════════════════════
+    # PHASE 1: MARKET DATA
+    # ═══════════════════════════════════════════════
+    if RUN_MODE in ("full", "market_data"):
+        OLD_DATA_MAP        = load_old_data_from_r2(r2)
+        ACTIVE_SPOT_SYMBOLS = get_active_spot_symbols()
+
+        print("⏳ Lấy danh sách token...", end=" ", flush=True)
+        try:
+            raw_res = fetch_smart(API_AGG_TICKER)
+        except Exception:
+            raw_res = None
+        if not raw_res:
+            print("FAILED")
+            return
+
+        raw_data      = raw_res.get("data", [])
+        target_tokens = sorted(raw_data, key=lambda x: safe_float(x.get("volume24h")), reverse=True)
+        print(f"Done ({len(target_tokens)})")
+
+        print(f"🚀 Processing {len(target_tokens)} tokens (parallel, {MAX_WORKERS} workers, {MAX_CONCURRENT} concurrent HTTP)...")
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(process_single_token, t) for t in target_tokens]
+            for future in as_completed(futures):
+                try:
+                    r = future.result()
+                    if r: results.append(r)
+                except Exception as e:
+                    print(f"⚠️ Token worker error: {e}")
+
+        results.sort(key=lambda x: x["volume"]["daily_total"], reverse=True)
+
+        print(f"🔒 Minifying {len(results)} tokens...")
+        minified_results = [minify_token_data(t) for t in results]
+
+        final_output = {
+            "meta": {
+                "u": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "t": len(minified_results),
+                "c": "WaveAlpha Data"
+            },
+            "data": minified_results
+        }
+        json_str = json.dumps(final_output, ensure_ascii=False, separators=(',', ':'))
+
+        print("☁️ Uploading to Cloudflare R2...")
+        try:
+            r2.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key='market-data.json',
+                Body=json_str.encode('utf-8'),
+                ContentType='application/json',
+                CacheControl='max-age=60'
+            )
+            print("✅ Uploaded market-data.json")
+
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            r2.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=f'history/{today_str}.json',
+                Body=json_str.encode('utf-8'),
+                ContentType='application/json'
+            )
+            print(f"✅ Uploaded history/{today_str}.json")
+        except Exception as e:
+            print(f"❌ R2 Upload Failed: {e}")
+
+    # ═══════════════════════════════════════════════
+    # PHASE 2: TAILS (tails_update hoặc full)
+    # ═══════════════════════════════════════════════
+    if RUN_MODE in ("full", "tails_update"):
+
+        # Nếu chạy riêng tails_update: load danh sách token + status từ R2 cache
+        if RUN_MODE == "tails_update":
+            OLD_DATA_MAP = load_old_data_from_r2(r2)
+
+            print("⏳ Lấy danh sách token cho tails...", end=" ", flush=True)
+            try:
+                raw_res = fetch_smart(API_AGG_TICKER)
+                if raw_res:
+                    target_tokens = raw_res.get("data", [])
+                    print(f"Done ({len(target_tokens)})")
+                else:
+                    print("FAILED"); return
+            except Exception as e:
+                print(f"FAILED: {e}"); return
+
+            # Dùng status từ cache (không re-fetch market data)
+            for t in target_tokens:
+                aid = t.get("alphaId")
+                if not aid: continue
+                cached_status = OLD_DATA_MAP.get(aid, {}).get(KEY_MAP["status"], "ALPHA")
+                results.append({"id": aid, "status": cached_status})
+
+        generate_and_upload_tails(r2, target_tokens, results)
+
+    mode_label = {"full": "FULL", "market_data": "MARKET DATA", "tails_update": "TAILS"}.get(RUN_MODE, RUN_MODE)
+    print(f"🏁 DONE [{mode_label}]! Total: {time.time() - start:.1f}s")
 
 if __name__ == "__main__":
     fetch_data()
