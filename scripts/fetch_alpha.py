@@ -293,22 +293,37 @@ def process_single_token(item):
 
     status           = "ALPHA"
     need_limit_check = False
+    force_skip_fetch = False  # True → bỏ qua API call dù vol_rolling > 0
 
     if is_offline:
         if is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS:
             status = "SPOT"
         else:
-            status            = "PRE_DELISTED"
-            need_limit_check  = True
+            status           = "PRE_DELISTED"
+            need_limit_check = True
 
     if OLD_DATA_MAP and aid in OLD_DATA_MAP:
-        old_item = OLD_DATA_MAP[aid]
-        if old_item.get(KEY_MAP["status"]) == "DELISTED":
+        old_item      = OLD_DATA_MAP[aid]
+        cached_status = old_item.get(KEY_MAP["status"])
+
+        if cached_status == "DELISTED":
             status = "DELISTED"
             if is_offline and not is_listing_cex and symbol not in ACTIVE_SPOT_SYMBOLS:
-                need_limit_check = True
+                # Re-verify 1 lần/ngày lúc 00:xx UTC (midnight run).
+                # Các lần còn lại: skip hoàn toàn, dùng lại cache.
+                if datetime.utcnow().hour == 0:
+                    need_limit_check = True   # midnight → check lại
+                else:
+                    need_limit_check = False  # bình thường → skip
+                    force_skip_fetch = True   # kể cả khi vol_rolling > 0
 
-    should_fetch = vol_rolling > 0 or need_limit_check
+        elif cached_status == "SPOT":
+            # SPOT đã xác nhận + vẫn offline/cex → không cần klines
+            if is_offline and (is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS):
+                force_skip_fetch = True
+                status = "SPOT"
+
+    should_fetch = (not force_skip_fetch) and (vol_rolling > 0 or need_limit_check)
 
     daily_total = daily_limit = daily_onchain = 0.0
     chart_data  = []
@@ -340,7 +355,8 @@ def process_single_token(item):
     else:
         daily_total = vol_rolling
         if status == "PRE_DELISTED": status = "DELISTED"
-        if status == "DELISTED" and OLD_DATA_MAP and aid in OLD_DATA_MAP:
+        # Reuse chart từ cache cho cả DEAD lẫn SPOT (không fetch lại)
+        if status in ("DELISTED", "SPOT") and OLD_DATA_MAP and aid in OLD_DATA_MAP:
             old_item = OLD_DATA_MAP[aid]
             if old_item.get(KEY_MAP["chart"]):
                 chart_data = old_item.get(KEY_MAP["chart"])
