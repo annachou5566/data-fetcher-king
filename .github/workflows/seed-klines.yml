@@ -18,7 +18,7 @@ on:
         required: false
         default: 'USDT'
       resume_from:
-        description: 'Bắt đầu từ symbol nào (trống = từ đầu, ví dụ: SCUSDT)'
+        description: 'Resume từ symbol nào (trống = từ đầu)'
         required: false
         default: ''
 
@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Setup Node (Wrangler) — cài sẵn
+      - name: Setup Node (Wrangler)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -55,31 +55,80 @@ jobs:
             batch5_5m_1m)   echo "intervals=5m 1m"   >> $GITHUB_OUTPUT ;;
           esac
 
-      - name: Run seed + import per interval
+      - name: Download + Import per interval per symbol
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          for INTERVAL in ${{ steps.set_intervals.outputs.intervals }}; do
-            echo "════════════════════════════════"
-            echo "  Interval: $INTERVAL"
-            echo "════════════════════════════════"
+          DB_NAME="wave-alpha-klines"
+          TOTAL_OK=0
+          TOTAL_FAIL=0
 
-            # Download data cho interval này
+          for INTERVAL in ${{ steps.set_intervals.outputs.intervals }}; do
+            echo "════════════════════════════════════════"
+            echo "  Interval: $INTERVAL"
+            echo "════════════════════════════════════════"
+
+            # Download interval này → tạo ra từng file SQL theo symbol
             python scripts/seed_klines.py \
               "" \
               "$INTERVAL" \
               "${{ github.event.inputs.quote }}" \
               "${{ github.event.inputs.resume_from }}"
 
-            # Import ngay vào D1 sau mỗi interval
-            echo "📦 Importing $INTERVAL to D1..."
-            bash import_to_d1.sh
+            # Import TỪNG FILE MỘT — có delay + retry
+            echo ""
+            echo "📦 Bắt đầu import $INTERVAL vào D1..."
+            OK=0
+            FAIL=0
 
-            # Xóa SQL files đã import để tiết kiệm disk
-            rm -rf ./klines_sql/*.sql
-            echo "✅ $INTERVAL done & imported"
+            for SQL_FILE in klines_sql/*.sql; do
+              [ -f "$SQL_FILE" ] || continue
+              NAME=$(basename "$SQL_FILE")
+
+              # Retry tối đa 3 lần
+              IMPORTED=false
+              for ATTEMPT in 1 2 3; do
+                if wrangler d1 execute "$DB_NAME" \
+                     --file="$SQL_FILE" \
+                     --remote > /dev/null 2>&1; then
+                  echo "  ✅ $NAME"
+                  IMPORTED=true
+                  OK=$((OK+1))
+                  break
+                else
+                  echo "  ⚠️  $NAME attempt $ATTEMPT failed, retry in 5s..."
+                  sleep 5
+                fi
+              done
+
+              if [ "$IMPORTED" = false ]; then
+                echo "  ❌ $NAME FAILED"
+                FAIL=$((FAIL+1))
+              fi
+
+              # Xóa file sau khi import để tiết kiệm disk
+              rm -f "$SQL_FILE"
+
+              # Delay 1.5s giữa mỗi symbol tránh D1 rate limit
+              sleep 1.5
+            done
+
+            echo ""
+            echo "  ✅ $INTERVAL: $OK OK / $FAIL FAIL"
+            TOTAL_OK=$((TOTAL_OK+OK))
+            TOTAL_FAIL=$((TOTAL_FAIL+FAIL))
+
+            # Reset resume sau interval đầu
+            # (chỉ resume interval đầu tiên thôi)
           done
+
+          echo ""
+          echo "════════════════════════════════════════"
+          echo "  TỔNG KẾT"
+          echo "  ✅ Thành công: $TOTAL_OK files"
+          echo "  ❌ Thất bại:  $TOTAL_FAIL files"
+          echo "════════════════════════════════════════"
 
       - name: Upload valid_pairs list
         uses: actions/upload-artifact@v4
