@@ -77,48 +77,23 @@ def r2_put_json(r2, key, data, cc="max-age=120"):
 
 # ── Crypto price từ R2 ────────────────────────────────────────────
 def load_crypto_prices(r2):
-    """Thử nhiều key R2 khác nhau để lấy BTC/ETH price"""
-    prices = {}
-    keys_to_try = ["market-data.json", "alpha-market-data.json", "snapshot.json", "prices.json"]
-
-    for key in keys_to_try:
-        data = r2_get_json(r2, key)
-        if not data: continue
-        print(f"  [Crypto] Found R2 key: {key}, type={type(data).__name__}")
-
-        # Handle dict với field data/tokens/tickers
-        if isinstance(data, dict):
-            # Case 1: { BTCUSDT: {price:...}, ETHUSDT: {price:...} }
-            for sym in ("BTCUSDT","BTC","btcusdt"):
-                item = data.get(sym)
-                if item and isinstance(item,dict):
-                    p = parse_num(item.get("price") or item.get("lastPrice") or item.get("close") or item.get("c"))
-                    if p: prices["BTC"] = p; break
-            for sym in ("ETHUSDT","ETH","ethusdt"):
-                item = data.get(sym)
-                if item and isinstance(item,dict):
-                    p = parse_num(item.get("price") or item.get("lastPrice") or item.get("close") or item.get("c"))
-                    if p: prices["ETH"] = p; break
-            # Case 2: { data: [...] } hoặc { tokens: [...] }
-            items = data.get("data") or data.get("tokens") or data.get("tickers") or []
-        elif isinstance(data, list):
-            items = data
-        else:
-            items = []
-
-        for item in (items if isinstance(items,list) else []):
-            sym = str(item.get("symbol","") or item.get("s","")).upper()
-            p   = parse_num(item.get("price") or item.get("lastPrice") or item.get("close") or item.get("c"))
-            if not p: continue
-            if sym in ("BTCUSDT","BTC") and "BTC" not in prices: prices["BTC"] = p
-            if sym in ("ETHUSDT","ETH") and "ETH" not in prices: prices["ETH"] = p
-
-        if prices:
-            print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
-            return prices
-
-    print("  [Crypto] Không tìm được BTC/ETH price từ R2")
-    return prices
+    """Lấy BTC/ETH price từ Binance public API — không cần key"""
+    try:
+        r = requests.get(
+            "https://api.binance.com/api/v3/ticker/price"
+            "?symbols=[%22BTCUSDT%22,%22ETHUSDT%22]",
+            timeout=8
+        )
+        prices = {}
+        for item in r.json():
+            sym = item["symbol"]
+            if sym == "BTCUSDT": prices["BTC"] = float(item["price"])
+            if sym == "ETHUSDT": prices["ETH"] = float(item["price"])
+        print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
+        return prices
+    except Exception as e:
+        print(f"  [Crypto] Lỗi: {e}")
+        return {}
 
 # ── Nasdaq ────────────────────────────────────────────────────────
 def fetch_nasdaq_all(session):
