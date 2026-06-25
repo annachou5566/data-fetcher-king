@@ -1,68 +1,67 @@
-name: Update ETF Flows Data
+// functions/api/etf-flows.js  (fix: RENDER_API_KEY)
+const RENDER = 'https://alpha-realtime.onrender.com';
 
-on:
-  schedule:
-    # ── Price only (giờ giao dịch US: 14:30–21:00 UTC, Mon–Fri)
-    - cron: '*/30 14-20 * * 1-5'   # mỗi 30 phút trong giờ giao dịch
-    # ── Full data (sau market close: 22:00 UTC, Mon–Fri)
-    - cron: '0 22 * * 1-5'         # 1 lần/ngày lấy NAV + holdings từ issuer
-  workflow_dispatch:
-    inputs:
-      run_mode:
-        description: 'RUN_MODE: price | full'
-        required: false
-        default: 'full'
+export async function onRequest(ctx) {
+  const { request, env } = ctx;
+  const origin = request.headers.get('Origin') || '';
 
-concurrency:
-  group: update-etf-flows
-  cancel-in-progress: false
+  let allowedOrigin = 'https://wave-alpha.pages.dev';
+  if (origin.endsWith('.github.dev') || origin.endsWith('idx.google.com') || origin.startsWith('http://localhost')) {
+    allowedOrigin = origin;
+  }
 
-permissions:
-  contents: read
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': allowedOrigin,
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Max-Age': '86400',
+        'Vary': 'Origin',
+      },
+    });
+  }
 
-jobs:
-  fetch-etf:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  try {
+    const cache    = caches.default;
+    const cacheKey = new Request(request.url, request);
+    let response   = await cache.match(cacheKey);
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    if (!response) {
+      const apiKey = env.RENDER_API_KEY;   // ← dùng đúng tên giống market-data.js
+      if (!apiKey) {
+        return new Response(JSON.stringify({ error: 'Server misconfigured: Missing API Key' }), {
+          status: 500,
+          headers: { 'Access-Control-Allow-Origin': allowedOrigin },
+        });
+      }
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      const upstream = `https://alpha-realtime.onrender.com/api/etf-flows`;
+      const r = await fetch(upstream, {
+        headers: { 'x-api-key': apiKey },
+      });
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
+      if (!r.ok) throw new Error(`Render ${r.status}`);
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      const headers = new Headers(r.headers);
+      headers.set('Access-Control-Allow-Origin', allowedOrigin);
+      headers.set('Vary', 'Origin');
+      headers.set('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=60');
 
-      - name: Determine RUN_MODE
-        id: mode
-        run: |
-          # workflow_dispatch override
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ github.event.inputs.run_mode || 'full' }}" >> $GITHUB_OUTPUT
-          # 22:00 UTC → full run
-          elif [ "$(date -u +%H)" = "22" ]; then
-            echo "mode=full" >> $GITHUB_OUTPUT
-          else
-            echo "mode=price" >> $GITHUB_OUTPUT
-          fi
+      response = new Response(r.body, { headers });
+      ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    } else {
+      const clone      = response.clone();
+      const newHeaders = new Headers(clone.headers);
+      newHeaders.set('Access-Control-Allow-Origin', allowedOrigin);
+      response = new Response(clone.body, { headers: newHeaders });
+    }
 
-      - name: Run ETF Fetcher
-        env:
-          RUN_MODE:            ${{ steps.mode.outputs.mode }}
-          R2_ACCESS_KEY_ID:    ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT_URL:     ${{ secrets.R2_ENDPOINT_URL }}
-          R2_BUCKET_NAME:      ${{ secrets.R2_BUCKET_NAME }}
-          ETHERSCAN_API_KEY:   ${{ secrets.ETHERSCAN_API_KEY }}
-        run: python scripts/fetch_etf.py
+    return response;
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e.message }), {
+      status: 500,
+      headers: { 'Access-Control-Allow-Origin': allowedOrigin },
+    });
+  }
+}
