@@ -43,7 +43,7 @@ from urllib3.util.retry import Retry
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-START_DATE = os.getenv("START_DATE", "2015-01-01")
+START_DATE = os.getenv("START_DATE", "2020-01-01")
 
 API_TOKEN_URL = "https://api.vnappmob.com/api/request_api_key?scope=exchange_rate"
 API_BASE = "https://api.vnappmob.com/api/v2/exchange_rate"
