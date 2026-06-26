@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-scripts/fetch_vcb.py — Smart Multi-Bank Fetcher (V3/V4 hybrid)
+scripts/fetch_vcb.py — Smart Multi-Bank Fetcher (V4)
 
 Mục tiêu:
 - Fetch tỷ giá USD/VND từ VNAppMob cho SBV + VCB + BID + CTG + TCB + STB
 - Lưu 2 file riêng lên R2:
     1) macro-rates.json  -> dữ liệu tổng hợp / index / SBV
     2) bank-details.json  -> dữ liệu chi tiết từng bank
-- Tự refresh token khi 401/403
+- Tự refresh token khi 401/403 (Đã chặn thundering herd)
 - requests.Session + Retry
 - Backfill theo chunk để không timeout
 - Incremental quét vùng gần nhất để bắt ngày thiếu
@@ -18,7 +18,7 @@ Lưu ý theo doc VNAppMob:
 - SBV: GET /api/v2/exchange_rate/sbv -> fields: buy, sell
 - VCB/CTG/TCB/BID/STB: fields: buy_cash, buy_transfer, sell
 - api_key scope exchange_rate hết hạn mặc định sau 15 ngày
-- VCB và TCB hỗ trợ query date; nếu date không có dữ liệu, API trả về ngày gần nhất trước đó
+- VCB và TCB hỗ trợ query date. Các bank khác KHÔNG hỗ trợ query ngày quá khứ.
 """
 
 from __future__ import annotations
@@ -231,6 +231,12 @@ class TokenManager:
     def get(self, force_refresh: bool = False) -> str:
         with self._lock:
             age = time.time() - self._fetched_at
+
+            # CHẶN THUNDERING HERD: Nếu bị ép refresh (do 401) NHƯNG token 
+            # vừa được luồng khác lấy mới trong 10s qua -> Dùng luôn token đó
+            if force_refresh and age < 10 and self._token:
+                return self._token
+
             if self._token and not force_refresh and age < TOKEN_MAX_AGE_SECONDS:
                 return self._token
 
@@ -300,6 +306,11 @@ def fetch_endpoint(
     VCB/TCB: can send date
     BID/CTG/STB: latest only
     """
+    # CHẶN LỖI XUYÊN KHÔNG:
+    # Nếu ngân hàng không hỗ trợ truy vấn quá khứ VÀ ngày cần lấy không phải hôm nay -> Bỏ qua ngay
+    if bank not in DATE_SUPPORTED and snapshot_date != date.today().isoformat():
+        return None
+
     token = token_mgr.get()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
@@ -336,9 +347,7 @@ def fetch_one_snapshot(
     snapshot_date: str,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
-    Trả về:
-      macro_row, bank_row
-
+    Trả về: macro_row, bank_row
     bank_row chứa chi tiết từng bank theo cùng snapshot_date.
     """
     macro_row: Dict[str, Any] = {"date": snapshot_date}
@@ -471,7 +480,7 @@ def fetch_dates_in_chunk(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_header() -> None:
-    log("🏦 Multi-Bank USD/VND Fetcher — V3 Clean")
+    log("🏦 Multi-Bank USD/VND Fetcher — V4 (Safe Backfill & Anti-Spam)")
     log(f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     log(
         f"⚙️  start={START_DATE} | lookback={INCREMENTAL_LOOKBACK_DAYS}d | "
