@@ -1,11 +1,10 @@
 """
-scripts/fetch_etf.py  v4
-Fixes từ log v3:
-- iShares: parse đúng componentsByNameMap → tìm downloadHoldingsLink → download CSV
-- iShares ETHA: product ID 333132 sai → thử tìm đúng ID
-- Binance price: fix URL encoding
-- ARK/Franklin đã 404/HTML → dùng SEC EDGAR fallback
-- NAV: dùng market price xấp xỉ (premium BTC ETF < 0.1%)
+scripts/fetch_etf.py  v5
+Fix từ log v4:
+- iShares: bỏ qua downloadHeader="true", đi thẳng vào containersByNameMap.all.data
+- Crypto prices: CoinGecko thay Binance (Binance block GitHub Actions IP)
+- ETHA product ID: thử hardcode + auto-discover
+- Log 2000 chars response để xem đủ structure
 """
 
 import csv, io, json, os, re, time
@@ -23,36 +22,34 @@ R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME")
 FAKE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
            "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36")
 
-# iShares product IDs — chỉ IBIT xác nhận đúng từ log
-# ETHA cần tìm lại: thử search từ trang ishares.com
-ISHARES_PRODUCTS = {
-    "IBIT": "333011",   # confirmed ✅
-    "ETHA": None,       # 333132 sai → tự discover bên dưới
+# Product IDs — IBIT confirmed. ETHA sẽ auto-discover nếu hardcode sai.
+ISHARES_IDS = {
+    "IBIT": "333011",   # ✅ confirmed
+    "ETHA": "333593",   # best guess — sẽ verify khi chạy
 }
 
 ETF_REGISTRY = [
-    {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":{"type":"ishares","slug":"ishares-bitcoin-trust-etf"}},
-    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":{"type":"nasdaq_only"}},
-    {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":{"type":"nasdaq_only"}},
-    {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":{"type":"nasdaq_only"}},
-    {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":{"type":"nasdaq_only"}},
-    {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":{"type":"nasdaq_only"}},
-    {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":{"type":"nasdaq_only"}},
-    {"ticker":"BRRR","name":"Valkyrie Bitcoin Fund","issuer":"Valkyrie","underlying":"BTC","fee":0.25,"src":{"type":"nasdaq_only"}},
-    {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":{"type":"nasdaq_only"}},
-    {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":{"type":"nasdaq_only"}},
-    {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":{"type":"ishares","slug":"ishares-ethereum-trust-etf"}},
-    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":{"type":"nasdaq_only"}},
-    {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":{"type":"nasdaq_only"}},
-    {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":{"type":"nasdaq_only"}},
-    {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":{"type":"nasdaq_only"}},
-    {"ticker":"CETH","name":"21Shares Core Ethereum ETF","issuer":"21Shares","underlying":"ETH","fee":0.21,"src":{"type":"nasdaq_only"}},
-    {"ticker":"EZET","name":"Franklin Ethereum ETF","issuer":"Franklin","underlying":"ETH","fee":0.19,"src":{"type":"nasdaq_only"}},
-    {"ticker":"QETH","name":"Invesco Galaxy Ethereum ETF","issuer":"Invesco","underlying":"ETH","fee":0.25,"src":{"type":"nasdaq_only"}},
+    {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares"},
+    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
+    {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq"},
+    {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq"},
+    {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq"},
+    {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq"},
+    {"ticker":"BRRR","name":"Valkyrie Bitcoin Fund","issuer":"Valkyrie","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares"},
+    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
+    {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
+    {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq"},
+    {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq"},
+    {"ticker":"CETH","name":"21Shares Core Ethereum ETF","issuer":"21Shares","underlying":"ETH","fee":0.21,"src":"nasdaq"},
+    {"ticker":"EZET","name":"Franklin Ethereum ETF","issuer":"Franklin","underlying":"ETH","fee":0.19,"src":"nasdaq"},
+    {"ticker":"QETH","name":"Invesco Galaxy Ethereum ETF","issuer":"Invesco","underlying":"ETH","fee":0.25,"src":"nasdaq"},
 ]
 ETF_TICKERS = [e["ticker"] for e in ETF_REGISTRY]
 
-# ── Helpers ───────────────────────────────────────────────────────
 def parse_num(v):
     if v is None or str(v).strip() in ("","N/A","--","null","None"): return None
     if isinstance(v,(int,float)): return float(v)
@@ -62,7 +59,7 @@ def parse_num(v):
 
 def get_session():
     s = cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","desktop":True})
-    s.headers.update({"User-Agent":FAKE_UA,"Accept":"application/json, text/html, */*","Accept-Language":"en-US,en;q=0.9"})
+    s.headers.update({"User-Agent":FAKE_UA,"Accept":"application/json,*/*","Accept-Language":"en-US,en;q=0.9"})
     return s
 
 def get_r2():
@@ -82,22 +79,38 @@ def r2_put_json(r2, key, data, cc="max-age=120"):
     r2.put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=body,
                   ContentType="application/json", CacheControl=cc)
 
-# ── Crypto prices từ Binance (fix URL) ───────────────────────────
+# ── Crypto prices: CoinGecko (không bị block GitHub Actions) ──────
 def load_crypto_prices():
     prices = {}
     try:
-        # Gọi từng symbol riêng — tránh URL encoding phức tạp
-        for sym, key in [("BTCUSDT","BTC"), ("ETHUSDT","ETH")]:
-            r = requests.get(
-                f"https://api.binance.com/api/v3/ticker/price?symbol={sym}",
-                timeout=8)
-            if r.status_code == 200:
-                d = r.json()
-                if isinstance(d, dict) and "price" in d:
-                    prices[key] = float(d["price"])
-        print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price"
+            "?ids=bitcoin,ethereum&vs_currencies=usd",
+            headers={"User-Agent": FAKE_UA},
+            timeout=10)
+        if r.status_code == 200:
+            d = r.json()
+            if "bitcoin"  in d: prices["BTC"] = float(d["bitcoin"]["usd"])
+            if "ethereum" in d: prices["ETH"] = float(d["ethereum"]["usd"])
+        print(f"  [Crypto/CoinGecko] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
     except Exception as e:
-        print(f"  [Crypto] Lỗi: {e}")
+        print(f"  [Crypto] CoinGecko error: {e}")
+
+    # Fallback: Binance (có thể bị block nhưng thử)
+    if not prices.get("BTC"):
+        try:
+            for sym, key in [("BTCUSDT","BTC"),("ETHUSDT","ETH")]:
+                r = requests.get(
+                    f"https://api.binance.com/api/v3/ticker/price?symbol={sym}",
+                    timeout=6)
+                if r.status_code == 200:
+                    d = r.json()
+                    if isinstance(d, dict) and "price" in d:
+                        prices[key] = float(d["price"])
+            print(f"  [Crypto/Binance fallback] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
+        except Exception as e:
+            print(f"  [Crypto/Binance] {e}")
+
     return prices
 
 # ── Nasdaq prices ─────────────────────────────────────────────────
@@ -113,8 +126,6 @@ def fetch_nasdaq_all(session):
             if r.status_code != 200: print(); continue
             d       = r.json().get("data") or {}
             primary = d.get("primaryData") or {}
-            summary = d.get("summaryData") or {}
-            def sv(k): return (summary.get(k) or {}).get("value")
             price      = parse_num(primary.get("lastSalePrice"))
             change     = parse_num(primary.get("netChange"))
             change_pct = parse_num((primary.get("percentageChange") or "").replace("%",""))
@@ -123,220 +134,157 @@ def fetch_nasdaq_all(session):
             print(f"  price=${price}")
         except Exception as e:
             print(f"\n  ✗ Nasdaq {ticker}: {e}")
-        time.sleep(0.35)
+        time.sleep(0.3)
     return results
 
-# ── iShares: discover product ID từ trang chủ ────────────────────
-def discover_ishares_product_id(session, slug):
-    """
-    Tự động tìm portfolioId bằng cách search trang iShares.
-    URL pattern: https://www.ishares.com/us/products/{ID}/{slug}
-    """
+# ── iShares varnish-api ───────────────────────────────────────────
+VARNISH = ("https://www.ishares.com/varnish-api/blk-one01-product-data"
+           "/product-data/api/v2/get-product-data")
+
+def ishares_base_params(product_id):
+    return (f"appSubType=ISHARES&appType=PRODUCT_PAGE"
+            f"&locale=en_US&portfolioId={product_id}"
+            f"&targetSite=us-ishares&userType=individual"
+            f"&excludeContent=true&includeConfig=true")
+
+def fetch_ishares(session, ticker, product_id):
+    today  = datetime.now(timezone.utc).strftime("%Y%m%d")
+    params = ishares_base_params(product_id)
+    hdrs   = {"Referer":f"https://www.ishares.com/us/products/{product_id}/",
+               "Accept":"application/json,*/*","User-Agent":FAKE_UA}
+
+    url = f"{VARNISH}?component=holdings.all&asOfDate={today}&{params}"
     try:
-        # Tìm qua search API của iShares
-        search_url = "https://www.ishares.com/us/products/etf-investments.1.n.json"
-        params = {"search": slug.replace("-", " "), "showAll": "true"}
-        r = session.get(search_url, params=params, timeout=10)
-        if r.status_code == 200:
-            txt = r.text
-            # Tìm productId trong response
-            m = re.search(r'"productId"\s*:\s*(\d+).*?"' + slug[:10], txt, re.S)
-            if m:
-                print(f"    discover: productId={m.group(1)}")
-                return m.group(1)
-        # Fallback: fetch product page và extract từ URL
-        page_r = session.get(f"https://www.ishares.com/us/products/239454/{slug}", timeout=10)
-        # Không hoạt động, bỏ qua
-    except Exception as e:
-        print(f"    discover error: {e}")
-    return None
+        r = session.get(url, headers=hdrs, timeout=20)
+        print(f"  iShares {ticker} (ID={product_id}): HTTP {r.status_code}")
+        if r.status_code != 200:
+            return None
 
-# ── iShares holdings (IBIT đã confirm HTTP 200) ──────────────────
-def fetch_ishares_holdings(session, product_id, ticker, slug):
-    """
-    Dùng varnish-api endpoint đã confirm hoạt động.
-    Parse componentsByNameMap → tìm downloadHoldingsLink → download CSV.
-    """
-    if not product_id:
-        print(f"  iShares {ticker}: Chưa có product_id, skip")
-        return None
+        txt = r.text.strip()
+        if not txt.startswith("{"): return None
 
-    VARNISH = "https://www.ishares.com/varnish-api/blk-one01-product-data/product-data/api/v2/get-product-data"
-    BASE_PARAMS = (
-        f"appSubType=ISHARES&appType=PRODUCT_PAGE"
-        f"&locale=en_US&portfolioId={product_id}"
-        f"&targetSite=us-ishares&userType=individual"
-        f"&excludeContent=true&includeConfig=true"
-    )
-    referer = f"https://www.ishares.com/us/products/{product_id}/{slug}"
-    hdrs    = {"Referer":referer, "Accept":"application/json, */*", "User-Agent":FAKE_UA}
-    today   = datetime.now(timezone.utc).strftime("%Y%m%d")
-    yesterday = datetime.now(timezone.utc).strftime("%Y%m%d")  # thử ngày hiện tại trước
+        # Log 2000 chars để thấy đủ structure
+        print(f"    response[:2000]:\n{txt[:2000]}\n    ---END---")
 
-    holdings = None
-    nav_date = None
+        data = r.json()
 
-    for as_of in [today, ""]:  # thử today, nếu không có thì bỏ asOfDate
-        suffix = f"&asOfDate={as_of}" if as_of else ""
-        url = f"{VARNISH}?component=holdings.all{suffix}&{BASE_PARAMS}"
-        try:
-            r = session.get(url, headers=hdrs, timeout=20)
-            print(f"  iShares holdings {ticker}: HTTP {r.status_code} (asOfDate={as_of or 'none'})")
-            if r.status_code != 200: continue
+        # Verify đúng fund
+        fund_name = data.get("fundName","")
+        print(f"    fundName: {fund_name}")
+        if ticker == "ETHA" and "ethereum" not in fund_name.lower():
+            print(f"    ✗ Wrong fund! Expected Ethereum ETF, got: {fund_name}")
+            return None
 
-            txt = r.text.strip()
-            if not txt.startswith("{"): 
-                print(f"    → Non-JSON response, skip"); continue
+        holdings   = None
+        shares_out = None
+        nav_date   = None
 
-            print(f"    response[:500]: {txt[:500]}")
-            data = r.json()
+        # ── Path 1: componentsByNameMap.holdings.containersByNameMap.all.data ──
+        comp_map      = data.get("componentsByNameMap") or {}
+        holdings_comp = comp_map.get("holdings") or {}
+        containers    = holdings_comp.get("containersByNameMap") or {}
+        all_cont      = containers.get("all") or {}
 
-            # ── Bước 1: Tìm downloadHoldingsLink trong properties ─
-            comp_map = data.get("componentsByNameMap") or {}
-            # Key có thể là "holdings" hoặc "holdings.all"
-            holdings_comp = comp_map.get("holdings.all") or comp_map.get("holdings") or {}
-            props = holdings_comp.get("properties") or {}
+        print(f"    all_cont keys: {list(all_cont.keys())}")
 
-            print(f"    properties keys: {list(props.keys())[:10]}")
+        # Tìm tableData trong all_cont
+        for data_key in ["data","tableData","holdingsData","holdings"]:
+            nested = all_cont.get(data_key)
+            if nested:
+                print(f"    Found '{data_key}' in all_cont, keys: {list(nested.keys()) if isinstance(nested,dict) else type(nested)}")
+                tbl = nested.get("tableData") if isinstance(nested,dict) else None
+                if not tbl and isinstance(nested,dict):
+                    tbl = nested  # maybe nested IS tableData
+                if tbl:
+                    rows = tbl.get("rows") or []
+                    print(f"    rows count: {len(rows)}")
+                    if rows:
+                        row0 = rows[0]
+                        print(f"    row[0] keys: {list(row0.keys())[:12]}")
+                        # Tìm holdings (số BTC/ETH)
+                        for key in ["shares","sharesHeld","quantity","units","holdingShares"]:
+                            val = row0.get(key)
+                            if isinstance(val, dict):
+                                val = val.get("raw") or val.get("value") or val.get("fmt")
+                            h = parse_num(val)
+                            if h and h > 100:
+                                holdings = h
+                                print(f"    ✓ holdings via '{key}': {holdings}")
+                                break
+                    # asOfDate
+                    nav_date = tbl.get("asOfDate") or tbl.get("date")
+                break
 
-            # Tìm download link trong properties
-            dl_link = None
-            for k, v in props.items():
-                if isinstance(v, str) and ("holdings" in k.lower() or "download" in k.lower() or "csv" in k.lower()):
-                    dl_link = v
-                    print(f"    Found download key '{k}': {v[:100]}")
-                    break
-
-            if dl_link:
-                # Download CSV
-                csv_url = dl_link if dl_link.startswith("http") else f"https://www.ishares.com{dl_link}"
+        # ── Path 2: fund-level sharesOutstanding từ header fields ──
+        # downloadHeaderData = "inceptionDate,sharesOutstanding,..."
+        # Các giá trị này nằm trong data.header hoặc top-level fields
+        header_fields = (holdings_comp.get("properties",{})
+                         .get("downloadHeaderData","")).split(",")
+        if "sharesOutstanding" in header_fields:
+            # Thử tìm trong top-level data
+            for path in [
+                lambda d: d.get("sharesOutstanding"),
+                lambda d: d.get("header",{}).get("sharesOutstanding"),
+                lambda d: d.get("fundData",{}).get("sharesOutstanding"),
+            ]:
                 try:
-                    csv_r = session.get(csv_url, headers={"Referer":referer}, timeout=15)
-                    print(f"    CSV download: HTTP {csv_r.status_code} from {csv_url[:80]}")
-                    if csv_r.status_code == 200 and not csv_r.text.strip().startswith("<"):
-                        holdings, nav_date = parse_ishares_csv(csv_r.text, ticker)
-                        if holdings:
-                            print(f"    ✓ holdings={holdings}  nav_date={nav_date}")
+                    v = path(data)
+                    if v is not None:
+                        so = parse_num(v.get("raw") if isinstance(v,dict) else v)
+                        if so and so > 1000:
+                            shares_out = so
+                            print(f"    ✓ sharesOutstanding: {shares_out}")
                             break
-                except Exception as e:
-                    print(f"    CSV download error: {e}")
+                except: pass
 
-            # ── Bước 2: Tìm trong data trực tiếp ─────────────────
-            # Traverse toàn bộ JSON để tìm số BTC/ETH
+        # ── Path 3: Regex scan toàn bộ JSON ──────────────────────
+        if not holdings:
             flat = json.dumps(data)
-
-            # Tìm "sharesHeld", "quantity", "holdingShares" etc.
             for pattern in [
-                r'"sharesHeld"\s*:\s*"?([\d,\.]+)"?',
-                r'"quantity"\s*:\s*"?([\d,\.]+)"?',
-                r'"holdingShares"\s*:\s*"?([\d,\.]+)"?',
-                r'"shares"\s*:\s*"?([\d,\.]+)"?',
+                r'"shares"\s*:\s*\{\s*"raw"\s*:\s*([\d\.]+)',
+                r'"sharesHeld"\s*:\s*\{\s*"raw"\s*:\s*([\d\.]+)',
+                r'"quantity"\s*:\s*\{\s*"raw"\s*:\s*([\d\.]+)',
+                r'"shares"\s*:\s*"([\d,\.]+)"',
             ]:
                 m = re.search(pattern, flat)
                 if m:
-                    val = parse_num(m.group(1).replace(",",""))
-                    # Sanity check: BTC ETF holdings nên > 1000 và < 1,000,000
-                    if val and 1000 < val < 10_000_000:
-                        holdings = val
-                        print(f"    ✓ Found holdings via pattern '{pattern}': {holdings}")
-                        break
-
-            # Tìm asOfDate
-            m_date = re.search(r'"asOfDate"\s*:\s*"?(\d{8}|\d{4}-\d{2}-\d{2})"?', flat)
-            if m_date:
-                nav_date = m_date.group(1)
-
-            if holdings: break
-
-        except Exception as e:
-            print(f"    error: {e}")
-
-    if holdings:
-        return {"holdings": holdings, "nav_date": nav_date}
-    return None
-
-
-def parse_ishares_csv(text, ticker):
-    """Parse iShares holdings CSV để lấy số BTC/ETH"""
-    try:
-        lines = text.strip().split("\n")
-        print(f"    CSV: {len(lines)} lines")
-        print(f"    CSV line[0]: {lines[0][:100]}")
-
-        # iShares CSV: metadata rows đầu, rồi đến header, rồi data
-        # Tìm header row (có "Name" và "Shares")
-        header_idx = 0
-        for i, line in enumerate(lines[:10]):
-            if "name" in line.lower() and ("shares" in line.lower() or "weight" in line.lower()):
-                header_idx = i
-                break
-
-        reader = csv.DictReader(io.StringIO("\n".join(lines[header_idx:])))
-        rows = [row for row in reader if any(v.strip() for v in row.values())]
-
-        if not rows:
-            print(f"    CSV: no data rows")
-            return None, None
-
-        print(f"    CSV headers: {list(rows[0].keys())[:8]}")
-        row0 = rows[0]  # IBIT/ETHA chỉ có 1 holding (BTC/ETH)
-        print(f"    CSV row0: {dict(list(row0.items())[:6])}")
-
-        # Tìm cột shares
-        hlow = {k.lower().strip(): k for k in row0}
-        holdings = None
-        for pat in ["shares held", "shares", "quantity", "units"]:
-            for kl, ko in hlow.items():
-                if pat in kl:
-                    v = row0.get(ko,"").replace(",","").strip()
-                    h = parse_num(v)
-                    if h and h > 100:  # sanity check
+                    h = parse_num(m.group(1).replace(",",""))
+                    # BTC holdings: 100K–1M; ETH holdings: 1M–100M
+                    if h and 1_000 < h < 100_000_000:
                         holdings = h
+                        print(f"    ✓ holdings via regex '{pattern[:40]}': {holdings}")
                         break
-            if holdings: break
 
-        # Nav date từ metadata (thường ở dòng đầu CSV)
-        nav_date = None
-        for line in lines[:5]:
-            m = re.search(r'(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2})', line)
-            if m:
-                nav_date = m.group(1)
-                break
+        if holdings or shares_out:
+            return {"holdings":holdings, "shares":shares_out, "nav_date":nav_date}
 
-        return holdings, nav_date
+        print(f"    ✗ No holdings found in response")
+        return None
+
     except Exception as e:
-        print(f"    CSV parse error: {e}")
-        return None, None
+        print(f"    error: {e}")
+        return None
 
 
-# ── Discover đúng product ID cho ETHA ────────────────────────────
-def find_etha_product_id(session):
-    """
-    iShares Ethereum Trust ETF — tìm product ID đúng.
-    333132 là sai (iBonds ETF). Thử vài ID xung quanh 333011.
-    """
-    # Thử các ID có thể từ khoảng 333400-333700
-    candidates = ["333593", "333449", "333492", "333521", "333401", "333600", "333490"]
-    VARNISH = "https://www.ishares.com/varnish-api/blk-one01-product-data/product-data/api/v2/get-product-data"
-
+def discover_etha_id(session):
+    """Thử các product ID candidate cho ETHA"""
+    candidates = ["333593","333449","333492","333521","333600","333640","333700"]
+    params_base = (f"appSubType=ISHARES&appType=PRODUCT_PAGE"
+                   f"&locale=en_US&targetSite=us-ishares&userType=individual"
+                   f"&excludeContent=true&includeConfig=true")
     for pid in candidates:
         try:
-            url = (f"{VARNISH}?component=holdings.all"
-                   f"&appSubType=ISHARES&appType=PRODUCT_PAGE"
-                   f"&locale=en_US&portfolioId={pid}"
-                   f"&targetSite=us-ishares&userType=individual"
-                   f"&excludeContent=true&includeConfig=true")
-            r = session.get(url, headers={"User-Agent":FAKE_UA,"Accept":"application/json"}, timeout=10)
+            url = f"{VARNISH}?component=holdings.all&portfolioId={pid}&{params_base}"
+            r   = session.get(url, headers={"User-Agent":FAKE_UA,"Accept":"application/json"}, timeout=8)
             if r.status_code == 200:
-                d = r.json()
-                name = d.get("fundName","")
-                print(f"    PID {pid}: {name}")
+                name = r.json().get("fundName","")
+                print(f"    ID {pid}: {name}")
                 if "ethereum" in name.lower() and "ishares" in name.lower():
-                    print(f"    ✓ Found ETHA product ID: {pid}")
+                    print(f"    ✓ ETHA found: productId={pid}")
                     return pid
-        except Exception as e:
-            pass
+        except: pass
         time.sleep(0.3)
+    print("    ✗ ETHA product ID not found in candidates")
     return None
 
 
@@ -355,34 +303,30 @@ def run(r2):
 
     issuer = {}
     if RUN_MODE == "full":
-        print("\n🏦 [2/3] Issuer data...")
+        print("\n🏦 [2/3] iShares fund data...")
 
-        # Discover ETHA product ID nếu chưa có
-        etha_pid = ISHARES_PRODUCTS.get("ETHA")
-        if not etha_pid:
-            print("  Discovering ETHA product ID...")
-            etha_pid = find_etha_product_id(session)
-            if etha_pid:
-                ISHARES_PRODUCTS["ETHA"] = etha_pid
+        # IBIT
+        ibit_data = fetch_ishares(session, "IBIT", ISHARES_IDS["IBIT"])
+        if ibit_data:
+            nav = nasdaq.get("IBIT",{}).get("price")
+            issuer["IBIT"] = {**ibit_data, "nav":nav,
+                "aum": ibit_data["holdings"] * crypto_prices.get("BTC",0) if ibit_data.get("holdings") else None}
 
-        for etf in ETF_REGISTRY:
-            t   = etf["ticker"]
-            src = etf["src"]
-            if src["type"] != "ishares": continue
+        time.sleep(1)
 
-            pid = ISHARES_PRODUCTS.get(t)
-            raw = fetch_ishares_holdings(session, pid, t, src["slug"])
-            if raw:
-                # NAV ≈ market price (premium BTC/ETH ETF < 0.1%, chấp nhận được)
-                nav = nasdaq.get(t, {}).get("price")
-                issuer[t] = {
-                    "holdings": raw["holdings"],
-                    "nav":      nav,
-                    "nav_date": raw.get("nav_date"),
-                    "aum":      raw["holdings"] * crypto_prices.get(etf["underlying"], 0) if raw["holdings"] else None,
-                }
-                print(f"  ✓ {t}: holdings={raw['holdings']}  AUM=${issuer[t]['aum']:,.0f}" if issuer[t]['aum'] else f"  ✓ {t}: holdings={raw['holdings']}")
-            time.sleep(0.5)
+        # ETHA — verify hardcoded ID, nếu sai thì discover
+        etha_id = ISHARES_IDS.get("ETHA","333593")
+        etha_data = fetch_ishares(session, "ETHA", etha_id)
+        if not etha_data:
+            print("  ETHA hardcoded ID failed, discovering...")
+            etha_id = discover_etha_id(session)
+            if etha_id:
+                ISHARES_IDS["ETHA"] = etha_id
+                etha_data = fetch_ishares(session, "ETHA", etha_id)
+        if etha_data:
+            nav = nasdaq.get("ETHA",{}).get("price")
+            issuer["ETHA"] = {**etha_data, "nav":nav,
+                "aum": etha_data["holdings"] * crypto_prices.get("ETH",0) if etha_data.get("holdings") else None}
 
         print(f"\n  → issuer data: {list(issuer.keys()) or 'NONE'}")
     else:
@@ -399,16 +343,17 @@ def run(r2):
 
         price    = mkt.get("price")
         nav      = iss.get("nav") or (prev.get("fund") or {}).get("nav")
-        shares   = (prev.get("fund") or {}).get("shares")
+        shares   = iss.get("shares") or (prev.get("fund") or {}).get("shares")
         holdings = iss.get("holdings") or (prev.get("fund") or {}).get("holdings")
-        aum      = iss.get("aum") or (prev.get("fund") or {}).get("aum")
-        # Nếu vẫn chưa có AUM nhưng có holdings và price crypto
+        aum      = iss.get("aum")
         if not aum and holdings and u in crypto_prices:
             aum = holdings * crypto_prices[u]
+        if not aum:
+            aum = (prev.get("fund") or {}).get("aum")
 
         premium = None
         if price and nav and nav > 0:
-            premium = {"usd": price - nav, "pct": (price - nav) / nav * 100}
+            premium = {"usd":price-nav,"pct":(price-nav)/nav*100}
 
         flow = None
         ps = (prev.get("fund") or {}).get("shares")
@@ -425,25 +370,25 @@ def run(r2):
             "fund":{"nav":nav,"nav_date":iss.get("nav_date"),"shares":shares,"aum":aum,"holdings":holdings,"premium":premium},
             "flow":flow,"onchain":None,
         })
-        totals.setdefault(u, {"aum":0.0,"flow":0.0,"count":0})
+        totals.setdefault(u,{"aum":0.0,"flow":0.0,"count":0})
         totals[u]["aum"]   += aum or 0
         totals[u]["flow"]  += (flow or {}).get("daily_usd") or 0
         totals[u]["count"] += 1
 
     out = {"etfs":etfs,"totals":totals,"run_mode":RUN_MODE,"fetched_at":now_utc.isoformat()}
-
-    print("\n☁️  Uploading...")
-    r2_put_json(r2, "etf-flows.json", out, "max-age=120")
+    print("\n☁️  Uploading to R2...")
+    r2_put_json(r2,"etf-flows.json",out,"max-age=120")
     if RUN_MODE == "full":
-        r2_put_json(r2, f"etf-history/{today_str}.json", out, "max-age=86400")
+        r2_put_json(r2,f"etf-history/{today_str}.json",out,"max-age=86400")
     print("✅ Done")
-    for u, t in totals.items():
+    for u,t in totals.items():
         s = "+" if t["flow"] >= 0 else ""
-        print(f"   {u}: AUM=${t['aum']/1e9:.2f}B  Flow={s}${t['flow']/1e6:.1f}M  ({t['count']} ETFs)")
+        aum_b = t['aum']/1e9
+        print(f"   {u}: AUM=${aum_b:.2f}B  Flow={s}${t['flow']/1e6:.1f}M  ({t['count']} ETFs)")
 
 if __name__ == "__main__":
     import time as _t; t0 = _t.time()
-    print(f"⚙️  ETF Fetcher v4 — RUN_MODE={RUN_MODE}")
+    print(f"⚙️  ETF Fetcher v5 — RUN_MODE={RUN_MODE}")
     r2 = get_r2()
     run(r2)
     print(f"\n🏁 Done in {_t.time()-t0:.1f}s")
