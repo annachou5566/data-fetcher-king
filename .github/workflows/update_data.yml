@@ -2,11 +2,9 @@ name: Update Alpha Market Data
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Mỗi 10 phút (từ 30 phút)
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
-# Đảm bảo không bao giờ chạy 2 lần đồng thời
-# cancel-in-progress: false = đợi run cũ xong, KHÔNG kill giữa chừng
 concurrency:
   group: update-alpha-market
   cancel-in-progress: false
@@ -17,7 +15,7 @@ permissions:
 jobs:
   update-market-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 20   # Hard-kill nếu bị treo
+    timeout-minutes: 20
 
     steps:
     - name: Checkout
@@ -38,11 +36,12 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
 
-    - name: Run — Market Data Only
+    # ── STEP 1: Market Data (giữ nguyên, không đổi) ────────────────────
+    - name: Run — Market Data
       env:
-        RUN_MODE: market_data   # Chỉ update market-data.json, không cắt đuôi
-        MAX_WORKERS: '6'        # 6 threads xử lý token song song
-        MAX_CONCURRENT: '4'     # Tối đa 4 HTTP request đến Binance cùng lúc (van an toàn)
+        RUN_MODE: market_data
+        MAX_WORKERS: '6'
+        MAX_CONCURRENT: '4'
         BINANCE_INTERNAL_AGG_API:    ${{ secrets.BINANCE_INTERNAL_AGG_API }}
         BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
         PROXY_WORKER_URL:            ${{ secrets.PROXY_WORKER_URL }}
@@ -51,3 +50,14 @@ jobs:
         R2_ENDPOINT_URL:             ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:              ${{ secrets.R2_BUCKET_NAME }}
       run: python scripts/fetch_alpha.py
+
+    # ── STEP 2: P2P Snapshot (độc lập, lỗi không ảnh hưởng Step 1) ────
+    - name: Run — P2P Snapshot
+      # continue-on-error: true — P2P lỗi không làm fail toàn bộ workflow
+      continue-on-error: true
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: python scripts/fetch_p2p.py
