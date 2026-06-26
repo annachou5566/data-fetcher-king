@@ -643,6 +643,7 @@ def fetch_data():
 # ─────────────────────────────────────────────
 P2P_AD_LIST_URL = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list"
 P2P_R2_KEY      = "p2p-data.json"
+P2P_R2_BUCKET   = R2_BUCKET_NAME        # wave-alpha-data — cùng bucket private với market-data.json
 P2P_MAX_KEEP    = 26_280   # 6 tháng × 24h × 6 lần/h = ~26k điểm
 
 def _p2p_best_price(session, asset, trade_type):
@@ -691,10 +692,10 @@ def upload_p2p_data(r2_client, snapshot):
     if not r2_client:
         return
 
-    # Load existing
+    # Load existing từ wave-alpha-data (private, cùng bucket với market-data.json)
     snapshots = []
     try:
-        obj       = r2_client.get_object(Bucket=R2_BUCKET_NAME, Key=P2P_R2_KEY)
+        obj       = r2_client.get_object(Bucket=P2P_R2_BUCKET, Key=P2P_R2_KEY)
         existing  = json.loads(obj['Body'].read().decode('utf-8'))
         snapshots = existing.get("snapshots", [])
     except Exception:
@@ -714,7 +715,7 @@ def upload_p2p_data(r2_client, snapshot):
 
     try:
         r2_client.put_object(
-            Bucket      = R2_BUCKET_NAME,
+            Bucket      = P2P_R2_BUCKET,   # wave-alpha-data
             Key         = P2P_R2_KEY,
             Body        = json_str.encode('utf-8'),
             ContentType = 'application/json',
