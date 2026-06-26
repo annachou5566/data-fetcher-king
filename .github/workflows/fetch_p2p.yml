@@ -1,0 +1,45 @@
+name: P2P Rate Snapshot
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # Mỗi 10 phút
+  workflow_dispatch:          # Cho phép chạy thủ công
+
+concurrency:
+  group: fetch-p2p-snapshot
+  cancel-in-progress: false   # Đợi run cũ xong, không kill giữa chừng
+
+permissions:
+  contents: read
+
+jobs:
+  p2p-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5        # P2P fetch nhanh, 5 phút là đủ
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-p2p-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-p2p-
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run — P2P Snapshot
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: python scripts/fetch_p2p.py
