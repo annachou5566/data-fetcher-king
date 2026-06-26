@@ -2,40 +2,37 @@ name: P2P Rate Snapshot
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # Mỗi 10 phút
-  workflow_dispatch:          # Cho phép chạy thủ công
+    - cron: '*/10 * * * *'   # P2P: mỗi 10 phút
+    - cron: '35 1 * * *'     # VCB: 08:35 ICT hàng ngày
+  workflow_dispatch:          # Chạy thủ công — runs cả 2 jobs (backfill VCB lần đầu)
 
 concurrency:
   group: fetch-p2p-snapshot
-  cancel-in-progress: false   # Đợi run cũ xong, không kill giữa chừng
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+
+  # ── P2P Binance — mỗi 10 phút ─────────────────────────────────────────────
   p2p-snapshot:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.schedule == '*/10 * * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 5        # P2P fetch nhanh, 5 phút là đủ
+    timeout-minutes: 5
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Cache pip
-      uses: actions/cache@v4
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-p2p-${{ hashFiles('requirements.txt') }}
         restore-keys: ${{ runner.os }}-pip-p2p-
-
-    - name: Install dependencies
-      run: pip install -r requirements.txt
-
+    - run: pip install -r requirements.txt
     - name: Run — P2P Snapshot
       env:
         R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -43,3 +40,29 @@ jobs:
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: python scripts/fetch_p2p.py
+
+  # ── VCB Vietcombank — 1 lần/ngày ──────────────────────────────────────────
+  vcb-daily:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.schedule == '35 1 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30       # Backfill từ 2010 lần đầu cần ~15 phút
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-vcb-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-vcb-
+    - run: pip install -r requirements.txt
+    - name: Run — VCB Daily
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: python scripts/fetch_vcb.py
