@@ -591,19 +591,6 @@ def fetch_data():
         except Exception as e:
             print(f"❌ R2 Upload Failed: {e}")
 
-
-    # ─── P2P Snapshot ───────────────────────────────────────────────────
-    if RUN_MODE in ("full", "market_data"):
-        print("💱 P2P Snapshot (USDT+USDC/VND)...", end=" ", flush=True)
-        try:
-            snap = fetch_p2p_snapshot()
-            if any(v > 0 for v in snap[1:]):
-                upload_p2p_data(r2, snap)
-            else:
-                print("SKIP (all 0)")
-        except Exception as e:
-            print(f"❌ P2P error: {e}")
-
     # ═══════════════════════════════════════════════
     # PHASE 2: TAILS (tails_update hoặc full)
     # ═══════════════════════════════════════════════
@@ -635,96 +622,6 @@ def fetch_data():
 
     mode_label = {"full": "FULL", "market_data": "MARKET DATA", "tails_update": "TAILS"}.get(RUN_MODE, RUN_MODE)
     print(f"🏁 DONE [{mode_label}]! Total: {time.time() - start:.1f}s")
-
-# ─────────────────────────────────────────────
-# 10. P2P SNAPSHOT — Binance USDT+USDC/VND
-# Chạy mỗi lần market_data → tích lũy lịch sử vào R2
-# Format compact: [[ts, usdt_buy, usdt_sell, usdc_buy, usdc_sell], ...]
-# ─────────────────────────────────────────────
-P2P_AD_LIST_URL = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list"
-P2P_R2_KEY      = "p2p-data.json"
-P2P_R2_BUCKET   = R2_BUCKET_NAME        # wave-alpha-data — cùng bucket private với market-data.json
-P2P_MAX_KEEP    = 26_280   # 6 tháng × 24h × 6 lần/h = ~26k điểm
-
-def _p2p_best_price(session, asset, trade_type):
-    """Lấy giá tốt nhất (first ad). Dùng cloudscraper session — bypass CF."""
-    try:
-        res = session.get(
-            P2P_AD_LIST_URL,
-            params={"fiat": "VND", "asset": asset, "tradeType": trade_type, "limit": "5"},
-            timeout=12,
-        )
-        if res.status_code != 200:
-            print(f"  ⚠️ P2P {asset}/{trade_type} HTTP {res.status_code}", flush=True)
-            return 0
-        items = res.json().get("data", {}).get("items", [])
-        if not items:
-            return 0
-        return int(float(items[0].get("price", 0)))
-    except Exception as e:
-        print(f"  ⚠️ P2P {asset}/{trade_type}: {e}", flush=True)
-        return 0
-
-def fetch_p2p_snapshot():
-    """Fetch 4 combos P2P song song → trả về compact row [ts, ub, us, cb, cs]."""
-    session = get_session()   # cloudscraper thread-local session
-    combos  = [("USDT","BUY"), ("USDT","SELL"), ("USDC","BUY"), ("USDC","SELL")]
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {ex.submit(_p2p_best_price, session, a, t): (a, t) for a, t in combos}
-        prices  = {}
-        for f in as_completed(futures):
-            prices[futures[f]] = f.result()
-
-    return [
-        int(time.time()),                          # Unix timestamp (giây)
-        prices.get(("USDT","BUY"),  0),
-        prices.get(("USDT","SELL"), 0),
-        prices.get(("USDC","BUY"),  0),
-        prices.get(("USDC","SELL"), 0),
-    ]
-
-def upload_p2p_data(r2_client, snapshot):
-    """
-    Đọc p2p-data.json từ R2 → append snapshot → trim → upload lại.
-    Không commit file nào, không dùng Git — thuần R2.
-    """
-    if not r2_client:
-        return
-
-    # Load existing từ wave-alpha-data (private, cùng bucket với market-data.json)
-    snapshots = []
-    try:
-        obj       = r2_client.get_object(Bucket=P2P_R2_BUCKET, Key=P2P_R2_KEY)
-        existing  = json.loads(obj['Body'].read().decode('utf-8'))
-        snapshots = existing.get("snapshots", [])
-    except Exception:
-        pass  # File chưa có → tạo mới
-
-    snapshots.append(snapshot)
-    if len(snapshots) > P2P_MAX_KEEP:
-        snapshots = snapshots[-P2P_MAX_KEEP:]
-
-    payload  = {
-        "v":        1,
-        "updated":  datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "count":    len(snapshots),
-        "snapshots": snapshots,   # [[ts, usdt_buy, usdt_sell, usdc_buy, usdc_sell], ...]
-    }
-    json_str = json.dumps(payload, separators=(',', ':'))
-
-    try:
-        r2_client.put_object(
-            Bucket      = P2P_R2_BUCKET,   # wave-alpha-data
-            Key         = P2P_R2_KEY,
-            Body        = json_str.encode('utf-8'),
-            ContentType = 'application/json',
-            CacheControl= 'max-age=120',
-        )
-        latest = snapshot[1]
-        print(f"✅ P2P saved ({len(snapshots)} pts) | USDT BUY: {latest:,} ₫")
-    except Exception as e:
-        print(f"❌ P2P upload failed: {e}")
 
 if __name__ == "__main__":
     fetch_data()
