@@ -1,12 +1,9 @@
 """
-scripts/fetch_etf.py  v7 — FINAL
-Fix từ log v6:
-- dataPointsByNameMap dùng array format: {"value": [val1, val2]}
-  KHÔNG phải {"raw": val} như tôi regex trước đây
-- marketValue.value[0] = AUM của IBIT = $45.45B ✅ (đã thấy trong log)
-- sharesHeld.value[0] = BTC count (nếu có)
-- shareClass field có thể có NAV/shares outstanding
-- ETHA: thử range rộng hơn 333700-334300
+scripts/fetch_etf.py  v8 — FINAL WORKING
+Fix từ log v7:
+- dmap key là "unitsHeld" không phải "sharesHeld" → BTC count trực tiếp
+- shareClass là list → src.get() crash im lặng → thêm isinstance check
+- ETHA: thử range rộng hơn + search by asset class Cryptocurrency
 """
 
 import json, os, re, time
@@ -26,7 +23,7 @@ FAKE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 
 ISHARES_IDS = {
     "IBIT": "333011",  # confirmed ✅
-    "ETHA": None,      # will discover
+    "ETHA": None,
 }
 
 ETF_REGISTRY = [
@@ -64,29 +61,27 @@ def get_session():
     return s
 
 def get_r2():
-    return boto3.client("s3", endpoint_url=R2_ENDPOINT_URL,
-        aws_access_key_id=R2_ACCESS_KEY_ID, aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+    return boto3.client("s3",endpoint_url=R2_ENDPOINT_URL,
+        aws_access_key_id=R2_ACCESS_KEY_ID,aws_secret_access_key=R2_SECRET_ACCESS_KEY,
         config=Config(signature_version="s3v4"))
 
 def r2_get_json(r2, key):
     try:
-        resp = r2.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+        resp = r2.get_object(Bucket=R2_BUCKET_NAME,Key=key)
         return json.loads(resp["Body"].read().decode("utf-8"))
     except Exception as e:
         print(f"  [R2 GET {key}] {e}"); return None
 
 def r2_put_json(r2, key, data, cc="max-age=120"):
-    body = json.dumps(data, ensure_ascii=False, separators=(",",":")).encode("utf-8")
-    r2.put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=body,
-                  ContentType="application/json", CacheControl=cc)
+    body = json.dumps(data,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    r2.put_object(Bucket=R2_BUCKET_NAME,Key=key,Body=body,ContentType="application/json",CacheControl=cc)
 
-# ── Crypto prices ─────────────────────────────────────────────────
 def load_crypto_prices():
     prices = {}
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd",
-            headers={"User-Agent": FAKE_UA}, timeout=10)
+            headers={"User-Agent":FAKE_UA},timeout=10)
         if r.status_code == 200:
             d = r.json()
             if "bitcoin"  in d: prices["BTC"] = float(d["bitcoin"]["usd"])
@@ -96,7 +91,6 @@ def load_crypto_prices():
     print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
     return prices
 
-# ── Nasdaq prices ─────────────────────────────────────────────────
 def fetch_nasdaq_all(session):
     results = {}
     for ticker in ETF_TICKERS:
@@ -105,7 +99,7 @@ def fetch_nasdaq_all(session):
                 f"https://api.nasdaq.com/api/quote/{ticker}/info?assetclass=etf",
                 headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}"},
                 timeout=12)
-            print(f"  Nasdaq {ticker}: HTTP {r.status_code}", end="")
+            print(f"  Nasdaq {ticker}: HTTP {r.status_code}",end="")
             if r.status_code != 200: print(); continue
             d       = r.json().get("data") or {}
             primary = d.get("primaryData") or {}
@@ -120,191 +114,185 @@ def fetch_nasdaq_all(session):
         time.sleep(0.3)
     return results
 
-# ── iShares core ──────────────────────────────────────────────────
 VARNISH = ("https://www.ishares.com/varnish-api/blk-one01-product-data"
            "/product-data/api/v2/get-product-data")
 
-def _ishares_url(product_id, exclude_content, include_config, as_of=None):
-    params = (f"component=holdings.all"
-              f"&portfolioId={product_id}"
-              f"&appSubType=ISHARES&appType=PRODUCT_PAGE"
-              f"&locale=en_US&targetSite=us-ishares&userType=individual"
-              f"&excludeContent={'true' if exclude_content else 'false'}"
-              f"&includeConfig={'true' if include_config else 'false'}")
-    if as_of:
-        params += f"&asOfDate={as_of}"
-    return f"{VARNISH}?{params}"
+def _url(pid, excl, incl, as_of=None):
+    p = (f"component=holdings.all&portfolioId={pid}"
+         f"&appSubType=ISHARES&appType=PRODUCT_PAGE"
+         f"&locale=en_US&targetSite=us-ishares&userType=individual"
+         f"&excludeContent={'true' if excl else 'false'}"
+         f"&includeConfig={'true' if incl else 'false'}")
+    if as_of: p += f"&asOfDate={as_of}"
+    return f"{VARNISH}?{p}"
 
-def _dmap_val(dmap, key, idx=0):
-    """Lấy value[idx] từ dataPointsByNameMap entry"""
-    entry = dmap.get(key, {})
-    vals  = entry.get("value")
-    if isinstance(vals, list) and len(vals) > idx:
-        return vals[idx]
-    if not isinstance(vals, list):
-        return vals
+def safe_get(obj, key):
+    """dict.get() safe — không crash nếu obj là list/None"""
+    if isinstance(obj, dict): return obj.get(key)
     return None
 
 def fetch_ishares(session, ticker, product_id, crypto_price=None):
-    hdrs = {"Referer": f"https://www.ishares.com/us/products/{product_id}/",
-             "Accept": "application/json,*/*", "User-Agent": FAKE_UA}
+    hdrs = {"Referer":f"https://www.ishares.com/us/products/{product_id}/",
+             "Accept":"application/json,*/*","User-Agent":FAKE_UA}
 
-    # Step 1: config call để lấy dateList
+    # Step 1: config → lấy dateList
     latest_date = None
     try:
-        r = session.get(_ishares_url(product_id, True, True), headers=hdrs, timeout=15)
-        print(f"  iShares config {ticker} (ID={product_id}): HTTP {r.status_code}")
+        r = session.get(_url(product_id,True,True),headers=hdrs,timeout=15)
+        print(f"  iShares config {ticker}: HTTP {r.status_code}")
         if r.status_code != 200: return None
-        d = r.json()
-
-        # Validate fund name
+        d         = r.json()
         fund_name = d.get("fundName","")
         print(f"    fundName: {fund_name}")
         if ticker == "ETHA" and "ethereum" not in fund_name.lower():
             print(f"    ✗ Wrong fund"); return None
-
-        # Lấy dateList[0]
-        comp = (d.get("componentsByNameMap") or {}).get("holdings",{})
-        cont = (comp.get("containersByNameMap") or {}).get("all",{})
-        dmap = cont.get("dataPointsByNameMap",{})
-        dates = (dmap.get("dateList",{}).get("value") or [])
+        comp  = (d.get("componentsByNameMap") or {}).get("holdings",{})
+        cont  = (comp.get("containersByNameMap") or {}).get("all",{})
+        dmap  = cont.get("dataPointsByNameMap",{})
+        dates = dmap.get("dateList",{}).get("value") or []
         if dates:
             latest_date = str(dates[0])
             print(f"    dateList[0]: {latest_date}")
-
     except Exception as e:
         print(f"    config error: {e}"); return None
 
-    # Step 2: data call với excludeContent=FALSE + đúng asOfDate
+    # Step 2: data với excludeContent=FALSE
     try:
-        r = session.get(
-            _ishares_url(product_id, False, False, latest_date),
-            headers=hdrs, timeout=20)
+        r = session.get(_url(product_id,False,False,latest_date),headers=hdrs,timeout=20)
         print(f"  iShares data {ticker}: HTTP {r.status_code}")
         if r.status_code != 200: return None
-
+        txt = r.text.strip()
+        if not txt.startswith("{"): return None
         d = r.json()
 
-        # Navigate: componentsByNameMap.holdings.containersByNameMap.all.dataPointsByNameMap
         comp = (d.get("componentsByNameMap") or {}).get("holdings",{})
         cont = (comp.get("containersByNameMap") or {}).get("all",{})
         dmap = cont.get("dataPointsByNameMap",{})
-
-        # Log tất cả data point keys để debug
         print(f"    dmap keys: {list(dmap.keys())}")
 
-        # ── AUM: marketValue[0] = giá trị thị trường của BTC/ETH ──
-        # Từ log v6: marketValue.value = [4.545486989197E10, 34098.75]
-        #            → IBIT holds $45.45B BTC ✅
-        aum_arr = dmap.get("marketValue",{}).get("value",[])
-        # Lấy giá trị lớn nhất (BTC, không phải cash)
-        aum = max((v for v in aum_arr if isinstance(v,(int,float)) and v > 0), default=None)
-        print(f"    marketValue array: {aum_arr}")
-        print(f"    → AUM: ${aum:,.0f}" if aum else "    → AUM: None")
+        # ── AUM: marketValue[0] ───────────────────────────────────
+        mv_arr = dmap.get("marketValue",{}).get("value",[])
+        aum    = max((v for v in mv_arr if isinstance(v,(int,float)) and v > 0),default=None)
+        print(f"    marketValue.value: {mv_arr} → AUM=${aum:,.0f}" if aum else f"    marketValue.value: {mv_arr}")
 
-        # ── Holdings (số BTC/ETH) ──────────────────────────────────
+        # ── Holdings: unitsHeld[0] (từ log v7, key chính xác) ─────
         holdings = None
-        # Thử các data point có thể chứa BTC count
-        for dp_key in ["sharesHeld","quantity","numberOfShares","holdingShares","units"]:
+        # Thử theo đúng thứ tự: unitsHeld trước (confirmed từ log)
+        for dp_key in ["unitsHeld","sharesHeld","quantity","numberOfShares","holdingShares","units"]:
             arr = dmap.get(dp_key,{}).get("value",[])
             if arr:
-                print(f"    {dp_key}.value: {arr}")
-                # Lấy giá trị đầu tiên (holding #1 = BTC/ETH)
                 v = arr[0] if isinstance(arr,list) else arr
                 h = parse_num(v)
-                if h and 1_000 < h < 1_000_000_000:
+                print(f"    {dp_key}.value[0]: {v} → {h}")
+                if h and 100 < h < 1_000_000_000:
                     holdings = h
                     print(f"    ✓ holdings via '{dp_key}': {holdings}")
                     break
 
-        # Nếu không có sharesHeld → tính từ AUM / crypto price
+        # Fallback: tính từ AUM / price
         if not holdings and aum and crypto_price and crypto_price > 0:
             holdings = aum / crypto_price
-            print(f"    holdings computed: {aum} / {crypto_price} = {holdings:.2f}")
+            print(f"    holdings = AUM/price = {aum:.0f}/{crypto_price:.0f} = {holdings:.2f}")
 
-        # ── Shares outstanding (số cổ phiếu ETF) ─────────────────
+        # ── ShareClass / pageScopeData (safe access) ─────────────
         shares_out = None
-        # Tìm trong shareClass field (top-level)
-        share_class = d.get("shareClass") or {}
-        if isinstance(share_class, dict):
-            print(f"    shareClass keys: {list(share_class.keys())[:10]}")
-            so_val = share_class.get("sharesOutstanding") or share_class.get("totalSharesOutstanding")
-            if so_val:
-                v = so_val.get("raw") or so_val.get("value") if isinstance(so_val,dict) else so_val
-                s = parse_num(v)
-                if s and s > 1_000_000:
-                    shares_out = s
-                    print(f"    sharesOutstanding (shareClass): {shares_out}")
+        nav        = None
 
-        # Tìm trong pageScopeData
-        if not shares_out:
-            page_data = d.get("pageScopeData") or {}
-            if isinstance(page_data, dict):
-                for k in ["sharesOutstanding","totalSharesOutstanding"]:
-                    v = page_data.get(k)
+        # shareClass có thể là dict hoặc list — dùng safe_get
+        sc = d.get("shareClass")
+        sc_dict = sc if isinstance(sc,dict) else (sc[0] if isinstance(sc,list) and sc else {})
+        print(f"    shareClass type: {type(sc).__name__}  keys: {list(sc_dict.keys())[:8] if sc_dict else []}")
+
+        for src_dict in [sc_dict, d.get("pageScopeData") or {}]:
+            if not isinstance(src_dict,dict): continue
+
+            # sharesOutstanding
+            if not shares_out:
+                for k in ["sharesOutstanding","totalSharesOutstanding","outstandingShares"]:
+                    v = src_dict.get(k)
                     if v:
-                        s = parse_num(v.get("raw") if isinstance(v,dict) else v)
+                        s = parse_num(safe_get(v,"raw") or safe_get(v,"value") or v)
                         if s and s > 1_000_000:
                             shares_out = s
-                            print(f"    sharesOutstanding (pageScopeData): {shares_out}")
+                            print(f"    sharesOutstanding: {shares_out}")
                             break
 
-        # ── NAV ───────────────────────────────────────────────────
-        nav = None
-        for src in [share_class, d.get("pageScopeData") or {}]:
-            for k in ["navAmount","nav","navPerShare"]:
-                v = src.get(k)
-                if v:
-                    n = parse_num(v.get("raw") if isinstance(v,dict) else v)
-                    if n and 0.1 < n < 100000:
-                        nav = n
-                        print(f"    NAV: {nav}")
-                        break
-            if nav: break
+            # NAV
+            if not nav:
+                for k in ["navAmount","nav","navPerShare","netAssetValue"]:
+                    v = src_dict.get(k)
+                    if v:
+                        n = parse_num(safe_get(v,"raw") or safe_get(v,"value") or v)
+                        if n and 0.1 < n < 100_000:
+                            nav = n
+                            print(f"    NAV: {nav}")
+                            break
 
-        # ── asOfDate ──────────────────────────────────────────────
+        # asOfDate
         nav_date = latest_date
-        ao = _dmap_val(dmap, "asOfDate")
+        ao = dmap.get("asOfDate",{}).get("value")
         if ao: nav_date = str(ao)
 
         if aum or holdings:
-            return {"aum":aum,"holdings":holdings,"shares":shares_out,"nav":nav,"nav_date":nav_date}
+            result = {"aum":aum,"holdings":holdings,"shares":shares_out,"nav":nav,"nav_date":nav_date}
+            print(f"    ✓ Extracted: {result}")
+            return result
 
-        print(f"    ✗ No data extracted")
+        print(f"    ✗ No data")
         return None
 
     except Exception as e:
-        print(f"    data error: {e}"); return None
+        import traceback
+        print(f"    ✗ data error: {e}")
+        print(f"    traceback: {traceback.format_exc()[:500]}")
+        return None
 
 
 def find_etha_product_id(session):
     """
-    ETHA launched Jul 2024. IBIT = 333011 (Jan 2024).
-    Thử range 333700-334500 (range v6 là 333457-333620, không tìm được).
+    v7 tried 333700-334500 → not found.
+    ETHA approved May 2024, launched Jul 2024.
+    Try: search iShares by asset class Cryptocurrency, or probe broader ranges.
     """
-    print("  Probing ETHA product IDs (333700-334500)...")
-    for pid in range(333700, 334501, 10):  # bước 10 để nhanh, sau refinement
+    # Approach 1: iShares search by asset class
+    try:
+        r = session.get(
+            "https://www.ishares.com/us/products/etf-investments.1.n.json"
+            "?view=keyFacts&fst=ASSETCLASSTYPE%7CCryptocurrency&fc=iShares",
+            headers={"Referer":"https://www.ishares.com/","User-Agent":FAKE_UA},
+            timeout=15)
+        print(f"  ETHA crypto search: HTTP {r.status_code}")
+        if r.status_code == 200:
+            txt = r.text
+            print(f"  ETHA search response[:500]: {txt[:500]}")
+            # Tìm productId + ethereum trong response
+            for m in re.finditer(r'"productPageUrl"\s*:\s*"/us/products/(\d+)/([^"]+)"', txt):
+                pid, slug = m.group(1), m.group(2)
+                if "ethereum" in slug:
+                    print(f"  ✓ ETHA found via search: {pid} ({slug})")
+                    return pid
+    except Exception as e:
+        print(f"  ETHA search error: {e}")
+
+    # Approach 2: Probe 334500-337000 (mở rộng thêm)
+    print("  Probing ETHA IDs 334500-337000 (step=50)...")
+    for pid in range(334500, 337001, 50):
         try:
             r = session.get(
-                _ishares_url(str(pid), True, True),
-                headers={"User-Agent":FAKE_UA,"Accept":"application/json"},
-                timeout=5)
+                _url(str(pid),True,True),
+                headers={"User-Agent":FAKE_UA,"Accept":"application/json"},timeout=5)
             if r.status_code == 200:
                 name = r.json().get("fundName","")
-                if name:
-                    print(f"    ID {pid}: {name}")
+                if name: print(f"    ID {pid}: {name}")
                 if "ethereum" in name.lower() and "ishares" in name.lower():
-                    print(f"  ✓ ETHA found! productId={pid}")
+                    print(f"  ✓ ETHA found: {pid}")
                     return str(pid)
         except: pass
         time.sleep(0.15)
 
-    # Fine-grain search nếu bước 10 miss
-    print("  Fine search around hits...")
     return None
 
 
-# ── Pipeline ──────────────────────────────────────────────────────
 def run(r2):
     now_utc   = datetime.now(timezone.utc)
     today_str = now_utc.strftime("%Y-%m-%d")
@@ -322,27 +310,20 @@ def run(r2):
         print("\n🏦 [2/3] iShares fund data...")
 
         # IBIT
-        ibit_price = crypto_prices.get("BTC")
-        raw = fetch_ishares(session, "IBIT", ISHARES_IDS["IBIT"], ibit_price)
+        raw = fetch_ishares(session,"IBIT",ISHARES_IDS["IBIT"],crypto_prices.get("BTC"))
         if raw:
-            nav = raw.get("nav") or nasdaq.get("IBIT",{}).get("price")
-            issuer["IBIT"] = {**raw, "nav": nav}
-            print(f"  ✓ IBIT: AUM=${raw.get('aum',0)/1e9:.2f}B  holdings={raw.get('holdings',0):.0f} BTC")
-
+            issuer["IBIT"] = {**raw,"nav": raw.get("nav") or nasdaq.get("IBIT",{}).get("price")}
         time.sleep(1)
 
-        # ETHA — discover product ID
+        # ETHA
         if not ISHARES_IDS.get("ETHA"):
             ISHARES_IDS["ETHA"] = find_etha_product_id(session)
-
         if ISHARES_IDS.get("ETHA"):
-            raw = fetch_ishares(session, "ETHA", ISHARES_IDS["ETHA"], crypto_prices.get("ETH"))
+            raw = fetch_ishares(session,"ETHA",ISHARES_IDS["ETHA"],crypto_prices.get("ETH"))
             if raw:
-                nav = raw.get("nav") or nasdaq.get("ETHA",{}).get("price")
-                issuer["ETHA"] = {**raw, "nav": nav}
-                print(f"  ✓ ETHA: AUM=${raw.get('aum',0)/1e9:.2f}B  holdings={raw.get('holdings',0):.0f} ETH")
+                issuer["ETHA"] = {**raw,"nav": raw.get("nav") or nasdaq.get("ETHA",{}).get("price")}
         else:
-            print("  ✗ ETHA: product ID not found")
+            print("  ✗ ETHA: product ID not found (will use nasdaq data only)")
 
         print(f"\n  → issuer data: {list(issuer.keys()) or 'NONE'}")
     else:
@@ -358,8 +339,8 @@ def run(r2):
         prev = prev_etfs.get(t) or {}
 
         price    = mkt.get("price")
-        nav      = iss.get("nav")    or (prev.get("fund") or {}).get("nav")
-        shares   = iss.get("shares") or (prev.get("fund") or {}).get("shares")
+        nav      = iss.get("nav")      or (prev.get("fund") or {}).get("nav")
+        shares   = iss.get("shares")   or (prev.get("fund") or {}).get("shares")
         holdings = iss.get("holdings") or (prev.get("fund") or {}).get("holdings")
         aum      = iss.get("aum")
         if not aum and holdings and u in crypto_prices:
@@ -374,8 +355,9 @@ def run(r2):
         flow = None
         ps = (prev.get("fund") or {}).get("shares")
         if shares and ps and nav and shares != ps:
-            d = shares - ps
-            flow = {"daily_usd":d*nav,"delta_shares":d,"is_inflow":d>0,"computed_at":now_utc.isoformat()}
+            dlt = shares - ps
+            flow = {"daily_usd":dlt*nav,"delta_shares":dlt,"is_inflow":dlt>0,
+                    "computed_at":now_utc.isoformat()}
         if not flow and prev.get("flow"):
             flow = prev["flow"]
 
@@ -405,6 +387,6 @@ def run(r2):
 
 if __name__ == "__main__":
     import time as _t; t0=_t.time()
-    print(f"⚙️  ETF Fetcher v7 — RUN_MODE={RUN_MODE}")
+    print(f"⚙️  ETF Fetcher v8 — RUN_MODE={RUN_MODE}")
     r2=get_r2(); run(r2)
     print(f"\n🏁 Done in {_t.time()-t0:.1f}s")
