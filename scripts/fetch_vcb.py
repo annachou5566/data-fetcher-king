@@ -63,11 +63,14 @@ def fetch_day(date_str, session):
         usd = next((x for x in js.get("Data", []) if x.get("currencyCode") == "USD"), None)
         if not usd:
             return None
+        def to_int(v):
+            try: return int(float(v)) or None
+            except (TypeError, ValueError): return None
         return {
             "date":     (js.get("Date") or date_str)[:10],
-            "cash":     int(usd.get("cash")     or 0) or None,
-            "transfer": int(usd.get("transfer") or 0) or None,
-            "sell":     int(usd.get("sell")     or 0) or None,
+            "cash":     to_int(usd.get("cash")),
+            "transfer": to_int(usd.get("transfer")),
+            "sell":     to_int(usd.get("sell")),
         }
     except Exception as e:
         print(f"  ⚠️  {date_str}: {e}")
@@ -75,13 +78,27 @@ def fetch_day(date_str, session):
 
 def fetch_range(dates, session):
     rows, total = [], len(dates)
-    for i, d in enumerate(dates):
-        rec = fetch_day(d, session)
-        if rec:
-            rows.append(rec)
-        if total > 100 and (i + 1) % 100 == 0:
-            print(f"   ... {i+1}/{total} ({d})")
-        time.sleep(0.05 if total > 100 else 0.3)
+    # Backfill lớn: dùng ThreadPoolExecutor để tăng tốc
+    if total > 50:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = {ex.submit(fetch_day, d, session): d for d in dates}
+            done = 0
+            for f in as_completed(futures):
+                rec = f.result()
+                if rec:
+                    rows.append(rec)
+                done += 1
+                if done % 200 == 0:
+                    print(f"   ... {done}/{total}")
+        rows.sort(key=lambda r: r["date"])
+    else:
+        # Daily incremental: tuần tự, nhẹ nhàng
+        for i, d in enumerate(dates):
+            rec = fetch_day(d, session)
+            if rec:
+                rows.append(rec)
+            time.sleep(0.3)
     return rows
 
 def save_to_r2(r2, bucket, all_rows):
