@@ -1,157 +1,170 @@
 """
-scripts/fetch_p2p.py
+scripts/fetch_vcb.py
 ────────────────────────────────────────────────────────────────────
-Bot độc lập: fetch Binance P2P USDT+USDC/VND → lưu vào R2
+Bot: Fetch Vietcombank USD/VND exchange rates → lưu vĩnh viễn vào R2
 
-Chạy mỗi 10 phút qua GitHub Actions (step riêng trong update_data.yml)
-Hoàn toàn độc lập với fetch_alpha.py — lỗi P2P không ảnh hưởng market data
+Chiến lược:
+  - Lần đầu (workflow_dispatch): backfill toàn bộ từ 2010-01-01
+  - Hàng ngày: chỉ fetch ngày còn thiếu (incremental, < 5 giây)
+  - R2 là nguồn sự thật — data tích lũy mãi mãi, không phụ thuộc VCB API
 
-Env vars cần (dùng chung secrets với fetch_alpha):
-  R2_ACCESS_KEY_ID
-  R2_SECRET_ACCESS_KEY
-  R2_ENDPOINT_URL
-  R2_BUCKET_NAME
+Env vars (dùng chung secrets với fetch_p2p):
+  R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL, R2_BUCKET_NAME
 
-R2 file: p2p-data.json
+R2 file: vcb-data.json
 Format:  { "v":1, "updated":"...", "count":N,
-           "snapshots": [[ts, usdt_buy, usdt_sell, usdc_buy, usdc_sell], ...] }
+           "rows": [{"date":"YYYY-MM-DD","cash":N,"transfer":N,"sell":N}, ...] }
 ────────────────────────────────────────────────────────────────────
 """
 
-import os
-import json
-import time
-import boto3
-import cloudscraper
-from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os, json, time, boto3, requests
+from datetime import datetime, timedelta, timezone, date
 
-# ── Config ────────────────────────────────────────────────────────
-P2P_URL      = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list"
-R2_KEY       = "p2p-data.json"
-MAX_KEEP     = 26_280   # ~6 tháng × 6 lần/h × 24h
-FIAT         = "VND"
-ASSETS       = ["USDT", "USDC"]
-TRADE_TYPES  = ["BUY", "SELL"]
+START_DATE = "2015-01-01"   # VCB API chỉ hỗ trợ từ ~2015, trước đó trả 403
+VCB_API    = "https://www.vietcombank.com.vn/api/exchangerates"
+R2_KEY     = "vcb-data.json"
+HEADERS    = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept":     "application/json",
+}
 
-# ── R2 client ─────────────────────────────────────────────────────
 def get_r2():
-    key      = os.getenv("R2_ACCESS_KEY_ID")
-    secret   = os.getenv("R2_SECRET_ACCESS_KEY")
-    endpoint = os.getenv("R2_ENDPOINT_URL")
-    bucket   = os.getenv("R2_BUCKET_NAME")
+    key, secret, endpoint, bucket = (
+        os.getenv("R2_ACCESS_KEY_ID"), os.getenv("R2_SECRET_ACCESS_KEY"),
+        os.getenv("R2_ENDPOINT_URL"),  os.getenv("R2_BUCKET_NAME"),
+    )
     if not all([key, secret, endpoint, bucket]):
         raise RuntimeError("Thiếu R2 env vars")
-    client = boto3.client(
-        "s3",
-        aws_access_key_id     = key,
-        aws_secret_access_key = secret,
-        endpoint_url          = endpoint,
-    )
-    return client, bucket
+    return boto3.client("s3",
+        aws_access_key_id=key, aws_secret_access_key=secret, endpoint_url=endpoint,
+    ), bucket
 
-# ── Fetch 1 combo từ Binance public API ──────────────────────────
-def fetch_best_price(session, asset, trade_type):
+def load_existing(r2, bucket):
     try:
-        res = session.get(
-            P2P_URL,
-            params  = {"fiat": FIAT, "asset": asset, "tradeType": trade_type, "limit": "5"},
-            timeout = 12,
-        )
-        if res.status_code != 200:
-            print(f"  ⚠️  {asset}/{trade_type} HTTP {res.status_code}")
-            return 0
-        items = res.json().get("data", {}).get("items", [])
-        if not items:
-            print(f"  ⚠️  {asset}/{trade_type} — no items")
-            return 0
-        price = int(float(items[0].get("price", 0)))
-        return price
-    except Exception as e:
-        print(f"  ⚠️  {asset}/{trade_type}: {e}")
-        return 0
-
-# ── Fetch tất cả 4 combos song song ──────────────────────────────
-def fetch_snapshot():
-    session = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
-    )
-    combos  = [(a, t) for a in ASSETS for t in TRADE_TYPES]
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {ex.submit(fetch_best_price, session, a, t): (a, t) for a, t in combos}
-        prices  = {}
-        for f in as_completed(futures):
-            prices[futures[f]] = f.result()
-
-    return [
-        int(time.time()),
-        prices.get(("USDT", "BUY"),  0),
-        prices.get(("USDT", "SELL"), 0),
-        prices.get(("USDC", "BUY"),  0),
-        prices.get(("USDC", "SELL"), 0),
-    ]
-
-# ── Load → append → trim → upload R2 ─────────────────────────────
-def save_snapshot(r2, bucket, snapshot):
-    # Load existing
-    snapshots = []
-    try:
-        obj       = r2.get_object(Bucket=bucket, Key=R2_KEY)
-        data      = json.loads(obj["Body"].read().decode("utf-8"))
-        snapshots = data.get("snapshots", [])
+        obj  = r2.get_object(Bucket=bucket, Key=R2_KEY)
+        data = json.loads(obj["Body"].read().decode("utf-8"))
+        rows = data.get("rows", [])
+        print(f"  📦 R2 hiện có: {len(rows):,} rows")
+        return rows
     except r2.exceptions.NoSuchKey:
-        print("  📄 p2p-data.json chưa có → tạo mới")
+        print("  📄 vcb-data.json chưa có → backfill từ đầu")
+        return []
     except Exception as e:
-        print(f"  ⚠️  Load R2: {e} → tạo mới")
+        print(f"  ⚠️  Load R2 lỗi: {e} → tạo mới")
+        return []
 
-    # Append + trim
-    snapshots.append(snapshot)
-    if len(snapshots) > MAX_KEEP:
-        snapshots = snapshots[-MAX_KEEP:]
+def fetch_day(date_str, session):
+    try:
+        r = session.get(VCB_API, params={"date": date_str}, timeout=15)
+        if r.status_code in (403, 404):
+            return None  # Cuối tuần / ngày lễ / ngoài range VCB hỗ trợ
+        r.raise_for_status()
+        js  = r.json()
+        usd = next((x for x in js.get("Data", []) if x.get("currencyCode") == "USD"), None)
+        if not usd:
+            return None
+        def to_int(v):
+            try: return int(float(v)) or None
+            except (TypeError, ValueError): return None
+        return {
+            "date":     (js.get("Date") or date_str)[:10],
+            "cash":     to_int(usd.get("cash")),
+            "transfer": to_int(usd.get("transfer")),
+            "sell":     to_int(usd.get("sell")),
+        }
+    except requests.exceptions.HTTPError:
+        return None   # 4xx đã xử lý ở trên, nếu lọt xuống đây thì cũng skip
+    except Exception as e:
+        print(f"  ⚠️  {date_str}: {e}")
+        return None
 
-    payload  = {
-        "v":         1,
-        "updated":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "count":     len(snapshots),
-        "snapshots": snapshots,
+def fetch_range(dates, session):
+    rows, total = [], len(dates)
+    # Backfill lớn: dùng ThreadPoolExecutor để tăng tốc
+    if total > 50:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = {ex.submit(fetch_day, d, session): d for d in dates}
+            done = 0
+            for f in as_completed(futures):
+                rec = f.result()
+                if rec:
+                    rows.append(rec)
+                done += 1
+                if done % 200 == 0:
+                    print(f"   ... {done}/{total}")
+        rows.sort(key=lambda r: r["date"])
+    else:
+        # Daily incremental: tuần tự, nhẹ nhàng
+        for i, d in enumerate(dates):
+            rec = fetch_day(d, session)
+            if rec:
+                rows.append(rec)
+            time.sleep(0.3)
+    return rows
+
+def save_to_r2(r2, bucket, all_rows):
+    payload = {
+        "v":       1,
+        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "count":   len(all_rows),
+        "rows":    all_rows,
     }
-    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-
     r2.put_object(
-        Bucket       = bucket,
-        Key          = R2_KEY,
-        Body         = body,
-        ContentType  = "application/json",
-        CacheControl = "max-age=120",
+        Bucket=bucket, Key=R2_KEY,
+        Body=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        ContentType="application/json", CacheControl="max-age=3600",
     )
-    return len(snapshots)
 
-# ── Main ──────────────────────────────────────────────────────────
 def main():
-    print("💱 P2P Snapshot — Binance USDT+USDC/VND")
+    print("🏦 VCB Rate Bot — Vietcombank USD/VND")
     print(f"   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
-    # 1. Fetch prices
-    print("📡 Fetching prices...", flush=True)
-    snap = fetch_snapshot()
-    ts, ub, us, cb, cs = snap
-    print(f"   USDT  BUY={ub:,}  SELL={us:,}")
-    print(f"   USDC  BUY={cb:,}  SELL={cs:,}")
+    r2, bucket  = get_r2()
+    existing    = load_existing(r2, bucket)
+    known_dates = {row["date"] for row in existing}
 
-    if not any([ub, us, cb, cs]):
-        print("❌ Tất cả giá = 0, bỏ qua upload")
+    # Tính ngày cần fetch
+    start = START_DATE if not known_dates else max(known_dates)
+    cur   = datetime.strptime(start, "%Y-%m-%d").date()
+    today = date.today()
+    dates = [
+        (cur + timedelta(days=i)).isoformat()
+        for i in range((today - cur).days + 1)
+        if (cur + timedelta(days=i)).isoformat() not in known_dates
+    ]
+
+    if not dates:
+        last = existing[-1]
+        print(f"✅ Up-to-date. Rate mới nhất ({last['date']}): "
+              f"transfer={last['transfer']:,}  sell={last['sell']:,}")
         return
 
-    # 2. Save to R2
-    print("💾 Saving to R2...", flush=True)
-    try:
-        r2, bucket = get_r2()
-        count = save_snapshot(r2, bucket, snap)
-        print(f"✅ Done — {count:,} snapshots in R2")
-    except Exception as e:
-        print(f"❌ R2 error: {e}")
-        raise
+    mode = "BACKFILL" if len(dates) > 10 else "INCREMENTAL"
+    print(f"📡 [{mode}] Fetch {len(dates)} ngày: {dates[0]} → {dates[-1]}", flush=True)
+
+    session  = requests.Session()
+    session.headers.update(HEADERS)
+    new_rows = fetch_range(dates, session)
+    print(f"   ✅ {len(new_rows)} rows hợp lệ "
+          f"(bỏ qua {len(dates) - len(new_rows)} ngày không có data — cuối tuần/lễ)")
+
+    if not new_rows and not existing:
+        print("❌ Không có data, bỏ qua upload")
+        return
+
+    # Merge + dedup + sort
+    seen = {row["date"]: row for row in existing}
+    seen.update({row["date"]: row for row in new_rows})
+    all_rows = sorted(seen.values(), key=lambda r: r["date"])
+
+    print(f"💾 Lưu {len(all_rows):,} rows → R2...", flush=True)
+    save_to_r2(r2, bucket, all_rows)
+
+    last = all_rows[-1]
+    print(f"✅ Done — {len(all_rows):,} rows trong R2")
+    print(f"   Rate mới nhất ({last['date']}): "
+          f"cash={last['cash']:,}  transfer={last['transfer']:,}  sell={last['sell']:,}")
 
 if __name__ == "__main__":
     main()
