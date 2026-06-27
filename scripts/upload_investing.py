@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 
 # ── Config ─────────────────────────────────────────────────────────
 CSV_FILES = [
-    "data/Dữ_liệu_Lịch_sử_USD_VND.csv",       # daily 1994-2013
-    "data/Dữ_liệu_Lịch_sử_USD_VND__4_.csv",    # daily 2013-2026
-    "data/Dữ_liệu_Lịch_sử_USD_VND__2_.csv",    # weekly 1995-2026 (backup)
+    "data/Dữ liệu Lịch sử USD_VND.csv",
+    "data/Dữ liệu Lịch sử USD_VND (4).csv",
+    "data/Dữ liệu Lịch sử USD_VND (2).csv",
 ]
 R2_KEY = "investing-data.json"
 
