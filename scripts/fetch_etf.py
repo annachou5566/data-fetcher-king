@@ -1,5 +1,6 @@
 """
-scripts/fetch_etf.py  v13
+scripts/fetch_etf.py  v14
+  Thêm STATIC_BTC_HOLDINGS fallback → AUM cho tất cả BTC ETFs.
 Thêm Farside daily flow scraper — fill toàn bộ flow column cho BTC + ETH ETFs.
 IBIT/ETHA AUM vẫn từ iShares (confirmed working).
 Các ETF khác: price từ Nasdaq + flow từ Farside = đủ dùng.
@@ -47,6 +48,22 @@ FARSIDE_URLS = {
         "https://farside.co.uk/sol/",
         "https://farside.co.uk/solana-etf-flow-all-data/",
     ],
+}
+
+# BTC holdings từ on-chain snapshot (etf_holdings.json)
+# Dùng làm fallback khi không có live data từ iShares
+# AUM = holdings × BTC_price (cập nhật real-time theo giá)
+STATIC_BTC_HOLDINGS = {
+    "FBTC": 204870.57,   # Fidelity
+    "GBTC": 203601.41,   # Grayscale
+    "ARKB": 157218.40,   # ARK/21Shares
+    "BITB": 141486.62,   # Bitwise
+    "HODL":  22924.98,   # VanEck
+    "EZBC":  17942.63,   # Franklin
+    "BTCW":  15745.38,   # WisdomTree
+    "BTCO":  14510.33,   # Invesco
+    "BRRR":   6939.32,   # Valkyrie
+    # IBIT và ETHA lấy từ iShares API (live), không cần static
 }
 
 ETF_REGISTRY = [
@@ -422,7 +439,14 @@ def run(r2):
         nav      = iss.get("nav") or (prev.get("fund") or {}).get("nav")
         holdings = iss.get("holdings") or (prev.get("fund") or {}).get("holdings")
         aum      = iss.get("aum")
+        # Fallback 1: tính từ live holdings
         if not aum and holdings and u in crypto_prices: aum = holdings*crypto_prices[u]
+        # Fallback 2: static on-chain holdings × current price
+        if not aum and u == "BTC" and t in STATIC_BTC_HOLDINGS:
+            static_h = STATIC_BTC_HOLDINGS[t]
+            holdings = holdings or static_h
+            aum = static_h * crypto_prices.get("BTC", 0)
+        # Fallback 3: dùng cache hôm qua
         if not aum: aum = (prev.get("fund") or {}).get("aum")
 
         premium = {"usd":price-nav,"pct":(price-nav)/nav*100} if price and nav and nav>0 else None
