@@ -8,7 +8,7 @@ Snapshot format v2 (9 phần tử)
 import os, json, time, boto3
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from curl_cffi import requests  # Thay thế cloudscraper để bypass WAF triệt để
+from curl_cffi import requests
 
 # ── Config ────────────────────────────────────────────────────────
 R2_KEY      = "p2p-data.json"
@@ -22,8 +22,8 @@ BNC_ASSETS  = ["USDT", "USDC"]
 # OKX — public, không cần auth
 OKX_URL     = "https://www.okx.com/v3/c2c/tradingOrders/books"
 
-# Bybit — public endpoint (unofficial, không cần auth)
-BBT_URL     = "https://api2.bybit.com/fiat/otc/item/list"
+# Bybit — public endpoint mới (đổi từ list -> online)
+BBT_URL     = "https://api2.bybit.com/fiat/otc/item/online"
 
 # ── R2 ────────────────────────────────────────────────────────────
 def get_r2():
@@ -70,19 +70,18 @@ def fetch_okx(session, trade_type):
         json_data = res.json()
         data = json_data.get("data", [])
         
-        # Xử lý an toàn nếu OKX trả về dict do thay đổi format hoặc dính lỗi WAF
+        # Parse cấu trúc mới của OKX: data là dict chứa key "buy" và "sell"
         if isinstance(data, dict):
-            # Nếu WAF trả về lỗi JSON, hoặc dữ liệu bị lồng vào trong "items"
-            items = data.get("items", [])
-            if not items:
-                print(f"  ⚠️  OKX {trade_type} Data bất thường (Dict): {str(json_data)[:150]}")
-                return 0
-            data = items
+            items = data.get(side, [])
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
             
-        if not data or not isinstance(data, list):
+        if not items:
             return 0
             
-        return int(float(data[0].get("price", 0)))
+        return int(float(items[0].get("price", 0)))
     except Exception as e:
         print(f"  ⚠️  OKX USDT/{trade_type} Exception: {repr(e)}")
         return 0
@@ -104,7 +103,6 @@ def fetch_bybit(session, trade_type):
         items = json_data.get("result", {}).get("items", [])
         
         if not items:
-            print(f"  ⚠️  BBT {trade_type} Không có items: {str(json_data)[:150]}")
             return 0
             
         return int(float(items[0].get("price", 0)))
@@ -114,7 +112,6 @@ def fetch_bybit(session, trade_type):
 
 # ── Fetch tất cả song song ────────────────────────────────────────
 def fetch_snapshot():
-    # curl_cffi giả lập Chrome 116 để đánh lừa WAF cực mạnh
     session = requests.Session(impersonate="chrome116")
 
     tasks = {
