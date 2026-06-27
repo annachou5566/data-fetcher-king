@@ -1,9 +1,8 @@
 """
-scripts/fetch_etf.py  v10 — FINAL
-IBIT: confirmed working ✅ (AUM $44.63B, unitsHeld 750K BTC)
-ETHA: probe step=1 range 333012-334500 (chưa thử kỹ)
-      + thử Solr search và literature CSV
-NAV: dùng market price (acceptable, premium BTC ETF < 0.1%)
+scripts/fetch_etf.py  v11
+- IBIT: confirmed working ✅
+- ETHA: productId=337614 (confirmed từ iShares website)
+- Đọc ETHA_PRODUCT_ID từ env nếu muốn override
 """
 
 import json, os, re, time
@@ -17,11 +16,15 @@ R2_ACCESS_KEY_ID     = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_ENDPOINT_URL      = os.getenv("R2_ENDPOINT_URL")
 R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME")
+ETHA_PRODUCT_ID_ENV  = os.getenv("ETHA_PRODUCT_ID", "")  # set manually nếu biết
+
 FAKE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
            "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36")
 
-# IBIT confirmed ✅ — ETHA sẽ được ghi vào đây khi tìm thấy
-ISHARES_IDS = {"IBIT": "333011", "ETHA": None}
+ISHARES_IDS = {
+    "IBIT": "333011",
+    "ETHA": ETHA_PRODUCT_ID_ENV or "337614",  # confirmed ✅
+}
 
 ETF_REGISTRY = [
     {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares"},
@@ -62,41 +65,41 @@ def get_r2():
         aws_access_key_id=R2_ACCESS_KEY_ID,aws_secret_access_key=R2_SECRET_ACCESS_KEY,
         config=Config(signature_version="s3v4"))
 
-def r2_get_json(r2,key):
+def r2_get_json(r2, key):
     try:
-        resp=r2.get_object(Bucket=R2_BUCKET_NAME,Key=key)
+        resp = r2.get_object(Bucket=R2_BUCKET_NAME,Key=key)
         return json.loads(resp["Body"].read().decode("utf-8"))
     except: return None
 
-def r2_put_json(r2,key,data,cc="max-age=120"):
-    body=json.dumps(data,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+def r2_put_json(r2, key, data, cc="max-age=120"):
+    body = json.dumps(data,ensure_ascii=False,separators=(",",":")).encode("utf-8")
     r2.put_object(Bucket=R2_BUCKET_NAME,Key=key,Body=body,ContentType="application/json",CacheControl=cc)
 
 def load_crypto_prices():
-    prices={}
+    prices = {}
     try:
-        r=requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd",
+        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd",
             headers={"User-Agent":FAKE_UA},timeout=10)
-        if r.status_code==200:
-            d=r.json()
-            if "bitcoin"  in d: prices["BTC"]=float(d["bitcoin"]["usd"])
-            if "ethereum" in d: prices["ETH"]=float(d["ethereum"]["usd"])
+        if r.status_code == 200:
+            d = r.json()
+            if "bitcoin"  in d: prices["BTC"] = float(d["bitcoin"]["usd"])
+            if "ethereum" in d: prices["ETH"] = float(d["ethereum"]["usd"])
     except Exception as e: print(f"  [Crypto] {e}")
     print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
     return prices
 
 def fetch_nasdaq_all(session):
-    results={}
+    results = {}
     for ticker in ETF_TICKERS:
         try:
-            r=session.get(f"https://api.nasdaq.com/api/quote/{ticker}/info?assetclass=etf",
+            r = session.get(f"https://api.nasdaq.com/api/quote/{ticker}/info?assetclass=etf",
                 headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}"},timeout=12)
             print(f"  Nasdaq {ticker}: HTTP {r.status_code}",end="")
-            if r.status_code!=200: print(); continue
-            d=r.json().get("data") or {}
-            p=d.get("primaryData") or {}
-            price=parse_num(p.get("lastSalePrice"))
-            results[ticker]={"price":price,"change":parse_num(p.get("netChange")),
+            if r.status_code != 200: print(); continue
+            d = r.json().get("data") or {}
+            p = d.get("primaryData") or {}
+            price = parse_num(p.get("lastSalePrice"))
+            results[ticker] = {"price":price,"change":parse_num(p.get("netChange")),
                 "change_pct":parse_num((p.get("percentageChange") or "").replace("%","")),
                 "volume":parse_num((p.get("volume") or "").replace(",",""))}
             print(f"  price=${price}")
@@ -104,176 +107,102 @@ def fetch_nasdaq_all(session):
         time.sleep(0.3)
     return results
 
-VARNISH="https://www.ishares.com/varnish-api/blk-one01-product-data/product-data/api/v2/get-product-data"
+VARNISH = ("https://www.ishares.com/varnish-api/blk-one01-product-data"
+           "/product-data/api/v2/get-product-data")
 
-def _url(pid,excl,incl,comp="holdings.all",as_of=None):
-    p=(f"component={comp}&portfolioId={pid}"
-       f"&appSubType=ISHARES&appType=PRODUCT_PAGE"
-       f"&locale=en_US&targetSite=us-ishares&userType=individual"
-       f"&excludeContent={'true' if excl else 'false'}"
-       f"&includeConfig={'true' if incl else 'false'}")
-    if as_of: p+=f"&asOfDate={as_of}"
+def _url(pid, excl, incl, as_of=None):
+    p = (f"component=holdings.all&portfolioId={pid}"
+         f"&appSubType=ISHARES&appType=PRODUCT_PAGE"
+         f"&locale=en_US&targetSite=us-ishares&userType=individual"
+         f"&excludeContent={'true' if excl else 'false'}"
+         f"&includeConfig={'true' if incl else 'false'}")
+    if as_of: p += f"&asOfDate={as_of}"
     return f"{VARNISH}?{p}"
 
-def find_etha_id(session, r2, cached_ids):
-    """
-    Tìm ETHA product ID bằng nhiều cách.
-    Lưu vào R2 khi tìm được.
-    """
-    hdrs={"User-Agent":FAKE_UA,"Accept":"application/json"}
-
-    # Cách 1: Solr search (internal iShares search engine)
-    solr_urls=[
-        "https://www.ishares.com/us/solr/ishares-us/select?q=ethereum+trust&wt=json&fl=productId,fundName,ticker&rows=5",
-        "https://www.ishares.com/us/ishs-gateway-web-service-v1/api/product/search?query=ETHA&type=us-ishares&rows=5",
-        "https://www.ishares.com/us/products/product-detail-v3/api/v1/fund?ticker=ETHA&locale=en_US",
-        "https://www.blackrock.com/us/individual/products/api/product-screener/fund?ticker=ETHA",
-    ]
-    for url in solr_urls:
-        try:
-            r=session.get(url,headers={**hdrs,"Referer":"https://www.ishares.com/"},timeout=8)
-            print(f"  ETHA search: HTTP {r.status_code} {url[-55:]}")
-            if r.status_code==200:
-                txt=r.text
-                print(f"    [:200]: {txt[:200]}")
-                for pat in [r'"productId"\s*:\s*"?(\d+)"?',r'/products/(\d+)/[^"]*ethereum']:
-                    m=re.search(pat,txt,re.I)
-                    if m: pid=m.group(1); print(f"    ✓ ETHA={pid}"); return pid
-        except: pass
-
-    # Cách 2: Probe step=1, range 333012-334500 (chưa probe kỹ)
-    # 1489 IDs × 0.1s = ~150s, chấp nhận được
-    print("  Probing 333012-334500 step=1 (~150s)...")
-    found=[]
-    for pid in range(333012, 334501):
-        try:
-            r=session.get(_url(str(pid),True,True),headers=hdrs,timeout=4)
-            if r.status_code==200:
-                name=r.json().get("fundName","")
-                if name:
-                    found.append(f"{pid}={name[:40]}")
-                    if len(found)<=5 or "ethereum" in name.lower():
-                        print(f"    ID {pid}: {name}")
-                if "ethereum" in name.lower() and "ishares" in name.lower():
-                    print(f"    ✓ ETHA found: {pid}")
-                    # Save to R2
-                    cached_ids["ETHA"]=str(pid)
-                    r2_put_json(r2,"etf-ishares-ids.json",cached_ids,"max-age=604800")
-                    return str(pid)
-        except: pass
-        time.sleep(0.1)
-
-    # Cách 3: Probe 334500-337000 step=1 nếu cần
-    if not found:
-        print("  Probing 334500-336000 step=1...")
-        for pid in range(334500, 336001):
-            try:
-                r=session.get(_url(str(pid),True,True),headers=hdrs,timeout=4)
-                if r.status_code==200:
-                    name=r.json().get("fundName","")
-                    if name: print(f"    ID {pid}: {name}")
-                    if "ethereum" in name.lower() and "ishares" in name.lower():
-                        cached_ids["ETHA"]=str(pid)
-                        r2_put_json(r2,"etf-ishares-ids.json",cached_ids,"max-age=604800")
-                        return str(pid)
-            except: pass
-            time.sleep(0.1)
-
-    print(f"  ETHA not found. Hits so far: {found[:10]}")
-    return None
 
 def fetch_ishares(session, ticker, product_id, crypto_price=None):
-    hdrs={"Referer":f"https://www.ishares.com/us/products/{product_id}/",
-           "Accept":"application/json,*/*","User-Agent":FAKE_UA}
-
-    # Step 1: config → dateList
-    latest_date=None
+    hdrs = {"Referer":f"https://www.ishares.com/us/products/{product_id}/",
+             "Accept":"application/json,*/*","User-Agent":FAKE_UA}
+    latest_date = None
     try:
-        r=session.get(_url(product_id,True,True),headers=hdrs,timeout=15)
+        r = session.get(_url(product_id,True,True),headers=hdrs,timeout=15)
         print(f"  iShares config {ticker}: HTTP {r.status_code}")
-        if r.status_code!=200: return None
-        d=r.json()
-        name=d.get("fundName","")
+        if r.status_code != 200: return None
+        d = r.json()
+        name = d.get("fundName","")
         print(f"    fundName: {name}")
-        if ticker=="ETHA" and "ethereum" not in name.lower():
+        if ticker == "ETHA" and "ethereum" not in name.lower():
             print("    ✗ Wrong fund"); return None
-        comp=(d.get("componentsByNameMap") or {}).get("holdings",{})
-        cont=(comp.get("containersByNameMap") or {}).get("all",{})
-        dmap=cont.get("dataPointsByNameMap",{})
-        dates=dmap.get("dateList",{}).get("value") or []
-        if dates: latest_date=str(dates[0]); print(f"    dateList[0]: {latest_date}")
+        comp = (d.get("componentsByNameMap") or {}).get("holdings",{})
+        cont = (comp.get("containersByNameMap") or {}).get("all",{})
+        dmap = cont.get("dataPointsByNameMap",{})
+        dates = dmap.get("dateList",{}).get("value") or []
+        if dates: latest_date = str(dates[0]); print(f"    dateList[0]: {latest_date}")
     except Exception as e:
         print(f"    config error: {e}"); return None
 
-    # Step 2: data holdings
-    aum=None; holdings=None; nav_date=latest_date
+    aum = None; holdings = None; nav_date = latest_date
     try:
-        r=session.get(_url(product_id,False,False,as_of=latest_date),headers=hdrs,timeout=20)
+        r = session.get(_url(product_id,False,False,as_of=latest_date),headers=hdrs,timeout=20)
         print(f"  iShares data {ticker}: HTTP {r.status_code}")
-        if r.status_code==200:
-            d=r.json()
-            comp=(d.get("componentsByNameMap") or {}).get("holdings",{})
-            cont=(comp.get("containersByNameMap") or {}).get("all",{})
-            dmap=cont.get("dataPointsByNameMap",{})
-            # AUM
-            mv=dmap.get("marketValue",{}).get("value",[])
-            aum=max((v for v in mv if isinstance(v,(int,float)) and v>0),default=None)
+        if r.status_code == 200:
+            d = r.json()
+            comp = (d.get("componentsByNameMap") or {}).get("holdings",{})
+            cont = (comp.get("containersByNameMap") or {}).get("all",{})
+            dmap = cont.get("dataPointsByNameMap",{})
+            mv = dmap.get("marketValue",{}).get("value",[])
+            aum = max((v for v in mv if isinstance(v,(int,float)) and v>0),default=None)
             print(f"    AUM: ${aum:,.0f}" if aum else "    AUM: None")
-            # Holdings (unitsHeld confirmed from v7/v8 logs)
-            for key in ["unitsHeld","sharesHeld","quantity","numberOfShares"]:
-                arr=dmap.get(key,{}).get("value",[])
+            for key in ["unitsHeld","sharesHeld","quantity"]:
+                arr = dmap.get(key,{}).get("value",[])
                 if arr:
-                    h=parse_num(arr[0] if isinstance(arr,list) else arr)
-                    if h and 100<h<1_000_000_000:
-                        holdings=h; print(f"    holdings ({key}): {holdings}"); break
-            if not holdings and aum and crypto_price and crypto_price>0:
-                holdings=aum/crypto_price
+                    h = parse_num(arr[0] if isinstance(arr,list) else arr)
+                    if h and 100 < h < 1_000_000_000:
+                        holdings = h; print(f"    holdings ({key}): {holdings}"); break
+            if not holdings and aum and crypto_price and crypto_price > 0:
+                holdings = aum / crypto_price
                 print(f"    holdings computed: {holdings:.2f}")
-            ao=dmap.get("asOfDate",{}).get("value")
-            if ao: nav_date=str(ao)
+            ao = dmap.get("asOfDate",{}).get("value")
+            if ao: nav_date = str(ao)
     except Exception as e:
-        print(f"    holdings error: {e}")
+        print(f"    data error: {e}")
 
     if aum or holdings:
         return {"aum":aum,"holdings":holdings,"shares":None,"nav":None,"nav_date":nav_date}
     return None
 
 def run(r2):
-    now_utc=datetime.now(timezone.utc)
-    today_str=now_utc.strftime("%Y-%m-%d")
-    session=get_session()
+    now_utc   = datetime.now(timezone.utc)
+    today_str = now_utc.strftime("%Y-%m-%d")
+    session   = get_session()
 
-    # Load cached IDs
-    cached_ids=r2_get_json(r2,"etf-ishares-ids.json") or {}
+    cached_ids = r2_get_json(r2,"etf-ishares-ids.json") or {}
     for t,pid in cached_ids.items():
         if pid and not ISHARES_IDS.get(t):
-            ISHARES_IDS[t]=pid
+            ISHARES_IDS[t] = pid
             print(f"  [Cache] {t}={pid}")
 
-    prev_etfs={e["ticker"]:e for e in (r2_get_json(r2,"etf-flows.json") or {}).get("etfs",[])}
-    crypto_prices=load_crypto_prices()
+    prev_etfs = {e["ticker"]:e for e in (r2_get_json(r2,"etf-flows.json") or {}).get("etfs",[])}
+    crypto_prices = load_crypto_prices()
 
     print("\n📈 [1/3] Nasdaq prices...")
-    nasdaq=fetch_nasdaq_all(session)
+    nasdaq = fetch_nasdaq_all(session)
     print(f"  → {sum(1 for v in nasdaq.values() if v.get('price'))} tickers with price")
 
-    issuer={}
-    if RUN_MODE=="full":
+    issuer = {}
+    if RUN_MODE == "full":
         print("\n🏦 [2/3] iShares fund data...")
 
-        # ETHA: tìm product ID
-        if not ISHARES_IDS.get("ETHA"):
-            ISHARES_IDS["ETHA"]=find_etha_id(session,r2,cached_ids)
 
-        for etf_ticker,pid in ISHARES_IDS.items():
+        for etf_ticker, pid in list(ISHARES_IDS.items()):
             if not pid: print(f"  {etf_ticker}: No productId"); continue
-            etf_meta=next((e for e in ETF_REGISTRY if e["ticker"]==etf_ticker),{})
-            raw=fetch_ishares(session,etf_ticker,pid,crypto_prices.get(etf_meta.get("underlying","")))
+            etf_meta = next((e for e in ETF_REGISTRY if e["ticker"]==etf_ticker),{})
+            raw = fetch_ishares(session, etf_ticker, pid, crypto_prices.get(etf_meta.get("underlying","")))
             if raw:
-                nav=nasdaq.get(etf_ticker,{}).get("price")  # NAV ≈ market price
-                u=etf_meta.get("underlying","")
-                aum=raw.get("aum") or (raw["holdings"]*crypto_prices[u] if raw.get("holdings") and u in crypto_prices else None)
-                issuer[etf_ticker]={**raw,"nav":nav,"aum":aum}
+                nav = nasdaq.get(etf_ticker,{}).get("price")
+                u   = etf_meta.get("underlying","")
+                aum = raw.get("aum") or (raw["holdings"]*crypto_prices[u] if raw.get("holdings") and u in crypto_prices else None)
+                issuer[etf_ticker] = {**raw,"nav":nav,"aum":aum}
                 print(f"  ✓ {etf_ticker}: AUM=${(aum or 0)/1e9:.2f}B  holdings={raw.get('holdings',0):.0f}")
             time.sleep(0.5)
 
@@ -285,9 +214,7 @@ def run(r2):
     etfs=[]; totals={}
     for etf in ETF_REGISTRY:
         t=etf["ticker"]; u=etf["underlying"]
-        mkt=nasdaq.get(t) or {}
-        iss=issuer.get(t) or {}
-        prev=prev_etfs.get(t) or {}
+        mkt=nasdaq.get(t) or {}; iss=issuer.get(t) or {}; prev=prev_etfs.get(t) or {}
         price=mkt.get("price")
         nav=iss.get("nav") or (prev.get("fund") or {}).get("nav")
         shares=iss.get("shares") or (prev.get("fund") or {}).get("shares")
@@ -321,6 +248,7 @@ def run(r2):
 
 if __name__=="__main__":
     import time as _t; t0=_t.time()
-    print(f"⚙️  ETF Fetcher v10 — RUN_MODE={RUN_MODE}")
+    print(f"⚙️  ETF Fetcher v11 — RUN_MODE={RUN_MODE}")
+    print(f"  ETHA_PRODUCT_ID env: {ETHA_PRODUCT_ID_ENV or '(not set)'}")
     r2=get_r2(); run(r2)
     print(f"\n🏁 Done in {_t.time()-t0:.1f}s")
