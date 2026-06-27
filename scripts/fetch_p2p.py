@@ -94,6 +94,7 @@ def fetch_snapshot():
 
 # ── Load → append → trim → upload R2 ─────────────────────────────
 def save_snapshot(r2, bucket, snapshot):
+    # Load existing
     snapshots = []
     try:
         obj       = r2.get_object(Bucket=bucket, Key=R2_KEY)
@@ -104,6 +105,7 @@ def save_snapshot(r2, bucket, snapshot):
     except Exception as e:
         print(f"  ⚠️  Load R2: {e} → tạo mới")
 
+    # Append + trim
     snapshots.append(snapshot)
     if len(snapshots) > MAX_KEEP:
         snapshots = snapshots[-MAX_KEEP:]
@@ -130,6 +132,7 @@ def main():
     print("💱 P2P Snapshot — Binance USDT+USDC/VND")
     print(f"   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
+    # 1. Fetch prices
     print("📡 Fetching prices...", flush=True)
     snap = fetch_snapshot()
     ts, ub, us, cb, cs = snap
@@ -140,6 +143,7 @@ def main():
         print("❌ Tất cả giá = 0, bỏ qua upload")
         return
 
+    # 2. Save to R2
     print("💾 Saving to R2...", flush=True)
     try:
         r2, bucket = get_r2()
