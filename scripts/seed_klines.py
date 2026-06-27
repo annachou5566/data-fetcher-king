@@ -53,8 +53,12 @@ INTERVALS = [
 BASE_URL   = "https://data.binance.vision/data/spot/monthly/klines"
 OUTPUT_DIR = "./klines_sql"
 BATCH_SIZE = 500
-END_YEAR   = 2026
-END_MONTH  = 5
+
+# Dynamic end date — luôn lấy đến tháng hiện tại
+import datetime as _dt
+_now = _dt.datetime.utcnow()
+END_YEAR  = _now.year
+END_MONTH = _now.month - 1 if _now.month > 1 else 12  # tháng trước (tháng hiện tại chưa đủ)
 
 # ─── UTILS ───────────────────────────────────────────────────────────────────
 
@@ -117,10 +121,15 @@ def parse_csv_from_zip(zip_bytes, symbol, interval):
             if not cols[0].isdigit():
                 continue
             try:
+                ts = int(cols[0])
+                # Binance Vision đôi khi dùng microseconds (16 chữ số) thay vì milliseconds (13 chữ số)
+                # Auto-normalize về milliseconds
+                if ts > 9_999_999_999_999:
+                    ts = ts // 1000
                 rows.append({
                     "symbol":    symbol,
                     "interval":  interval,
-                    "open_time": int(cols[0]),
+                    "open_time": ts,
                     "open":      float(cols[1]),
                     "high":      float(cols[2]),
                     "low":       float(cols[3]),
