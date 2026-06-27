@@ -4,24 +4,23 @@ on:
   schedule:
     - cron: '*/10 * * * *'   # P2P: mỗi 10 phút
     - cron: '35 1 * * *'     # VCB: 08:35 ICT hàng ngày
-  workflow_dispatch:          # Chạy thủ công — runs cả 2 jobs (backfill VCB lần đầu)
-
-concurrency:
-  group: fetch-p2p-snapshot
-  cancel-in-progress: false
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
 
-  # ── P2P Binance — mỗi 10 phút ─────────────────────────────────────────────
   p2p-snapshot:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.schedule == '*/10 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # ✅ Concurrency riêng cho P2P — không bị VCB block
+    concurrency:
+      group: job-p2p-snapshot
+      cancel-in-progress: false
 
     steps:
     - uses: actions/checkout@v4
@@ -41,13 +40,16 @@ jobs:
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: python scripts/fetch_p2p.py
 
-  # ── VCB Vietcombank — 1 lần/ngày ──────────────────────────────────────────
   vcb-daily:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.schedule == '35 1 * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 30       # Backfill từ 2010 lần đầu cần ~15 phút
+    timeout-minutes: 30
+    # ✅ Concurrency riêng cho VCB — không ảnh hưởng P2P
+    concurrency:
+      group: job-vcb-daily
+      cancel-in-progress: false
 
     steps:
     - uses: actions/checkout@v4
