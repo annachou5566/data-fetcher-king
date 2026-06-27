@@ -2,21 +2,13 @@
 scripts/fetch_p2p.py
 ────────────────────────────────────────────────────────────────────
 Bot: fetch P2P USDT/VND từ Binance + OKX + Bybit → lưu vào R2
-
-Snapshot format v2 (9 phần tử):
-  [ts, bnc_ub, bnc_us, bnc_cb, bnc_cs, okx_ub, okx_us, bbt_ub, bbt_us]
-   0    1       2       3       4        5       6        7       8
-
-Backward compat: snapshot cũ có 5 phần tử (Binance only) vẫn đọc được.
-
-R2 file: p2p-data.json
-Format:  { "v":2, "updated":"...", "count":N, "snapshots": [...] }
-────────────────────────────────────────────────────────────────────
+Snapshot format v2 (9 phần tử)
 """
 
-import os, json, time, boto3, cloudscraper
+import os, json, time, boto3
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from curl_cffi import requests  # Thay thế cloudscraper để bypass WAF triệt để
 
 # ── Config ────────────────────────────────────────────────────────
 R2_KEY      = "p2p-data.json"
@@ -48,7 +40,6 @@ def get_r2():
 # ── Fetchers ──────────────────────────────────────────────────────
 
 def fetch_binance(session, asset, trade_type):
-    """Giữ nguyên logic gốc."""
     try:
         res = session.get(BNC_URL,
             params={"fiat": FIAT, "asset": asset, "tradeType": trade_type, "limit": "5"},
@@ -62,10 +53,6 @@ def fetch_binance(session, asset, trade_type):
         return 0
 
 def fetch_okx(session, trade_type):
-    """
-    trade_type: 'BUY'  → user mua  → advertiser đang SELL (side=sell)
-                'SELL' → user bán  → advertiser đang BUY  (side=buy)
-    """
     side = "sell" if trade_type == "BUY" else "buy"
     try:
         res = session.get(OKX_URL, params={
@@ -75,21 +62,32 @@ def fetch_okx(session, trade_type):
             "showFollow": "false", "showAlreadyTraded": "false",
             "isAbleFilter": "false", "limit": "5",
         }, timeout=12)
+        
         if res.status_code != 200:
+            print(f"  ⚠️  OKX {trade_type} HTTP {res.status_code}: {res.text[:100]}")
             return 0
-        data = res.json().get("data", [])
-        if not data:
+            
+        json_data = res.json()
+        data = json_data.get("data", [])
+        
+        # Xử lý an toàn nếu OKX trả về dict do thay đổi format hoặc dính lỗi WAF
+        if isinstance(data, dict):
+            # Nếu WAF trả về lỗi JSON, hoặc dữ liệu bị lồng vào trong "items"
+            items = data.get("items", [])
+            if not items:
+                print(f"  ⚠️  OKX {trade_type} Data bất thường (Dict): {str(json_data)[:150]}")
+                return 0
+            data = items
+            
+        if not data or not isinstance(data, list):
             return 0
+            
         return int(float(data[0].get("price", 0)))
     except Exception as e:
-        print(f"  ⚠️  OKX USDT/{trade_type}: {e}")
+        print(f"  ⚠️  OKX USDT/{trade_type} Exception: {repr(e)}")
         return 0
 
 def fetch_bybit(session, trade_type):
-    """
-    side: "1" → user mua (BUY)
-          "0" → user bán (SELL)
-    """
     side = "1" if trade_type == "BUY" else "0"
     try:
         res = session.post(BBT_URL, json={
@@ -97,21 +95,27 @@ def fetch_bybit(session, trade_type):
             "payment": [], "side": side,
             "size": "5", "page": "1", "amount": "",
         }, timeout=12)
+        
         if res.status_code != 200:
+            print(f"  ⚠️  BBT {trade_type} HTTP {res.status_code}: {res.text[:100]}")
             return 0
-        items = res.json().get("result", {}).get("items", [])
+            
+        json_data = res.json()
+        items = json_data.get("result", {}).get("items", [])
+        
         if not items:
+            print(f"  ⚠️  BBT {trade_type} Không có items: {str(json_data)[:150]}")
             return 0
+            
         return int(float(items[0].get("price", 0)))
     except Exception as e:
-        print(f"  ⚠️  BBT USDT/{trade_type}: {e}")
+        print(f"  ⚠️  BBT USDT/{trade_type} Exception: {repr(e)}")
         return 0
 
 # ── Fetch tất cả song song ────────────────────────────────────────
 def fetch_snapshot():
-    session = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
-    )
+    # curl_cffi giả lập Chrome 116 để đánh lừa WAF cực mạnh
+    session = requests.Session(impersonate="chrome116")
 
     tasks = {
         "bnc_ub":  (fetch_binance, session, "USDT", "BUY"),
