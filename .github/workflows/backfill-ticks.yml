@@ -1,0 +1,127 @@
+name: Backfill Tick History (Binance Vision → R2)
+
+# ── Trigger ───────────────────────────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      from_date:
+        description: 'Start date (YYYY-MM-DD) — bắt đầu backfill từ ngày này'
+        required: true
+        type: string
+        # Default: ngày hôm kia để backfill 1 ngày nhanh
+        default: ''
+      to_date:
+        description: 'End date (YYYY-MM-DD) — để trống = hôm qua'
+        required: false
+        type: string
+        default: ''
+      symbols:
+        description: 'Symbols (comma-separated) — để trống = tất cả 5 coin'
+        required: false
+        type: string
+        default: 'BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT'
+      force:
+        description: 'Force overwrite (true = ghi đè dù R2 đã có data)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run (true = chỉ log, không upload R2)'
+        required: false
+        type: boolean
+        default: false
+
+  # Tự động chạy mỗi ngày 02:30 UTC — fill data hôm qua khi Binance Vision đã ready
+  schedule:
+    - cron: '30 2 * * *'
+
+# ── Job ───────────────────────────────────────────────────────────────────────
+jobs:
+  backfill:
+    name: Backfill ${{ inputs.from_date || 'yesterday' }} → ${{ inputs.to_date || 'yesterday' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # 2 giờ là đủ cho 48h × 5 symbols
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node ────────────────────────────────────────
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── 3. Install deps ──────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          npm install --save-dev \
+            @aws-sdk/client-s3 \
+            adm-zip \
+            dotenv
+
+      # ── 4. Compute dates (cho schedule trigger) ──────────────
+      - name: Compute date range
+        id: dates
+        run: |
+          # Manual dispatch: dùng input trực tiếp
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FROM="${{ inputs.from_date }}"
+            TO="${{ inputs.to_date }}"
+            # Nếu from trống → hôm qua
+            if [ -z "$FROM" ]; then
+              FROM=$(date -u -d 'yesterday' '+%Y-%m-%d')
+            fi
+            # Nếu to trống → hôm qua
+            if [ -z "$TO" ]; then
+              TO=$(date -u -d 'yesterday' '+%Y-%m-%d')
+            fi
+          else
+            # Schedule: luôn fill hôm qua
+            FROM=$(date -u -d 'yesterday' '+%Y-%m-%d')
+            TO=$(date -u -d 'yesterday' '+%Y-%m-%d')
+          fi
+          echo "from=$FROM" >> $GITHUB_OUTPUT
+          echo "to=$TO"     >> $GITHUB_OUTPUT
+          echo "📅 Backfill range: $FROM → $TO"
+
+      # ── 5. Run backfill script ───────────────────────────────
+      - name: Run backfill
+        env:
+          R2_ENDPOINT_URL    : ${{ secrets.R2_ENDPOINT_URL }}
+          R2_ACCESS_KEY_ID   : ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME     : ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          ARGS="--from ${{ steps.dates.outputs.from }} --to ${{ steps.dates.outputs.to }}"
+
+          # Symbols (chỉ thêm nếu có input)
+          SYMS="${{ inputs.symbols }}"
+          if [ -n "$SYMS" ] && [ "$SYMS" != "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT" ]; then
+            ARGS="$ARGS --symbols $SYMS"
+          fi
+
+          # Force flag
+          if [ "${{ inputs.force }}" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+
+          # Dry run flag
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          echo "▶️  node scripts/backfill-ticks.js $ARGS"
+          node scripts/backfill-ticks.js $ARGS
+
+      # ── 6. Summary ───────────────────────────────────────────
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Backfill Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Range**: ${{ steps.dates.outputs.from }} → ${{ steps.dates.outputs.to }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Symbols**: ${{ inputs.symbols || 'All 5' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Mode**: ${{ inputs.dry_run == 'true' && 'Dry Run' || inputs.force == 'true' && 'Force' || 'Smart (skip existing)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
