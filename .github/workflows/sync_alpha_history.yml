@@ -27,4 +27,4 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python sync_alpha_history.py --input data/airdrops.json
+        run: python scripts/sync_alpha_history.py --input data/airdrops.json
