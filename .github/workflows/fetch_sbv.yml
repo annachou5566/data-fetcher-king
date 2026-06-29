@@ -1,13 +1,9 @@
-name: SBV Central Rate
+name: SBV Rate Daily
 
 on:
   schedule:
-    - cron: '35 1 * * 1-5'   # 08:35 ICT thứ 2–6 (sau khi SBV công bố ~8h)
-  workflow_dispatch:           # Chạy thủ công → backfill lần đầu từ 2016
-
-concurrency:
-  group: fetch-sbv
-  cancel-in-progress: false
+    - cron: '5 2 * * 1-5'   # 09:05 ICT thứ 2-6 (SBV công bố ~8:30am)
+  workflow_dispatch:          # Chạy thủ công lần đầu để backfill
 
 permissions:
   contents: read
@@ -15,23 +11,20 @@ permissions:
 jobs:
   sbv-daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 30        # Backfill ~9 năm lần đầu cần ~20 phút
+    timeout-minutes: 15      # Backfill ~25 pages lần đầu cần ~5 phút
 
     steps:
     - uses: actions/checkout@v4
-
     - uses: actions/setup-python@v5
       with: { python-version: '3.11' }
-
     - uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-sbv-${{ hashFiles('requirements.txt') }}
         restore-keys: ${{ runner.os }}-pip-sbv-
-
     - run: pip install -r requirements.txt
 
-    - name: Run — SBV Central Rate
+    - name: Run — SBV Rate
       env:
         R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
         R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
