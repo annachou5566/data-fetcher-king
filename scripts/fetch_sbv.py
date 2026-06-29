@@ -1,24 +1,22 @@
 """
-scripts/fetch_sbv.py — v3
+scripts/fetch_sbv.py — final
 ────────────────────────────────────────────────────────────────────
-Lấy tỷ giá SBV — chỉ lấy data thật, không tính toán gì hết.
+Fetch 2 API SBV → merge → lưu R2
 
-Nguồn: sbv.gov.vn Liferay API (content structure 3450514)
-  → Tỷ giá tham khảo Cục QLNH: USD Mua/Bán
-  → Kèm tỷ giá trung tâm nếu API trả về (content structure khác)
-
-Nếu không lấy được → exit, không lưu gì.
-Lịch sử tích lũy từng ngày giống fetch_p2p.py.
+① Content 137473: Tỷ giá TRUNG TÂM  (field: TyGiaSo)
+② Content 3450514: Tỷ giá THAM KHẢO Cục QLNH (field: mua, ban)
 
 R2 file: sbv-data.json
 Format:
 {
-  "v": 1,
-  "updated": "...",
-  "count": N,
+  "v": 2,
   "rows": [
-    {"date":"2026-06-27", "ref_buy":23986, "ref_sell":26404},
-    ...
+    {
+      "date": "2026-06-29",
+      "central":  25201,   ← Tỷ giá trung tâm
+      "ref_buy":  23991,   ← Tham khảo Mua USD
+      "ref_sell": 26411    ← Tham khảo Bán USD
+    }, ...
   ]
 }
 ────────────────────────────────────────────────────────────────────
@@ -28,8 +26,14 @@ import os, json, time, boto3
 from datetime import datetime, timezone, timedelta
 from curl_cffi import requests
 
-R2_KEY  = "sbv-data.json"
-SBV_API = "https://sbv.gov.vn/o/headless-delivery/v1.0/content-structures/3450514/structured-contents"
+R2_KEY        = "sbv-data.json"
+URL_CENTRAL   = "https://sbv.gov.vn/o/headless-delivery/v1.0/content-structures/137473/structured-contents"
+URL_REF       = "https://sbv.gov.vn/o/headless-delivery/v1.0/content-structures/3450514/structured-contents"
+HEADERS       = {
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept":          "application/json",
+    "Accept-Language": "vi-VN,vi;q=0.9",
+}
 
 # ── R2 ─────────────────────────────────────────────────────────────
 def get_r2():
@@ -41,35 +45,107 @@ def get_r2():
 
 def load_existing(r2, bucket):
     try:
-        obj  = r2.get_object(Bucket=bucket, Key=R2_KEY)
-        data = json.loads(obj["Body"].read().decode("utf-8"))
-        return data.get("rows", [])
+        obj = r2.get_object(Bucket=bucket, Key=R2_KEY)
+        return json.loads(obj["Body"].read().decode("utf-8")).get("rows", [])
     except Exception:
         return []
 
-# ── Parse 1 Liferay item ───────────────────────────────────────────
-def parse_item(item):
+# ── Date helper ─────────────────────────────────────────────────────
+def to_date(raw_utc):
+    """'2026-06-28T17:00:00Z' → '2026-06-29' (UTC+7)"""
+    try:
+        dt = datetime.fromisoformat(raw_utc.replace("Z", "+00:00"))
+        return (dt + timedelta(hours=7)).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+def friendly_to_date(friendly):
+    """'29/06/2026' → '2026-06-29'"""
+    try:
+        d, m, y = friendly.strip().split("/")
+        return f"{y}-{m}-{d}"
+    except Exception:
+        return None
+
+# ── Fetch tất cả pages của 1 API ────────────────────────────────────
+def fetch_all_pages(session, url, parse_fn, label):
+    all_rows  = {}
+    page      = 1
+    last_page = 1
+
+    while page <= last_page:
+        try:
+            res = session.get(url, params={
+                "pageSize": 100, "page": page, "sort": "datePublished:desc",
+            }, timeout=20, headers=HEADERS)
+
+            if res.status_code != 200:
+                print(f"  ⚠️  {label} page={page}: HTTP {res.status_code}")
+                break
+
+            data      = res.json()
+            items     = data.get("items", [])
+            last_page = data.get("lastPage", 1)
+
+            new = 0
+            for item in items:
+                row = parse_fn(item)
+                if row and row.get("date"):
+                    all_rows[row["date"]] = row
+                    new += 1
+
+            print(f"  📄 {label} page {page}/{last_page} → {new}/{len(items)} rows")
+            page += 1
+            time.sleep(0.3)
+
+        except Exception as e:
+            print(f"  ⚠️  {label} page={page}: {e}")
+            break
+
+    return all_rows
+
+# ── Parse Tỷ giá Trung tâm (structure 137473) ──────────────────────
+def parse_central(item):
+    fields = {f["name"]: f.get("contentFieldValue", {}).get("data", "")
+              for f in item.get("contentFields", [])}
+
+    # Ngày: dùng friendlyUrlPath hoặc NgayBatDau
+    date = friendly_to_date(item.get("friendlyUrlPath", "")) or \
+           to_date(fields.get("NgayBatDau", ""))
+    if not date:
+        return None
+
+    val = fields.get("TyGiaSo", "")
+    try:
+        central = int(float(val))
+        if not (20000 < central < 40000):
+            return None
+    except Exception:
+        return None
+
+    return {"date": date, "central": central}
+
+# ── Parse Tỷ giá Tham khảo Cục QLNH (structure 3450514) ────────────
+def parse_ref(item):
+    fields   = item.get("contentFields", [])
     date_str = None
     ref_buy  = None
     ref_sell = None
 
-    for f in item.get("contentFields", []):
+    for f in fields:
         name = f.get("name", "")
-        val  = f.get("contentFieldValue", {})
+        val  = f.get("contentFieldValue", {}).get("data", "")
 
         if name == "ngayApDung":
-            raw = val.get("data", "")
-            if raw:
-                dt       = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                date_str = (dt + timedelta(hours=7)).strftime("%Y-%m-%d")
+            date_str = to_date(val)
 
         elif name == "tyGiaThamKhaos":
             nested   = f.get("nestedContentFields", [])
             currency = None
             mua = ban = None
             for nf in nested:
-                n = nf.get("name","")
-                v = nf.get("contentFieldValue",{}).get("data","")
+                n = nf.get("name", "")
+                v = nf.get("contentFieldValue", {}).get("data", "")
                 if n == "ngoaiTe":  currency = str(v)
                 elif n == "mua":
                     try: mua = int(float(v))
@@ -78,48 +154,19 @@ def parse_item(item):
                     try: ban = int(float(v))
                     except: pass
             if currency and "USD" in currency:
-                ref_buy  = mua
-                ref_sell = ban
+                ref_buy, ref_sell = mua, ban
 
     if not date_str:
         return None
     if not ref_buy and not ref_sell:
         return None
-
     return {"date": date_str, "ref_buy": ref_buy, "ref_sell": ref_sell}
-
-# ── Fetch từ SBV API ───────────────────────────────────────────────
-def fetch_sbv(session, page=1):
-    """Trả về (rows, last_page) hoặc (None, 1) nếu lỗi."""
-    try:
-        res = session.get(SBV_API, params={
-            "pageSize": 100, "page": page, "sort": "datePublished:desc",
-        }, timeout=20, headers={
-            "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept":          "application/json",
-            "Accept-Language": "vi-VN,vi;q=0.9",
-            "Referer":         "https://sbv.gov.vn/",
-        })
-
-        if res.status_code != 200:
-            print(f"  ⚠️  HTTP {res.status_code}")
-            return None, 1
-
-        data      = res.json()
-        items     = data.get("items", [])
-        last_page = data.get("lastPage", 1)
-        rows      = [r for r in (parse_item(i) for i in items) if r]
-        return rows, last_page
-
-    except Exception as e:
-        print(f"  ⚠️  {e}")
-        return None, 1
 
 # ── Save ────────────────────────────────────────────────────────────
 def save(r2, bucket, rows_by_date):
     all_rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     payload  = {
-        "v":       1,
+        "v":       2,
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "count":   len(all_rows),
         "rows":    all_rows,
@@ -133,69 +180,52 @@ def save(r2, bucket, rows_by_date):
 
 # ── Main ────────────────────────────────────────────────────────────
 def main():
-    print("🏦 SBV Rate Bot")
+    print("🏦 SBV Rate Bot — Trung tâm + Tham khảo")
     print(f"   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
     session = requests.Session(impersonate="chrome116")
-
-    # Thử page 1 trước
-    print("\n📡 Thử SBV API...")
-    rows, last_page = fetch_sbv(session, page=1)
-
-    if rows is None:
-        print("❌ SBV API không trả lời (IP bị block hoặc timeout)")
-        print("   → Không lưu gì. Data sẽ tích lũy khi API accessible.")
-        print("   💡 Giải pháp: route qua Render/proxy có IP Việt Nam")
-        return
-
-    if not rows:
-        print("⚠️  API trả lời nhưng không có data USD/VND")
-        return
-
-    print(f"  ✅ Trang 1/{last_page} — {len(rows)} rows")
+    r2, bucket = get_r2()
 
     # Load existing
-    r2, bucket   = get_r2()
     existing     = load_existing(r2, bucket)
     rows_by_date = {r["date"]: r for r in existing}
-    prev_count   = len(rows_by_date)
-    print(f"  📦 R2 hiện có: {prev_count} rows")
+    print(f"  📦 R2 hiện có: {len(rows_by_date)} rows")
 
-    # Merge trang 1
-    new_count = 0
-    for row in rows:
-        d = row["date"]
-        if d not in rows_by_date:
-            new_count += 1
-        rows_by_date[d] = {**rows_by_date.get(d, {}), **row}
+    # ── Fetch Tỷ giá Trung tâm ──────────────────────────────────────
+    print("\n📡 Tỷ giá TRUNG TÂM (structure 137473)...")
+    central_rows = fetch_all_pages(session, URL_CENTRAL, parse_central, "Central")
+    if not central_rows:
+        print("  ❌ Không lấy được Trung tâm")
+    else:
+        for d, row in central_rows.items():
+            rows_by_date.setdefault(d, {})["date"]    = d
+            rows_by_date[d]["central"] = row["central"]
+        print(f"  ✅ {len(central_rows)} rows trung tâm")
 
-    # Backfill: nếu có nhiều trang VÀ chưa đủ data lịch sử
-    oldest = min(rows_by_date.keys()) if rows_by_date else "9999"
-    needs_backfill = oldest > "2020-01-01" and last_page > 1
+    # ── Fetch Tỷ giá Tham khảo ──────────────────────────────────────
+    print("\n📡 Tỷ giá THAM KHẢO Cục QLNH (structure 3450514)...")
+    ref_rows = fetch_all_pages(session, URL_REF, parse_ref, "Ref")
+    if not ref_rows:
+        print("  ❌ Không lấy được Tham khảo")
+    else:
+        for d, row in ref_rows.items():
+            rows_by_date.setdefault(d, {})["date"]     = d
+            if row.get("ref_buy"):  rows_by_date[d]["ref_buy"]  = row["ref_buy"]
+            if row.get("ref_sell"): rows_by_date[d]["ref_sell"] = row["ref_sell"]
+        print(f"  ✅ {len(ref_rows)} rows tham khảo")
 
-    if needs_backfill:
-        print(f"  🔄 Backfill {last_page - 1} trang còn lại...")
-        for page in range(2, last_page + 1):
-            page_rows, _ = fetch_sbv(session, page)
-            if page_rows is None:
-                print(f"  ⚠️  Dừng tại page {page} (lỗi)")
-                break
-            added = 0
-            for row in page_rows:
-                d = row["date"]
-                if d not in rows_by_date:
-                    rows_by_date[d] = row; added += 1
-                else:
-                    rows_by_date[d] = {**rows_by_date[d], **row}
-            new_count += added
-            print(f"  📄 Page {page}/{last_page} → +{added} rows (total: {len(rows_by_date)})")
-            time.sleep(0.4)
+    if not central_rows and not ref_rows:
+        print("\n❌ Không lấy được gì. Thoát.")
+        return
 
-    # Save
-    total = save(r2, bucket, rows_by_date)
+    # ── Save ─────────────────────────────────────────────────────────
+    total  = save(r2, bucket, rows_by_date)
     latest = sorted(rows_by_date.values(), key=lambda r: r["date"])[-1]
-    print(f"\n✅ Done — {total} rows (+{new_count} mới)")
-    print(f"   Mới nhất ({latest['date']}): Mua {latest.get('ref_buy','N/A'):,}  Bán {latest.get('ref_sell','N/A'):,}")
+    print(f"\n✅ Done — {total} rows trong R2")
+    print(f"   Mới nhất ({latest['date']}):")
+    if latest.get("central"):  print(f"   Trung tâm:      {latest['central']:,} ₫")
+    if latest.get("ref_buy"):  print(f"   Tham khảo Mua:  {latest['ref_buy']:,} ₫")
+    if latest.get("ref_sell"): print(f"   Tham khảo Bán:  {latest['ref_sell']:,} ₫")
 
 if __name__ == "__main__":
     main()
