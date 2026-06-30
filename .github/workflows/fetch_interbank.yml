@@ -1,0 +1,26 @@
+name: Interbank Rate Daily
+
+on:
+  schedule:
+    - cron: '10 2 * * *'   # 09:10 ICT mỗi ngày
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  interbank-daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - run: pip install -r requirements.txt
+    - name: Run — Interbank Rate
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: python scripts/fetch_interbank.py
