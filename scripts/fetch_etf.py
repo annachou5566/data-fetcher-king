@@ -234,11 +234,16 @@ def parse_farside_table_full(html, asset):
 
             row_obj = {"date": first}
             for i, hdr in enumerate(clean_headers):
-                if i == 0 or not hdr or i >= len(cells): continue
+                if i == 0 or i >= len(cells): continue
                 ticker = hdr.strip().upper()
-                if not ticker or ticker in ("FEE","SEED",""):
+                if ticker in ("FEE", "SEED"):
                     continue
-                # "Total" → giữ nguyên
+                # QUAN TRỌNG: cột Tổng (cuối bảng) ở một số trang (SOL, HYP...) Farside
+                # không đặt tên (header text rỗng) — TRƯỚC ĐÂY code coi "not hdr" là cột rác
+                # và bỏ qua luôn, khiến SOL/HYP mất hẳn dữ liệu tổng. Giờ gán key "TOTAL"
+                # cho mọi cột có header rỗng (trừ cột date ở index 0 đã skip riêng).
+                if not ticker:
+                    ticker = "TOTAL"
                 row_obj[ticker] = parse_val(cells[i]) if i < len(cells) else 0.0
 
             if len(row_obj) > 1:  # có ít nhất 1 cột data
