@@ -18,6 +18,7 @@ import json
 import os
 import time
 import threading
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 import boto3
@@ -33,6 +34,7 @@ fa._request_semaphore = threading.Semaphore(MAX_CONCURRENT)
 
 API_AGG_KLINES = os.getenv("BINANCE_INTERNAL_KLINES_API")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # Một số chain non-EVM dùng prefix CT_ trong API nội bộ (giống logic trong fetch_alpha.py)
 NO_LOWER_CHAINS = {"CT_501", "CT_784", "501", "784"}
@@ -115,7 +117,11 @@ def fetch_listing_price(chain_id, contract, target_date_str):
     open / close: giữ lại để tham khảo / fallback khi vwap không tính được
                   (ví dụ thiếu dữ liệu 1h, hoặc volume = 0 cả ngày).
     """
-    if not API_AGG_KLINES or not chain_id or not contract:
+    if not API_AGG_KLINES:
+        if DEBUG: print("[debug] API_AGG_KLINES secret rỗng/chưa truyền vào script", end=" ")
+        return None
+    if not chain_id or not contract:
+        if DEBUG: print(f"[debug] thiếu chain_id={chain_id!r} hoặc contract={contract!r}", end=" ")
         return None
 
     addr = str(contract)
@@ -130,14 +136,22 @@ def fetch_listing_price(chain_id, contract, target_date_str):
         # 1) Nến ngày — luôn cần để có open/close + xác định đúng ngày
         try:
             res_day = fa.fetch_smart(f"{base}&interval=1d&limit=1000", retries=2)
-        except Exception:
+        except Exception as ex:
+            if DEBUG: print(f"[debug] fetch_smart exception (1d, chain={cid}): {ex}", end=" ")
             res_day = None
-        k_day = (res_day or {}).get("data", {}).get("klineInfos") if res_day else None
+
+        if res_day is None:
+            if DEBUG: print(f"[debug] fetch_smart trả None (1d, chain={cid}) — proxy/secret/network lỗi", end=" ")
+            continue
+
+        k_day = (res_day.get("data") or {}).get("klineInfos")
         if not k_day:
+            if DEBUG: print(f"[debug] res_day có trả về nhưng không có klineInfos (chain={cid}). keys={list(res_day.keys())}", end=" ")
             continue
 
         day_match = _find_day_candles_1d(k_day, target_date_str)
         if not day_match:
+            if DEBUG: print(f"[debug] có {len(k_day)} nến nhưng không khớp ngày {target_date_str}", end=" ")
             continue
 
         actual_date = datetime.utcfromtimestamp(int(day_match[0]) / 1000).strftime('%Y-%m-%d')
@@ -162,6 +176,61 @@ def fetch_listing_price(chain_id, contract, target_date_str):
         }
 
     return None
+
+
+def fetch_listing_price_public_spot(symbol, target_date_str):
+    """
+    Fallback cho token đã graduate khỏi Alpha (spot_listed=true): API klines
+    DEX nội bộ thường không còn lịch sử cho nhóm này vì volume đã chuyển hẳn
+    sang CEX order book. Dùng thẳng /api/v3/klines công khai của Binance,
+    không cần proxy nội bộ, vì token đã có cặp XXXUSDT chính thức.
+    """
+    try:
+        start_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
+    except Exception:
+        return None
+
+    try:
+        res = requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={
+                "symbol": f"{symbol}USDT",
+                "interval": "1h",
+                "startTime": start_ms,
+                "limit": 24,   # đúng 24h ngày listing
+            },
+            timeout=10,
+        )
+        if res.status_code != 200:
+            if DEBUG: print(f"[debug] public spot klines http {res.status_code} cho {symbol}", end=" ")
+            return None
+        rows = res.json()
+        if not isinstance(rows, list) or not rows:
+            return None
+
+        num, den = 0.0, 0.0
+        for k in rows:
+            high, low, close, vol = float(k[2]), float(k[3]), float(k[4]), float(k[5])
+            if vol <= 0:
+                continue
+            typical = (high + low + close) / 3
+            num += typical * vol
+            den += vol
+
+        if den <= 0:
+            return None
+
+        return {
+            "vwap":  num / den,
+            "open":  float(rows[0][1]),
+            "close": float(rows[-1][4]),
+            "date":  target_date_str,
+            "source": "public_spot",   # đánh dấu nguồn khác để dễ debug sau này
+        }
+    except Exception as ex:
+        if DEBUG: print(f"[debug] public spot fallback exception cho {symbol}: {ex}", end=" ")
+        return None
+
 
 
 def enrich_events(events):
@@ -189,12 +258,19 @@ def enrich_events(events):
         print(f"  [{done}/{total_todo}] {symbol} ({date_str})...", end=" ", flush=True)
 
         result = fetch_listing_price(chain_id, contract, date_str)
+
+        if not result and e.get("spot_listed"):
+            # Token đã graduate khỏi Alpha — thử nguồn CEX công khai
+            result = fetch_listing_price_public_spot(symbol, date_str)
+            if result and DEBUG:
+                print("[debug] dùng fallback public_spot ", end="")
+
         if result:
             e["listing_price"] = result
             filled += 1
             print(f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})")
         else:
-            e["listing_price"] = None  # đánh dấu đã thử, tránh fetch lại vô hạn lần sau
+            e["listing_price"] = None  # đánh dấu đã thử, lần sau vẫn tự retry vì None là falsy
             print("no data (DEX pair not found)")
 
         time.sleep(0.15)  # nhẹ tay với proxy, tránh burst
@@ -203,6 +279,12 @@ def enrich_events(events):
 
 
 def main():
+    print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
+    print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}")
+    if DEBUG:
+        print(f"   API_AGG_KLINES = {API_AGG_KLINES}")
+        print(f"   PROXY_WORKER_URL = {fa.PROXY_WORKER_URL}")
+
     r2 = get_r2()
     print("⏳ Loading alpha-events/all.json from R2...")
     all_events = load_json(r2, "alpha-events/all.json")
