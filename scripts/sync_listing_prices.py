@@ -19,6 +19,7 @@ import os
 import time
 import threading
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from dotenv import load_dotenv
 import boto3
@@ -233,47 +234,58 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
 
 
 
+def _process_one(e, idx, total):
+    """Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None)."""
+    contract = e.get("contract_address")
+    chain_id = e.get("chain_id")
+    date_str = (e.get("event_time") or e.get("date") or "")[:10]
+    symbol = e.get("symbol") or e.get("token") or "?"
+
+    result = fetch_listing_price(chain_id, contract, date_str)
+
+    if not result and e.get("spot_listed"):
+        # Token đã graduate khỏi Alpha — thử nguồn CEX công khai
+        result = fetch_listing_price_public_spot(symbol, date_str)
+
+    tag = f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})" if result else "no data (DEX pair not found)"
+    print(f"  [{idx}/{total}] {symbol} ({date_str})... {tag}", flush=True)
+
+    return e, result
+
+
 def enrich_events(events):
-    """Mutates events in-place, returns count of newly-filled entries."""
+    """
+    Mutates events in-place, returns count of newly-filled entries.
+    Chạy song song có giới hạn (MAX_CONCURRENT) thay vì tuần tự —
+    416 token tuần tự dễ vượt timeout 15 phút của GitHub Actions,
+    chạy song song giảm thời gian xuống còn ~1/N.
+    """
+    todo = [
+        e for e in events
+        if not e.get("listing_price")
+        and e.get("contract_address")
+        and (e.get("event_time") or e.get("date"))
+    ]
+    total = len(todo)
     filled = 0
-    total_todo = sum(
-        1 for e in events
-        if not e.get("listing_price") and e.get("contract_address") and (e.get("event_time") or e.get("date"))
-    )
-    done = 0
 
-    for e in events:
-        if e.get("listing_price"):
-            continue  # đã có rồi — idempotent, không fetch lại
+    if not todo:
+        return 0
 
-        contract = e.get("contract_address")
-        chain_id = e.get("chain_id")
-        date_str = (e.get("event_time") or e.get("date") or "")[:10]
-        symbol = e.get("symbol") or e.get("token") or "?"
+    print(f"  Xử lý {total} token, chạy song song tối đa {MAX_CONCURRENT} luồng...")
 
-        if not contract or not date_str:
-            continue
-
-        done += 1
-        print(f"  [{done}/{total_todo}] {symbol} ({date_str})...", end=" ", flush=True)
-
-        result = fetch_listing_price(chain_id, contract, date_str)
-
-        if not result and e.get("spot_listed"):
-            # Token đã graduate khỏi Alpha — thử nguồn CEX công khai
-            result = fetch_listing_price_public_spot(symbol, date_str)
-            if result and DEBUG:
-                print("[debug] dùng fallback public_spot ", end="")
-
-        if result:
-            e["listing_price"] = result
-            filled += 1
-            print(f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})")
-        else:
-            e["listing_price"] = None  # đánh dấu đã thử, lần sau vẫn tự retry vì None là falsy
-            print("no data (DEX pair not found)")
-
-        time.sleep(0.15)  # nhẹ tay với proxy, tránh burst
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+        futures = {
+            pool.submit(_process_one, e, i + 1, total): e
+            for i, e in enumerate(todo)
+        }
+        for fut in as_completed(futures):
+            e, result = fut.result()
+            if result:
+                e["listing_price"] = result
+                filled += 1
+            else:
+                e["listing_price"] = None  # đánh dấu đã thử, lần sau vẫn tự retry vì None là falsy
 
     return filled
 
