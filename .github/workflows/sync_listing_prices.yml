@@ -1,0 +1,49 @@
+name: Sync Alpha Listing Prices
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # Mỗi 30 phút — chỉ token mới chưa có listing_price mới tốn request
+  workflow_dispatch:
+
+concurrency:
+  group: sync-listing-prices
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-listing-prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Backfill listing prices
+      env:
+        MAX_CONCURRENT: '4'
+        BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+        PROXY_WORKER_URL:            ${{ secrets.PROXY_WORKER_URL }}
+        R2_ACCESS_KEY_ID:            ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY:        ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:             ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:              ${{ secrets.R2_BUCKET_NAME }}
+      working-directory: scripts
+      run: python sync_listing_prices.py
