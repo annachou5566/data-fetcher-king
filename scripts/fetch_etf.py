@@ -244,8 +244,13 @@ def parse_farside_table_full(html, asset):
             if len(row_obj) > 1:  # có ít nhất 1 cột data
                 rows.append(row_obj)
 
-        # Đảm bảo chronological order (cũ → mới)
-        rows.reverse()  # Farside thường có mới nhất ở dưới, reverse → mới nhất cuối
+        # Sort theo NGÀY THỰC TẾ (không tin thứ tự HTML — trước đây reverse() mù quáng
+        # đã làm rows[-1] trở thành dòng CŨ NHẤT thay vì mới nhất, khiến "flow hôm nay"
+        # bị ghi nhầm thành flow của ngày ETF ra mắt).
+        def _parse_date(d):
+            try: return datetime.strptime(d, "%d %b %Y")
+            except: return datetime.min
+        rows.sort(key=lambda r: _parse_date(r["date"]))  # cũ → mới, đảm bảo rows[-1] luôn là mới nhất
 
         print(f"    ✓ {len(rows)} historical rows (first: {rows[0]['date'] if rows else 'N/A'} → last: {rows[-1]['date'] if rows else 'N/A'})")
         return headers, rows
