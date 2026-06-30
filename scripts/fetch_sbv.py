@@ -63,7 +63,7 @@ def friendly_to_date(friendly):
     """'29/06/2026' → '2026-06-29'"""
     try:
         d, m, y = friendly.strip().split("/")
-        return f"{y}-{m}-{d}"
+        return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
     except Exception:
         return None
 
@@ -113,6 +113,11 @@ def parse_central(item):
     date = friendly_to_date(item.get("friendlyUrlPath", "")) or \
            to_date(fields.get("NgayBatDau", ""))
     if not date:
+        return None
+    # Validate YYYY-MM-DD format
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except Exception:
         return None
 
     val = fields.get("TyGiaSo", "")
@@ -220,7 +225,12 @@ def main():
 
     # ── Save ─────────────────────────────────────────────────────────
     total  = save(r2, bucket, rows_by_date)
-    latest = sorted(rows_by_date.values(), key=lambda r: r["date"])[-1]
+    valid = [r for r in rows_by_date.values()
+              if r.get("date") and len(r["date"]) == 10]
+    if not valid:
+        print("⚠️  Không có row hợp lệ")
+        return
+    latest = sorted(valid, key=lambda r: r["date"])[-1]
     print(f"\n✅ Done — {total} rows trong R2")
     print(f"   Mới nhất ({latest['date']}):")
     if latest.get("central"):  print(f"   Trung tâm:      {latest['central']:,} ₫")
