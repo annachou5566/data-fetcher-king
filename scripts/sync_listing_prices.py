@@ -66,10 +66,54 @@ def upload_json(r2, key, data):
     print(f"  [R2] {key} updated ({len(data)} events, {len(body)//1024}KB)")
 
 
+def _find_day_candles_1d(k_infos, target_date_str):
+    """Tìm nến 1d đúng ngày niêm yết (dùng làm fallback nếu không lấy được nến 1h)."""
+    match = None
+    for k in k_infos:
+        try:
+            day = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
+        except Exception:
+            continue
+        if day == target_date_str:
+            match = k
+            break
+    return match or (k_infos[0] if k_infos else None)
+
+
+def _compute_vwap(hourly_candles, target_date_str):
+    """
+    VWAP = Σ(typical_price × volume) / Σ(volume), chỉ tính trong đúng 24h
+    của ngày niêm yết. typical_price = (high+low+close)/3 — phản ánh đúng
+    vùng giá mà phần lớn volume diễn ra, không bị lệch về giá mở cửa thấp
+    như cách dùng open đơn thuần.
+    """
+    num, den = 0.0, 0.0
+    for k in hourly_candles:
+        try:
+            day = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
+        except Exception:
+            continue
+        if day != target_date_str:
+            continue
+        high, low, close, vol = fa.safe_float(k[2]), fa.safe_float(k[3]), fa.safe_float(k[4]), fa.safe_float(k[5])
+        if vol <= 0:
+            continue
+        typical = (high + low + close) / 3
+        num += typical * vol
+        den += vol
+    return (num / den) if den > 0 else None
+
+
 def fetch_listing_price(chain_id, contract, target_date_str):
     """
-    Trả về {open, close, date} của ngày niêm yết, hoặc None nếu không
-    tìm được nến nào khớp / token chưa có dữ liệu klines nội bộ.
+    Trả về {vwap, open, close, date} của ngày niêm yết, hoặc None nếu
+    không tìm được dữ liệu nào / token chưa có klines nội bộ.
+
+    vwap: giá đại diện chính — tính từ nến 1h trong đúng 24h ngày listing,
+          phản ánh đúng vùng giá có nhiều volume nhất (không lệch thấp
+          như open đơn thuần, không cần volume-profile phức tạp).
+    open / close: giữ lại để tham khảo / fallback khi vwap không tính được
+                  (ví dụ thiếu dữ liệu 1h, hoặc volume = 0 cả ngày).
     """
     if not API_AGG_KLINES or not chain_id or not contract:
         return None
@@ -81,43 +125,41 @@ def fetch_listing_price(chain_id, contract, target_date_str):
 
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
-        url = (
-            f"{API_AGG_KLINES}?chainId={cid}&interval=1d&limit=1000"
-            f"&tokenAddress={clean_addr}&dataType=aggregate"
-        )
+        base = f"{API_AGG_KLINES}?chainId={cid}&tokenAddress={clean_addr}&dataType=aggregate"
+
+        # 1) Nến ngày — luôn cần để có open/close + xác định đúng ngày
         try:
-            res = fa.fetch_smart(url, retries=2)
+            res_day = fa.fetch_smart(f"{base}&interval=1d&limit=1000", retries=2)
         except Exception:
-            res = None
-
-        if not res:
-            continue
-        k_infos = (res.get("data") or {}).get("klineInfos")
-        if not k_infos:
+            res_day = None
+        k_day = (res_day or {}).get("data", {}).get("klineInfos") if res_day else None
+        if not k_day:
             continue
 
-        # Tìm nến đúng ngày niêm yết; nếu không có thì lấy nến sớm nhất
-        # (thường là chính ngày listing vì token mới chưa có lịch sử trước đó)
-        match = None
-        for k in k_infos:
-            try:
-                day = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
-            except Exception:
-                continue
-            if day == target_date_str:
-                match = k
-                break
-        if not match:
-            match = k_infos[0]
+        day_match = _find_day_candles_1d(k_day, target_date_str)
+        if not day_match:
+            continue
 
+        actual_date = datetime.utcfromtimestamp(int(day_match[0]) / 1000).strftime('%Y-%m-%d')
+        open_price  = fa.safe_float(day_match[1])
+        close_price = fa.safe_float(day_match[4])
+
+        # 2) Nến 1h trong đúng ngày đó — để tính VWAP chính xác hơn
+        vwap = None
         try:
-            return {
-                "open":  fa.safe_float(match[1]),
-                "close": fa.safe_float(match[4]),
-                "date":  datetime.utcfromtimestamp(int(match[0]) / 1000).strftime('%Y-%m-%d'),
-            }
+            res_hourly = fa.fetch_smart(f"{base}&interval=1h&limit=1000", retries=1)
+            k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
+            if k_hourly:
+                vwap = _compute_vwap(k_hourly, actual_date)
         except Exception:
-            continue
+            pass
+
+        return {
+            "vwap":  vwap if vwap is not None else close_price,  # fallback: dùng close nếu không có 1h data
+            "open":  open_price,
+            "close": close_price,
+            "date":  actual_date,
+        }
 
     return None
 
@@ -150,7 +192,7 @@ def enrich_events(events):
         if result:
             e["listing_price"] = result
             filled += 1
-            print(f"OK  open=${result['open']}")
+            print(f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})")
         else:
             e["listing_price"] = None  # đánh dấu đã thử, tránh fetch lại vô hạn lần sau
             print("no data (DEX pair not found)")
