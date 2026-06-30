@@ -15,7 +15,7 @@ permissions:
 jobs:
   sync-listing-prices:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30   # Tăng từ 15 → 30, đủ cho lần backfill đầu tiên chạy hết toàn bộ lịch sử
 
     steps:
     - name: Checkout
@@ -38,7 +38,7 @@ jobs:
 
     - name: Backfill listing prices
       env:
-        MAX_CONCURRENT: '4'
+        MAX_CONCURRENT: '6'
         BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
         PROXY_WORKER_URL:            ${{ secrets.PROXY_WORKER_URL }}
         R2_ACCESS_KEY_ID:            ${{ secrets.R2_ACCESS_KEY_ID }}
