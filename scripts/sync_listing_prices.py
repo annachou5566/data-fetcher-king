@@ -146,7 +146,7 @@ def _compute_vwap(hourly_candles, target_date_str):
     return (num / den) if den > 0 else None
 
 
-def _max_price_since(k_infos, since_date_str):
+def _max_price_since(k_infos, since_date_str, ref_price=None):
     """
     Giá CAO NHẤT (theo nến high) kể từ since_date_str (ngày của event —
     listing hoặc airdrop) đến hiện tại. Dùng để trả lời câu hỏi "nếu bán
@@ -156,13 +156,27 @@ def _max_price_since(k_infos, since_date_str):
     Tái sử dụng LUÔN mảng nến 1d đã fetch sẵn cho fetch_listing_price
     (limit=1000 ngày, thường đã phủ từ lúc token mới list tới hiện tại)
     — không tốn thêm request nào.
+
+    SANITY CHECK: API klines nội bộ đôi khi trả về 1 nến bị lỗi decimal/
+    trùng địa chỉ (vd TAIKO ngày 2026-01-06 trả high = 4.9e19, trong khi
+    giá thật ~$0.6). Nếu KHÔNG lọc, 1 nến rác này khiến "peak return" của
+    riêng token đó là số vô nghĩa (hàng tỷ %), và vì "Avg peak" ở frontend
+    là trung bình cộng thuần trên toàn bộ token, 1 outlier đủ để kéo sập
+    cả con số trung bình của toàn chart.
+
+    Quy tắc: 1 nến high chỉ được chấp nhận là đỉnh mới nếu nó không vượt
+    quá MAX_JUMP_MULT (mặc định 50x) so với close của nến liền trước (hoặc
+    ref_price = giá lúc event, nếu chưa có nến nào trước đó). Nến bất
+    thường sẽ bị bỏ qua và log ra, không âm thầm nuốt.
     """
     try:
         since_dt = datetime.strptime(since_date_str, '%Y-%m-%d')
     except Exception:
         return None
 
-    best_price, best_date = None, None
+    MAX_JUMP_MULT = 50  # không token nào x50 trong 1 ngày rồi giữ nguyên mãi — đó là lỗi data
+
+    relevant = []
     for k in k_infos:
         try:
             k_dt = datetime.utcfromtimestamp(int(k[0]) / 1000)
@@ -170,12 +184,31 @@ def _max_price_since(k_infos, since_date_str):
             continue
         if k_dt < since_dt:
             continue
+        relevant.append((k_dt, k))
+    relevant.sort(key=lambda x: x[0])
+
+    best_price, best_date = None, None
+    prev_close = ref_price  # điểm neo đầu tiên: giá lúc event (vwap/close)
+
+    for k_dt, k in relevant:
         high = fa.safe_float(k[2])
+        close = fa.safe_float(k[4])
         if high <= 0:
             continue
+
+        if prev_close and prev_close > 0 and high > prev_close * MAX_JUMP_MULT:
+            if DEBUG:
+                print(f"[debug] bỏ qua nến bất thường {k_dt.date()}: high={high} vs prev_close={prev_close} (>{MAX_JUMP_MULT}x)", end=" ")
+            if close > 0:
+                prev_close = close
+            continue
+
         if best_price is None or high > best_price:
             best_price = high
             best_date = k_dt.strftime('%Y-%m-%d')
+
+        if close > 0:
+            prev_close = close
 
     return {"price": best_price, "date": best_date} if best_price is not None else None
 
@@ -245,12 +278,13 @@ def fetch_listing_price(chain_id, contract, target_date_str):
         except Exception:
             pass
 
+        ref_price = vwap if vwap is not None else close_price
         return {
             "vwap":  vwap if vwap is not None else close_price,  # fallback: dùng close nếu không có 1h data
             "open":  open_price,
             "close": close_price,
             "date":  actual_date,
-            "max_since": _max_price_since(k_day, actual_date),
+            "max_since": _max_price_since(k_day, actual_date, ref_price=ref_price),
         }
 
     return None
@@ -299,6 +333,7 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
             return None
 
         max_since = None
+        MAX_JUMP_MULT = 50  # cùng ngưỡng sanity-check như _max_price_since ở trên
         try:
             res_daily = requests.get(
                 "https://api.binance.com/api/v3/klines",
@@ -314,13 +349,22 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
                 daily_rows = res_daily.json()
                 if isinstance(daily_rows, list) and daily_rows:
                     best_price, best_date = None, None
+                    prev_close = num / den if den > 0 else None  # neo bằng vwap ngày listing
                     for k in daily_rows:
                         high = float(k[2])
+                        close = float(k[4])
                         if high <= 0:
+                            continue
+                        if prev_close and prev_close > 0 and high > prev_close * MAX_JUMP_MULT:
+                            if DEBUG: print(f"[debug] bỏ qua nến bất thường public spot cho {symbol}: high={high} vs prev_close={prev_close}", end=" ")
+                            if close > 0:
+                                prev_close = close
                             continue
                         if best_price is None or high > best_price:
                             best_price = high
                             best_date = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
+                        if close > 0:
+                            prev_close = close
                     if best_price is not None:
                         max_since = {"price": best_price, "date": best_date}
         except Exception as ex:
