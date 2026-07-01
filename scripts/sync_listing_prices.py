@@ -60,34 +60,6 @@ def load_json(r2, key):
         return []
 
 
-def load_market_data_map(r2):
-    """
-    Đọc market-data.json (do fetch_alpha.py sinh ra) và dựng map
-    contract_address(lowercase) -> spot_listed_at, để nối vào từng event
-    trong alpha-events/all.json.
-
-    LƯU Ý: market-data.json KHÔNG lưu chain_id tường minh (chỉ có tên chain
-    "cn", không phải numeric chain_id như trong alpha-events), nên chỉ join
-    được theo contract_address. Rủi ro trùng địa chỉ giữa 2 chain khác nhau
-    là cực thấp trong thực tế (đủ tốt cho mục đích thống kê "cửa sổ bán").
-    """
-    try:
-        obj = r2.get_object(Bucket=R2_BUCKET_NAME, Key='market-data.json')
-        data = json.loads(obj['Body'].read().decode('utf-8'))
-        rows = data.get("data", []) if isinstance(data, dict) else []
-    except Exception as ex:
-        if DEBUG: print(f"[debug] không tải được market-data.json: {ex}")
-        return {}
-
-    out = {}
-    for t in rows:
-        contract = t.get("ct")  # KEY_MAP["contract"] = "ct"
-        sla      = t.get("sla") # KEY_MAP["spot_listed_at"] = "sla"
-        if contract and sla:
-            out[str(contract).lower()] = sla
-    return out
-
-
 
     body = json.dumps(data, default=str, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     r2.put_object(
@@ -412,6 +384,42 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
 
 
 
+def fetch_spot_listing_date(symbol):
+    """
+    Lấy NGÀY THẬT token bắt đầu có lệnh khớp trên Binance spot — không đoán,
+    không phụ thuộc cron job, không cần tra CMC/CoinGecko.
+
+    Kỹ thuật: gọi klines với startTime=0 → Binance trả về nến CŨ NHẤT đang có
+    (thay vì mặc định là nến gần nhất). open_time của nến đó = ngày cặp
+    SYMBOLUSDT bắt đầu giao dịch, tức ngày spot-listing thật, lấy thẳng từ
+    sổ lệnh gốc — chính xác tới từng ngày, và work ngay cho cả token đã
+    list từ lâu (không cần đợi transition xảy ra sau khi có code này).
+    """
+    try:
+        res = requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={
+                "symbol": f"{symbol}USDT",
+                "interval": "1d",
+                "startTime": 0,   # ép Binance trả về nến sớm nhất hiện có
+                "limit": 1,
+            },
+            timeout=10,
+        )
+        if res.status_code != 200:
+            if DEBUG: print(f"[debug] fetch_spot_listing_date http {res.status_code} cho {symbol}")
+            return None
+        rows = res.json()
+        if not isinstance(rows, list) or not rows:
+            return None
+        open_ms = int(rows[0][0])
+        return datetime.utcfromtimestamp(open_ms / 1000).strftime('%Y-%m-%d')
+    except Exception as ex:
+        if DEBUG: print(f"[debug] fetch_spot_listing_date exception cho {symbol}: {ex}")
+        return None
+
+
+
 def _process_one(e, idx, total):
     """Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None)."""
     contract = e.get("contract_address")
@@ -468,51 +476,47 @@ def enrich_events(events):
     return filled
 
 
-def _process_spot_one(e, spot_listed_at, idx, total):
-    """Worker: fetch giá đúng ngày spot_listed_at (tái dùng fetch_listing_price
-    — cùng nguồn klines nội bộ, chỉ đổi target_date_str sang ngày lên spot
-    thay vì ngày event/claim)."""
+def _process_spot_one(e, idx, total):
+    """Worker: xác định ngày spot-listing THẬT (từ klines Binance, không đoán),
+    rồi fetch giá đúng ngày đó (tái dùng fetch_listing_price / public spot)."""
     contract = e.get("contract_address")
     chain_id = e.get("chain_id")
     symbol   = e.get("symbol") or e.get("token") or "?"
 
-    result = fetch_listing_price(chain_id, contract, spot_listed_at)
+    spot_date = fetch_spot_listing_date(symbol)
+    if not spot_date:
+        print(f"  [spot {idx}/{total}] {symbol}... không tìm được ngày spot-listing (symbol lệch/chưa có cặp USDT?)", flush=True)
+        return e, None, None
+
+    result = fetch_listing_price(chain_id, contract, spot_date)
     if not result:
-        # token đã spot-listed nên public spot klines chắc chắn có dữ liệu
-        result = fetch_listing_price_public_spot(symbol, spot_listed_at)
+        result = fetch_listing_price_public_spot(symbol, spot_date)
 
     tag = f"OK  price=${result['vwap']:.6f}" if result else "no data"
-    print(f"  [spot {idx}/{total}] {symbol} @ {spot_listed_at}... {tag}", flush=True)
-    return e, result
+    print(f"  [spot {idx}/{total}] {symbol} @ {spot_date}... {tag}", flush=True)
+    return e, spot_date, result
 
 
-def enrich_spot_listing_prices(events, market_map):
+def enrich_spot_listing_prices(events):
     """
-    Với các event có spot_listed=true: nối spot_listed_at từ market-data.json
-    (theo contract_address), rồi fetch giá NGÀY token đó lên spot — để so
-    sánh 3 chiến lược: bán trước spot (giá claim) / hold tới lúc spot
-    (spot_listing_price) / hold dài hơn (giá hiện tại, tính ở frontend).
+    Với các event có spot_listed=true: tự tra ngày spot-listing THẬT của
+    token trực tiếp từ Binance (fetch_spot_listing_date — nến sớm nhất của
+    cặp SYMBOLUSDT), rồi fetch giá đúng ngày đó — để so sánh 3 chiến lược:
+    bán trước spot (giá claim) / hold tới lúc spot (spot_listing_price) /
+    hold dài hơn (giá hiện tại, tính ở frontend).
 
-    Idempotent như enrich_events(): chỉ fetch event nào có spot_listed_at
-    nhưng CHƯA có spot_listing_price.
+    Không phụ thuộc market-data.json hay cron-job diff nữa — chính xác hơn
+    VÀ backfill được ngay cho token đã list từ lâu, không cần chờ transition.
+
+    Idempotent: chỉ fetch event nào CHƯA có spot_listing_price.
     """
-    if not market_map:
-        if DEBUG: print("[debug] market_map rỗng — market-data.json chưa có spot_listed_at nào, bỏ qua bước này")
-        return 0
-
-    todo = []
-    for e in events:
-        if not e.get("spot_listed"):
-            continue
-        if e.get("spot_listing_price"):  # đã có -> idempotent, bỏ qua
-            continue
-        contract = (e.get("contract_address") or "").lower()
-        sla = market_map.get(contract)
-        if not sla:
-            continue
-        e["spot_listed_at"] = sla  # nối ngày lên spot vào event luôn
-        todo.append((e, sla))
-
+    todo = [
+        e for e in events
+        if e.get("spot_listed")
+        and not e.get("spot_listing_price")
+        and e.get("contract_address")
+        and (e.get("symbol") or e.get("token"))
+    ]
     total = len(todo)
     if not total:
         return 0
@@ -521,11 +525,13 @@ def enrich_spot_listing_prices(events, market_map):
     filled = 0
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
         futures = {
-            pool.submit(_process_spot_one, e, sla, i + 1, total): e
-            for i, (e, sla) in enumerate(todo)
+            pool.submit(_process_spot_one, e, i + 1, total): e
+            for i, e in enumerate(todo)
         }
         for fut in as_completed(futures):
-            e, result = fut.result()
+            e, spot_date, result = fut.result()
+            if spot_date:
+                e["spot_listed_at"] = spot_date
             if result:
                 e["spot_listing_price"] = result
                 filled += 1
@@ -535,7 +541,7 @@ def enrich_spot_listing_prices(events, market_map):
     return filled
 
 
-
+def main():
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
     print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}")
     if DEBUG:
@@ -554,11 +560,8 @@ def enrich_spot_listing_prices(events, market_map):
     filled = enrich_events(all_events)
     print(f"\n✅ Backfilled {filled} new listing prices")
 
-    print("⏳ Loading market-data.json để lấy spot_listed_at...")
-    market_map = load_market_data_map(r2)
-    print(f"   {len(market_map)} token có spot_listed_at")
-    filled_spot = enrich_spot_listing_prices(all_events, market_map)
-    print(f"✅ Backfilled {filled_spot} giá lúc spot-listing")
+    filled_spot = enrich_spot_listing_prices(all_events)
+    print(f"✅ Backfilled {filled_spot} giá lúc spot-listing (ngày lấy trực tiếp từ klines Binance)")
 
     # Re-split theo status rồi ghi lại cả 4 file
     upcoming = [e for e in all_events if e.get("status") == "upcoming"]
