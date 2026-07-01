@@ -574,6 +574,12 @@ def enrich_spot_listing_prices(events):
 def main():
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
     print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}")
+    print(f"🔑 RENDER_API_KEY configured: {bool(fa.RENDER_API_KEY)}")
+    if not fa.RENDER_API_KEY:
+        print("⚠️  RENDER_API_KEY rỗng — mọi request qua PROXY_WORKER_URL (Render) "
+              "sẽ bị middleware bảo mật trả 401. Thêm secret RENDER_API_KEY trong "
+              "GitHub Actions (giá trị = API_SECRET_KEY trên Render) và khai báo "
+              "'env: RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}' trong workflow YAML.")
     if DEBUG:
         print(f"   API_AGG_KLINES = {API_AGG_KLINES}")
         print(f"   PROXY_WORKER_URL = {fa.PROXY_WORKER_URL}")
