@@ -96,8 +96,7 @@ KEY_MAP = {
     "offline": "off", "listingCex": "cex",
     "onlineTge": "tge",
     "onlineAirdrop": "air",
-    "mul_point": "mp",
-    "spot_listed_at": "sla",
+    "mul_point": "mp"
 }
 
 def minify_token_data(token):
@@ -126,7 +125,6 @@ def minify_token_data(token):
     minified[KEY_MAP["listingCex"]]     = 1 if token.get("listingCex")    else 0
     minified[KEY_MAP["onlineTge"]]      = 1 if token.get("onlineTge")     else 0
     minified[KEY_MAP["onlineAirdrop"]]  = 1 if token.get("onlineAirdrop") else 0
-    minified[KEY_MAP["spot_listed_at"]] = token.get("spot_listed_at")
 
     vol = token.get("volume", {})
     minified[KEY_MAP["volume"]] = {
@@ -330,27 +328,6 @@ def process_single_token(item):
     daily_total = daily_limit = daily_onchain = 0.0
     chart_data  = []
 
-    # ── spot_listed_at: đóng dấu NGÀY ĐẦU TIÊN quan sát thấy status="SPOT" ──
-    # (proxy cho ngày token graduate khỏi Alpha lên spot chính thức). Vì job
-    # chạy định kỳ (không realtime), độ chính xác = độ dài chu kỳ chạy job —
-    # tương đương độ chính xác đang chấp nhận cho listing_price.max_since ở
-    # sync_listing_prices.py. Một khi đã có giá trị cache, KHÔNG bao giờ ghi
-    # đè lại (giữ đúng ngày phát hiện lần đầu, chạy lại bao nhiêu lần cũng an toàn).
-    old_sla    = None
-    old_status = None
-    if OLD_DATA_MAP and aid in OLD_DATA_MAP:
-        old_item   = OLD_DATA_MAP[aid]
-        old_sla    = old_item.get(KEY_MAP["spot_listed_at"])
-        old_status = old_item.get(KEY_MAP["status"])
-
-    if old_sla:
-        spot_listed_at = old_sla  # đã đóng dấu từ trước — giữ nguyên, không ghi đè
-    elif status == "SPOT" and old_status != "SPOT":
-        spot_listed_at = datetime.utcnow().strftime("%Y-%m-%d")  # phát hiện transition lần đầu
-        print(f"🎯 {symbol} spot-listed lần đầu quan sát ({spot_listed_at})", flush=True)
-    else:
-        spot_listed_at = None
-
     if should_fetch:
         print(f"📡 {symbol}...", end=" ", flush=True)
         try:
@@ -391,7 +368,6 @@ def process_single_token(item):
         "offline": is_offline, "listingCex": is_listing_cex, "status": status,
         "onlineTge":    item.get("onlineTge", False),
         "onlineAirdrop": item.get("onlineAirdrop", False),
-        "spot_listed_at": spot_listed_at,
         "mul_point":    safe_float(item.get("mulPoint")),
         "listing_time": item.get("listingTime", 0),
         "tx_count":     safe_float(item.get("count24h")),
