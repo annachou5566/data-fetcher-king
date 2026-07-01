@@ -70,17 +70,56 @@ def upload_json(r2, key, data):
 
 
 def _find_day_candles_1d(k_infos, target_date_str):
-    """Tìm nến 1d đúng ngày niêm yết (dùng làm fallback nếu không lấy được nến 1h)."""
-    match = None
+    """
+    Tìm nến 1d đúng ngày CỦA EVENT ĐANG XỬ LÝ (target_date_str) — có thể là
+    ngày niêm yết (TGE) hoặc ngày của một đợt airdrop/claim sau đó, vì mỗi
+    event trong all.json có event_time riêng và được gọi hàm này riêng.
+
+    QUAN TRỌNG: KHÔNG được fallback về k_infos[0] khi không tìm thấy đúng
+    ngày — trước đây code làm vậy và nó âm thầm trả về nến ĐẦU TIÊN trong
+    mảng (thường gần ngày niêm yết gốc), khiến các event airdrop lần 2/3
+    của cùng token bị gán nhầm giá của ngày niêm yết đầu tiên. Bug này rất
+    khó phát hiện vì field "date" trong kết quả trông vẫn hợp lệ.
+
+    Thay vào đó: cho phép dung sai ±1 ngày (lệch timezone/UTC-cutoff nhẹ)
+    nhưng phải log rõ khi dùng dung sai, và trả None (không đoán bừa) nếu
+    hoàn toàn không có nến nào gần target_date_str.
+    """
+    try:
+        target_dt = datetime.strptime(target_date_str, '%Y-%m-%d')
+    except Exception:
+        return None
+
+    exact = None
+    nearest = None
+    nearest_diff = None
+
     for k in k_infos:
         try:
-            day = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
+            k_dt = datetime.utcfromtimestamp(int(k[0]) / 1000)
         except Exception:
             continue
+        day = k_dt.strftime('%Y-%m-%d')
         if day == target_date_str:
-            match = k
+            exact = k
             break
-    return match or (k_infos[0] if k_infos else None)
+        diff = abs((k_dt - target_dt).total_seconds())
+        if nearest_diff is None or diff < nearest_diff:
+            nearest_diff = diff
+            nearest = k
+
+    if exact:
+        return exact
+
+    # Dung sai tối đa 1 ngày (86400s) — dùng cho lệch UTC-cutoff nhẹ, KHÔNG
+    # phải để che lấp việc thiếu dữ liệu ở ngày event thực sự xa hơn nhiều.
+    if nearest is not None and nearest_diff is not None and nearest_diff <= 86400:
+        if DEBUG:
+            near_day = datetime.utcfromtimestamp(int(nearest[0]) / 1000).strftime('%Y-%m-%d')
+            print(f"[debug] không có nến đúng ngày {target_date_str}, dùng nến gần nhất {near_day} (lệch {nearest_diff/3600:.1f}h)", end=" ")
+        return nearest
+
+    return None
 
 
 def _compute_vwap(hourly_candles, target_date_str):
@@ -107,16 +146,53 @@ def _compute_vwap(hourly_candles, target_date_str):
     return (num / den) if den > 0 else None
 
 
+def _max_price_since(k_infos, since_date_str):
+    """
+    Giá CAO NHẤT (theo nến high) kể từ since_date_str (ngày của event —
+    listing hoặc airdrop) đến hiện tại. Dùng để trả lời câu hỏi "nếu bán
+    đúng đỉnh thì lời bao nhiêu", đối chiếu với việc bán ngay lúc claim
+    (vwap ngày event) hoặc hold tới hiện tại (giá now).
+
+    Tái sử dụng LUÔN mảng nến 1d đã fetch sẵn cho fetch_listing_price
+    (limit=1000 ngày, thường đã phủ từ lúc token mới list tới hiện tại)
+    — không tốn thêm request nào.
+    """
+    try:
+        since_dt = datetime.strptime(since_date_str, '%Y-%m-%d')
+    except Exception:
+        return None
+
+    best_price, best_date = None, None
+    for k in k_infos:
+        try:
+            k_dt = datetime.utcfromtimestamp(int(k[0]) / 1000)
+        except Exception:
+            continue
+        if k_dt < since_dt:
+            continue
+        high = fa.safe_float(k[2])
+        if high <= 0:
+            continue
+        if best_price is None or high > best_price:
+            best_price = high
+            best_date = k_dt.strftime('%Y-%m-%d')
+
+    return {"price": best_price, "date": best_date} if best_price is not None else None
+
+
 def fetch_listing_price(chain_id, contract, target_date_str):
     """
-    Trả về {vwap, open, close, date} của ngày niêm yết, hoặc None nếu
-    không tìm được dữ liệu nào / token chưa có klines nội bộ.
+    Trả về {vwap, open, close, date, max_since} của ngày event (listing
+    hoặc airdrop), hoặc None nếu không tìm được dữ liệu nào / token chưa
+    có klines nội bộ.
 
-    vwap: giá đại diện chính — tính từ nến 1h trong đúng 24h ngày listing,
+    vwap: giá đại diện chính — tính từ nến 1h trong đúng 24h ngày event,
           phản ánh đúng vùng giá có nhiều volume nhất (không lệch thấp
           như open đơn thuần, không cần volume-profile phức tạp).
     open / close: giữ lại để tham khảo / fallback khi vwap không tính được
                   (ví dụ thiếu dữ liệu 1h, hoặc volume = 0 cả ngày).
+    max_since: {price, date} — giá cao nhất từ ngày event đến hiện tại
+               (để so sánh "bán lúc claim" vs "hold" vs "bán đúng đỉnh").
     """
     if not API_AGG_KLINES:
         if DEBUG: print("[debug] API_AGG_KLINES secret rỗng/chưa truyền vào script", end=" ")
@@ -174,6 +250,7 @@ def fetch_listing_price(chain_id, contract, target_date_str):
             "open":  open_price,
             "close": close_price,
             "date":  actual_date,
+            "max_since": _max_price_since(k_day, actual_date),
         }
 
     return None
@@ -221,11 +298,40 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
         if den <= 0:
             return None
 
+        max_since = None
+        try:
+            res_daily = requests.get(
+                "https://api.binance.com/api/v3/klines",
+                params={
+                    "symbol": f"{symbol}USDT",
+                    "interval": "1d",
+                    "startTime": start_ms,
+                    "limit": 1000,
+                },
+                timeout=10,
+            )
+            if res_daily.status_code == 200:
+                daily_rows = res_daily.json()
+                if isinstance(daily_rows, list) and daily_rows:
+                    best_price, best_date = None, None
+                    for k in daily_rows:
+                        high = float(k[2])
+                        if high <= 0:
+                            continue
+                        if best_price is None or high > best_price:
+                            best_price = high
+                            best_date = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
+                    if best_price is not None:
+                        max_since = {"price": best_price, "date": best_date}
+        except Exception as ex:
+            if DEBUG: print(f"[debug] public spot max_since exception cho {symbol}: {ex}", end=" ")
+
         return {
             "vwap":  num / den,
             "open":  float(rows[0][1]),
             "close": float(rows[-1][4]),
             "date":  target_date_str,
+            "max_since": max_since,
             "source": "public_spot",   # đánh dấu nguồn khác để dễ debug sau này
         }
     except Exception as ex:
