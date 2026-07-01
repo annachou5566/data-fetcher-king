@@ -35,6 +35,11 @@ API_AGG_TICKER   = os.getenv("BINANCE_INTERNAL_AGG_API")
 API_AGG_KLINES   = os.getenv("BINANCE_INTERNAL_KLINES_API")
 API_PUBLIC_SPOT  = "https://api.binance.com/api/v3/exchangeInfo"
 
+# [BẢO MẬT] Render backend (alpha-realtime.onrender.com) yêu cầu header
+# x-api-key khớp với API_SECRET_KEY trên Render, nếu không sẽ trả 401
+# cho MỌI request (trừ "/" và "/health"). GitHub Actions cần secret này.
+RENDER_API_KEY = os.getenv("RENDER_API_KEY")
+
 ACTIVE_SPOT_SYMBOLS = set()
 OLD_DATA_MAP        = {}
 
@@ -63,6 +68,12 @@ def get_session():
             "Origin":  "https://www.binance.com",
             "Accept":  "application/json",
         })
+        # [BẢO MẬT] Gắn x-api-key cho MỌI request của session này, để
+        # mọi lệnh gọi qua PROXY_WORKER_URL (Render) đều qua được middleware
+        # bảo mật, kể cả các hàm tự viết riêng như _binance_public_klines()
+        # trong sync_listing_prices.py — vì chúng đều tái sử dụng session này.
+        if RENDER_API_KEY:
+            s.headers.update({"x-api-key": RENDER_API_KEY})
         _thread_local.session = s
     return _thread_local.session
 
@@ -516,6 +527,11 @@ def fetch_data():
 
     print(f"⚙️  RUN_MODE={RUN_MODE}  workers={MAX_WORKERS}  concurrent={MAX_CONCURRENT}")
     print(f"   Rate: ~{MAX_CONCURRENT} req / 1.2s avg ≈ {MAX_CONCURRENT * 50:.0f} req/phút (an toàn)")
+    print(f"🔑 RENDER_API_KEY configured: {bool(RENDER_API_KEY)}")
+    if not RENDER_API_KEY:
+        print("⚠️  RENDER_API_KEY rỗng — mọi request qua PROXY_WORKER_URL (Render) "
+              "sẽ bị middleware bảo mật trả 401. Thêm secret RENDER_API_KEY trong "
+              "GitHub Actions và khai báo trong workflow YAML.")
 
     r2 = get_r2_client()
     if not r2: return
