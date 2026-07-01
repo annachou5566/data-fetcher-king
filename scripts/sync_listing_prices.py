@@ -18,6 +18,8 @@ import json
 import os
 import time
 import threading
+import random
+import urllib.parse
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -60,7 +62,7 @@ def load_json(r2, key):
         return []
 
 
-
+def upload_json(r2, key, data):
     body = json.dumps(data, default=str, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     r2.put_object(
         Bucket=R2_BUCKET_NAME, Key=key, Body=body,
@@ -290,12 +292,75 @@ def fetch_listing_price(chain_id, contract, target_date_str):
     return None
 
 
+def _binance_public_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
+    """
+    Gọi endpoint public /api/v3/klines của Binance QUA PROXY NỘI BỘ
+    (PROXY_WORKER_URL), tự viết riêng thay vì tái sử dụng fa.fetch_smart(),
+    vì fa.fetch_smart() chỉ chấp nhận response dạng dict có "symbols"
+    (dùng cho exchangeInfo) hoặc "code"=="000000" (dùng cho API aggregator
+    nội bộ) — trong khi /api/v3/klines trả về LIST thô
+    [[open_time, open, high, low, close, volume, ...], ...], không khớp
+    điều kiện nào của fetch_smart nên sẽ luôn bị nó trả về None dù proxy
+    gọi thành công.
+
+    LÝ DO CẦN PROXY: GitHub Actions runner chạy trên datacenter Mỹ/EU —
+    Binance chặn (HTTP 451) traffic public API từ các khu vực này. Gọi
+    thẳng bằng requests.get sẽ fail 100% cho MỌI symbol dù đúng và có
+    cặp USDT thật, không liên quan gì tới "symbol lệch".
+    """
+    target_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval={interval}&limit={limit}"
+    if start_ms is not None:
+        target_url += f"&startTime={start_ms}"
+
+    if not fa.PROXY_WORKER_URL:
+        print(f"  [warn] PROXY_WORKER_URL rỗng — không thể gọi klines public cho {symbol} từ GitHub Actions (bị Binance chặn IP nếu gọi thẳng)")
+        return None
+
+    session   = fa.get_session()
+    is_render = "onrender.com" in (fa.PROXY_WORKER_URL or "")
+
+    for attempt in range(retries):
+        with fa._request_semaphore:
+            time.sleep(random.uniform(0.3, 0.8))
+            try:
+                encoded   = urllib.parse.quote(target_url, safe='')
+                proxy_url = f"{fa.PROXY_WORKER_URL}?url={encoded}"
+                timeout   = 60 if (is_render and attempt == 0) else 30
+                res       = session.get(proxy_url, timeout=timeout)
+
+                if res.status_code == 200:
+                    data = res.json()
+                    if isinstance(data, list):
+                        return data
+                    print(f"  [warn] proxy trả 200 nhưng không phải list cho {symbol} klines: {str(data)[:200]}")
+
+                elif res.status_code in (429, 503):
+                    print(f"  [warn] proxy HTTP {res.status_code} khi lấy klines public {symbol} — nghỉ 30s")
+                    time.sleep(30)
+                    continue
+
+                elif res.status_code == 502:
+                    time.sleep(2)
+
+                else:
+                    print(f"  [warn] proxy HTTP {res.status_code} khi lấy klines public {symbol}")
+
+            except Exception as ex:
+                print(f"  [warn] proxy exception khi lấy klines public {symbol}: {ex}")
+
+        if attempt < retries - 1:
+            time.sleep(1)
+
+    return None
+
+
 def fetch_listing_price_public_spot(symbol, target_date_str):
     """
     Fallback cho token đã graduate khỏi Alpha (spot_listed=true): API klines
     DEX nội bộ thường không còn lịch sử cho nhóm này vì volume đã chuyển hẳn
-    sang CEX order book. Dùng thẳng /api/v3/klines công khai của Binance,
-    không cần proxy nội bộ, vì token đã có cặp XXXUSDT chính thức.
+    sang CEX order book. Dùng /api/v3/klines công khai của Binance qua proxy
+    nội bộ (_binance_public_klines) — bắt buộc phải qua proxy vì Binance
+    chặn IP GitHub Actions khi gọi thẳng.
     """
     try:
         start_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
@@ -303,21 +368,9 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
         return None
 
     try:
-        res = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={
-                "symbol": f"{symbol}USDT",
-                "interval": "1h",
-                "startTime": start_ms,
-                "limit": 24,   # đúng 24h ngày listing
-            },
-            timeout=10,
-        )
-        if res.status_code != 200:
-            if DEBUG: print(f"[debug] public spot klines http {res.status_code} cho {symbol}", end=" ")
-            return None
-        rows = res.json()
+        rows = _binance_public_klines(symbol, "1h", start_ms=start_ms, limit=24)
         if not isinstance(rows, list) or not rows:
+            print(f"  [warn] public spot klines rỗng/lỗi cho {symbol} (kiểm tra proxy hoặc symbol có thật cặp USDT không)")
             return None
 
         num, den = 0.0, 0.0
@@ -335,19 +388,8 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
         max_since = None
         MAX_JUMP_MULT = 50  # cùng ngưỡng sanity-check như _max_price_since ở trên
         try:
-            res_daily = requests.get(
-                "https://api.binance.com/api/v3/klines",
-                params={
-                    "symbol": f"{symbol}USDT",
-                    "interval": "1d",
-                    "startTime": start_ms,
-                    "limit": 1000,
-                },
-                timeout=10,
-            )
-            if res_daily.status_code == 200:
-                daily_rows = res_daily.json()
-                if isinstance(daily_rows, list) and daily_rows:
+            daily_rows = _binance_public_klines(symbol, "1d", start_ms=start_ms, limit=1000)
+            if isinstance(daily_rows, list) and daily_rows:
                     best_price, best_date = None, None
                     prev_close = num / den if den > 0 else None  # neo bằng vwap ngày listing
                     for k in daily_rows:
@@ -396,26 +438,14 @@ def fetch_spot_listing_date(symbol):
     list từ lâu (không cần đợi transition xảy ra sau khi có code này).
     """
     try:
-        res = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={
-                "symbol": f"{symbol}USDT",
-                "interval": "1d",
-                "startTime": 0,   # ép Binance trả về nến sớm nhất hiện có
-                "limit": 1,
-            },
-            timeout=10,
-        )
-        if res.status_code != 200:
-            if DEBUG: print(f"[debug] fetch_spot_listing_date http {res.status_code} cho {symbol}")
-            return None
-        rows = res.json()
+        rows = _binance_public_klines(symbol, "1d", start_ms=0, limit=1)
         if not isinstance(rows, list) or not rows:
+            print(f"  [warn] fetch_spot_listing_date: không lấy được data cho {symbol} (proxy lỗi hoặc chưa có cặp {symbol}USDT)")
             return None
         open_ms = int(rows[0][0])
         return datetime.utcfromtimestamp(open_ms / 1000).strftime('%Y-%m-%d')
     except Exception as ex:
-        if DEBUG: print(f"[debug] fetch_spot_listing_date exception cho {symbol}: {ex}")
+        print(f"  [warn] fetch_spot_listing_date lỗi cho {symbol}: {ex}")
         return None
 
 
