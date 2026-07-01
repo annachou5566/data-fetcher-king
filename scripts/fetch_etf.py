@@ -292,14 +292,31 @@ def fetch_farside_all(session):
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Lấy dòng mới nhất (cuối list sau khi đã reverse)
-        latest = rows[-1]
+        # Lấy dòng mới nhất CÓ DỮ LIỆU THỰC (bỏ qua dòng cuối nếu Farside hiện "–" hết,
+        # vd ngày hôm nay chưa đóng cửa → parse ra {} rỗng → lấy ngày hôm trước thay thế)
+        latest = None
+        for row in reversed(rows):
+            has_data = any(v != 0 for k, v in row.items() if k not in ("date", "TOTAL"))
+            if has_data:
+                latest = row
+                break
+        if not latest:
+            latest = rows[-1]  # fallback: lấy dòng cuối dù rỗng
+
+        # BUG FIX: daily_latest tích lũy KHÔNG RESET giữa các asset → ticker của asset
+        # trước (vd BSOL) bị "thấm" vào latest dict của asset sau (HYP).
+        # Sửa: mỗi asset chỉ đóng góp đúng các ticker của nó vào daily_latest.
+        asset_latest = {}
         print(f"    Latest: {latest.get('date')} → ", end="")
         for ticker, val in latest.items():
             if ticker == "date": continue
             if val != 0:
-                daily_latest[ticker] = val * 1_000_000  # $M → $
-        print({k: v/1e6 for k,v in daily_latest.items() if v != 0})
+                asset_latest[ticker] = val * 1_000_000  # $M → $
+        # Merge vào daily_latest, nhưng KHÔNG overwrite ticker đã có từ asset khác
+        for k, v in asset_latest.items():
+            if k not in daily_latest:
+                daily_latest[k] = v
+        print({k: v/1e6 for k,v in asset_latest.items() if v != 0})
 
         # Convert tất cả flows sang USD (nhân 1M)
         for row in full_history[asset]["rows"]:
