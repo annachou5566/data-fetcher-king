@@ -414,98 +414,25 @@ def _try_vision_klines(symbol, interval, start_ms, limit):
     return rows[:limit]
 
 
-# [SỬA] Cờ cấp module: khi Binance trả 418 (auto-ban IP do gọi quá nhiều/quá
-# nhanh) cho Render, TOÀN BỘ lệnh gọi proxy còn lại trong lần chạy này phải
-# dừng ngay lập tức. Tiếp tục gọi trong lúc đang bị ban sẽ khiến Binance
-# kéo dài thời gian ban (theo docs Binance: escalate dần, có thể tới vài
-# ngày nếu vi phạm lặp lại). Reset về False mỗi lần chạy script mới.
-_render_banned = False
-
-
-def _binance_render_proxy_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
-    """
-    [FALLBACK] Chỉ dùng khi Binance Vision không có dữ liệu (thường là dữ liệu
-    quá mới, file .zip của ngày/tháng đó chưa được Binance publish lên CDN).
-    Gọi qua route GET /api/spot-klines trên Render (đã có sẵn, đã hỗ trợ
-    startTime) — vì gọi thẳng /api/v3/klines từ GitHub Actions bị Binance
-    chặn 451 (datacenter Mỹ/EU).
-    """
-    global _render_banned
-
-    if _render_banned:
-        # Đã bị 418 trước đó trong lần chạy này — không gọi thêm nữa,
-        # tránh kéo dài thời gian ban. Lần chạy 30 phút sau sẽ tự thử lại.
-        return None
-
-    if not fa.PROXY_WORKER_URL:
-        print(f"  [warn] PROXY_WORKER_URL rỗng — không thể gọi klines public cho {symbol} từ GitHub Actions (bị Binance chặn IP nếu gọi thẳng)")
-        return None
-
-    parsed      = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
-    render_base = f"{parsed.scheme}://{parsed.netloc}"
-    proxy_url   = f"{render_base}/api/spot-klines?symbol={symbol}USDT&interval={interval}&limit={limit}"
-    if start_ms is not None:
-        proxy_url += f"&startTime={start_ms}"
-
-    session   = fa.get_session()
-    is_render = "onrender.com" in render_base
-
-    for attempt in range(retries):
-        with fa._request_semaphore:
-            time.sleep(random.uniform(0.3, 0.8))
-            try:
-                timeout = 60 if (is_render and attempt == 0) else 30
-                res     = session.get(proxy_url, timeout=timeout)
-
-                if res.status_code == 200:
-                    data = res.json()
-                    if isinstance(data, list):
-                        return data
-                    print(f"  [warn] proxy trả 200 nhưng không phải list cho {symbol} klines: {str(data)[:200]}")
-
-                elif res.status_code == 418:
-                    # Binance đã auto-ban IP của Render. KHÔNG retry, KHÔNG
-                    # sleep-rồi-thử-lại — dừng hẳn proxy cho phần còn lại
-                    # của lần chạy này để không làm ban bị kéo dài thêm.
-                    print(f"  [warn] proxy HTTP 418 (Binance đã BAN IP Render) khi lấy klines public {symbol} — dừng toàn bộ lệnh gọi Render cho lần chạy này")
-                    _render_banned = True
-                    return None
-
-                elif res.status_code in (429, 503):
-                    print(f"  [warn] proxy HTTP {res.status_code} khi lấy klines public {symbol} — nghỉ 30s")
-                    time.sleep(30)
-                    continue
-
-                elif res.status_code == 502:
-                    time.sleep(2)
-
-                else:
-                    print(f"  [warn] proxy HTTP {res.status_code} khi lấy klines public {symbol}")
-
-            except Exception as ex:
-                print(f"  [warn] proxy exception khi lấy klines public {symbol}: {ex}")
-
-        if attempt < retries - 1:
-            time.sleep(1)
-
-    return None
-
-
 def _binance_public_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
     """
     Lấy klines public Binance cho {symbol}USDT.
 
-    ƯU TIÊN Binance Vision (data.binance.vision) — file tĩnh trên CDN,
-    không giới hạn bandwidth qua Render, không bị 451 geo-block.
-    CHỈ fallback qua proxy Render khi Vision chưa có dữ liệu (dữ liệu quá
-    mới, file .zip chưa được publish) — trường hợp này hiếm với việc lấy
-    giá tại NGÀY LISTING (luôn là quá khứ, ít nhất vài giờ trước khi
-    workflow chạy).
+    [SỬA] KHÔNG còn dùng Render nữa — chỉ dùng Binance Vision
+    (data.binance.vision, file tĩnh trên CDN). Lý do bỏ hẳn Render:
+      - Binance ban theo IP. Render dùng IP chia sẻ (shared pool) — chỉ
+        cần 1-2 request "xui" trúng lúc Binance đang nhạy cảm là dính 418,
+        và ban đó ảnh hưởng LUÔN service Render khác (kể cả fetch_alpha.py
+        cùng chạy trên đó).
+      - Vision đã đủ dùng cho gần như mọi trường hợp thực tế (dữ liệu quá
+        khứ tại ngày listing luôn có sẵn từ lâu, trừ token vừa list trong
+        vài giờ/ngày gần nhất — trường hợp đó đơn giản là chưa có dữ liệu
+        để tính, trả None và tự động thử lại ở lần chạy sau khi Vision đã
+        publish, KHÔNG cần proxy chữa cháy).
+    retries giữ lại trong signature để không phải sửa call site, nhưng
+    không còn dùng (Vision không cần retry theo kiểu rate-limit).
     """
-    rows = _try_vision_klines(symbol, interval, start_ms, limit)
-    if rows:
-        return rows
-    return _binance_render_proxy_klines(symbol, interval, start_ms, limit, retries)
+    return _try_vision_klines(symbol, interval, start_ms, limit)
 
 
 def fetch_listing_price_public_spot(symbol, target_date_str):
@@ -580,27 +507,46 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
 
 
 
-def fetch_spot_listing_date(symbol):
+def fetch_spot_listing_date(symbol, since_date_str=None):
     """
     Lấy NGÀY THẬT token bắt đầu có lệnh khớp trên Binance spot — không đoán,
     không phụ thuộc cron job, không cần tra CMC/CoinGecko.
 
-    Kỹ thuật: gọi klines với startTime=0 → Binance trả về nến CŨ NHẤT đang có
-    (thay vì mặc định là nến gần nhất). open_time của nến đó = ngày cặp
-    SYMBOLUSDT bắt đầu giao dịch, tức ngày spot-listing thật, lấy thẳng từ
-    sổ lệnh gốc — chính xác tới từng ngày, và work ngay cho cả token đã
-    list từ lâu (không cần đợi transition xảy ra sau khi có code này).
+    [SỬA] KHÔNG còn dùng mẹo "startTime=0 → nến cũ nhất" nữa — đó là hành
+    vi riêng của REST API Binance, phải đi qua Render nên có rủi ro bị
+    Binance ban IP (đã dính thật ở lần chạy trước). Thay bằng: dò các file
+    THÁNG (1d) trên Binance Vision, bắt đầu từ tháng token được list Alpha
+    (since_date_str, nếu có) tiến dần về sau — vì ngày spot-listing luôn
+    SAU ngày Alpha-listing nên không cần dò từ gốc lịch sử Binance (2017).
+    File tháng đầu tiên có dữ liệu → nến đầu tiên trong đó chính là ngày
+    spot-listing thật (Binance Vision chỉ có data từ ngày cặp bắt đầu giao
+    dịch, không có nến rỗng phía trước).
     """
     try:
-        rows = _binance_public_klines(symbol, "1d", start_ms=0, limit=1)
-        if not isinstance(rows, list) or not rows:
-            print(f"  [warn] fetch_spot_listing_date: không lấy được data cho {symbol} (proxy lỗi hoặc chưa có cặp {symbol}USDT)")
-            return None
-        open_ms = int(rows[0][0])
-        return datetime.utcfromtimestamp(open_ms / 1000).strftime('%Y-%m-%d')
+        if since_date_str:
+            start_dt = datetime.strptime(since_date_str[:10], "%Y-%m-%d")
+        else:
+            start_dt = datetime.utcnow() - timedelta(days=730)  # không có hint: lùi tối đa 2 năm
+
+        cur = start_dt.replace(day=1)
+        today = datetime.utcnow()
+        months_tried = 0
+        while cur <= today and months_tried < 36:  # chặn tối đa 3 năm tìm kiếm
+            ym = cur.strftime("%Y-%m")
+            part = _binance_vision_monthly_klines(symbol, "1d", ym)
+            if part:
+                part.sort(key=lambda r: float(r[0]))
+                open_ms = int(float(part[0][0]))
+                return datetime.utcfromtimestamp(open_ms / 1000).strftime('%Y-%m-%d')
+            months_tried += 1
+            cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+        print(f"  [warn] fetch_spot_listing_date: không tìm thấy dữ liệu Vision cho {symbol} (chưa có cặp {symbol}USDT hoặc chưa publish)")
+        return None
     except Exception as ex:
         print(f"  [warn] fetch_spot_listing_date lỗi cho {symbol}: {ex}")
         return None
+
 
 
 
@@ -666,8 +612,9 @@ def _process_spot_one(e, idx, total):
     contract = e.get("contract_address")
     chain_id = e.get("chain_id")
     symbol   = e.get("symbol") or e.get("token") or "?"
+    alpha_date = (e.get("event_time") or e.get("date") or "")[:10] or None
 
-    spot_date = fetch_spot_listing_date(symbol)
+    spot_date = fetch_spot_listing_date(symbol, since_date_str=alpha_date)
     if not spot_date:
         print(f"  [spot {idx}/{total}] {symbol}... không tìm được ngày spot-listing (symbol lệch/chưa có cặp USDT?)", flush=True)
         return e, None, None
@@ -727,13 +674,7 @@ def enrich_spot_listing_prices(events):
 
 def main():
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
-    print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}")
-    print(f"🔑 RENDER_API_KEY configured: {bool(fa.RENDER_API_KEY)}")
-    if not fa.RENDER_API_KEY:
-        print("⚠️  RENDER_API_KEY rỗng — mọi request qua PROXY_WORKER_URL (Render) "
-              "sẽ bị middleware bảo mật trả 401. Thêm secret RENDER_API_KEY trong "
-              "GitHub Actions (giá trị = API_SECRET_KEY trên Render) và khai báo "
-              "'env: RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}' trong workflow YAML.")
+    print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}  (chỉ dùng cho Alpha aggregator API — klines public đã chuyển hẳn sang Binance Vision, KHÔNG còn qua Render)")
     if DEBUG:
         print(f"   API_AGG_KLINES = {API_AGG_KLINES}")
         print(f"   PROXY_WORKER_URL = {fa.PROXY_WORKER_URL}")
