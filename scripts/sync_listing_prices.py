@@ -42,6 +42,12 @@ API_AGG_KLINES = os.getenv("BINANCE_INTERNAL_KLINES_API")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
+# [SỬA] fetch_listing_price chạy đa luồng (ThreadPoolExecutor) — lý do fail
+# phải lưu theo TỪNG THREAD riêng (threading.local), KHÔNG được gắn lên
+# function object dùng chung, nếu không các luồng sẽ ghi đè lẫn nhau và
+# log sẽ hiện SAI lý do (của token khác) cho từng token.
+_fail_reason_local = threading.local()
+
 # Một số chain non-EVM dùng prefix CT_ trong API nội bộ (giống logic trong fetch_alpha.py)
 NO_LOWER_CHAINS = {"CT_501", "CT_784", "501", "784"}
 
@@ -233,16 +239,20 @@ def fetch_listing_price(chain_id, contract, target_date_str):
                (để so sánh "bán lúc claim" vs "hold" vs "bán đúng đỉnh").
     """
     if not API_AGG_KLINES:
-        if DEBUG: print("[debug] API_AGG_KLINES secret rỗng/chưa truyền vào script", end=" ")
+        _fail_reason_local.value = "API_AGG_KLINES secret rỗng/chưa truyền vào script"
+        if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
         return None
     if not chain_id or not contract:
-        if DEBUG: print(f"[debug] thiếu chain_id={chain_id!r} hoặc contract={contract!r}", end=" ")
+        _fail_reason_local.value = f"thiếu chain_id={chain_id!r} hoặc contract={contract!r} trong event data"
+        if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
         return None
 
     addr = str(contract)
     chain_variants = [str(chain_id)]
     if str(chain_id) in ("501", "784"):
         chain_variants.append(f"CT_{chain_id}")  # thử biến thể Solana/Sui
+
+    fail_reason = "không có chain nào để thử (chain_id/contract rỗng?)"
 
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
@@ -252,20 +262,24 @@ def fetch_listing_price(chain_id, contract, target_date_str):
         try:
             res_day = fa.fetch_smart(f"{base}&interval=1d&limit=1000", retries=2)
         except Exception as ex:
-            if DEBUG: print(f"[debug] fetch_smart exception (1d, chain={cid}): {ex}", end=" ")
+            fail_reason = f"fetch_smart exception (1d, chain={cid}): {ex}"
+            if DEBUG: print(f"[debug] {fail_reason}", end=" ")
             res_day = None
 
         if res_day is None:
+            fail_reason = f"API aggregator không trả dữ liệu (1d, chain={cid}) — proxy lỗi, hoặc token/contract không được API nhận diện"
             if DEBUG: print(f"[debug] fetch_smart trả None (1d, chain={cid}) — proxy/secret/network lỗi", end=" ")
             continue
 
         k_day = (res_day.get("data") or {}).get("klineInfos")
         if not k_day:
+            fail_reason = f"API trả về NHƯNG không có klineInfos (chain={cid}) — token/contract này API aggregator không có data (dù token có thể vẫn đang sống trên Alpha)"
             if DEBUG: print(f"[debug] res_day có trả về nhưng không có klineInfos (chain={cid}). keys={list(res_day.keys())}", end=" ")
             continue
 
         day_match = _find_day_candles_1d(k_day, target_date_str)
         if not day_match:
+            fail_reason = f"API có {len(k_day)} nến ngày (chain={cid}) nhưng KHÔNG khớp ngày {target_date_str} — có thể ngoài phạm vi lịch sử API giữ, hoặc target_date_str sai"
             if DEBUG: print(f"[debug] có {len(k_day)} nến nhưng không khớp ngày {target_date_str}", end=" ")
             continue
 
@@ -292,10 +306,8 @@ def fetch_listing_price(chain_id, contract, target_date_str):
             "max_since": _max_price_since(k_day, actual_date, ref_price=ref_price),
         }
 
+    _fail_reason_local.value = fail_reason
     return None
-
-
-BINANCE_VISION_BASE = "https://data.binance.vision"
 
 
 def _download_vision_zip(url, retries=2):
@@ -587,6 +599,7 @@ def _process_one(e, idx, total):
     symbol = e.get("symbol") or e.get("token") or "?"
 
     result = fetch_listing_price(chain_id, contract, date_str)
+    dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
     if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
         # [SỬA] Token đã graduate khỏi Alpha — trước đây dùng NHẦM date_str
@@ -606,8 +619,10 @@ def _process_one(e, idx, total):
             if result:
                 e["spot_listed_at"] = spot_date
 
-    tag = f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})" if result else "no data (DEX pair not found)"
+    tag = f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})" if result else "no data"
     print(f"  [{idx}/{total}] {symbol} ({date_str})... {tag}", flush=True)
+    if not result and dex_fail_reason:
+        print(f"      ↳ lý do DEX/aggregator fail: {dex_fail_reason}", flush=True)
 
     return e, result
 
