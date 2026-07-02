@@ -589,8 +589,18 @@ def _process_one(e, idx, total):
     result = fetch_listing_price(chain_id, contract, date_str)
 
     if not result and e.get("spot_listed"):
-        # Token đã graduate khỏi Alpha — thử nguồn CEX công khai
-        result = fetch_listing_price_public_spot(symbol, date_str)
+        # [SỬA] Token đã graduate khỏi Alpha — trước đây dùng NHẦM date_str
+        # (ngày list Alpha) để tra giá spot, trong khi cặp SYMBOLUSDT
+        # thường chỉ bắt đầu có nến THẬT SỰ nhiều tuần/tháng SAU đó → luôn
+        # "rỗng" dù symbol đúng và có cặp thật (đã xác minh HEMI, SAPIEN,
+        # HOLO đều đang giao dịch spot thật trên Binance). Giờ tìm NGÀY
+        # SPOT-LISTING THẬT trước (từ chính klines Binance), rồi mới lấy
+        # giá đúng ngày đó.
+        spot_date = fetch_spot_listing_date(symbol, since_date_str=date_str)
+        if spot_date:
+            result = fetch_listing_price_public_spot(symbol, spot_date)
+            if result:
+                e["spot_listed_at"] = spot_date
 
     tag = f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})" if result else "no data (DEX pair not found)"
     print(f"  [{idx}/{total}] {symbol} ({date_str})... {tag}", flush=True)
