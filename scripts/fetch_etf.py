@@ -306,17 +306,25 @@ def fetch_farside_all(session):
         # BUG FIX: daily_latest tích lũy KHÔNG RESET giữa các asset → ticker của asset
         # trước (vd BSOL) bị "thấm" vào latest dict của asset sau (HYP).
         # Sửa: mỗi asset chỉ đóng góp đúng các ticker của nó vào daily_latest.
+        # BUG FIX (nghiêm trọng): trước đây "if val != 0" coi flow=$0.0 là "thiếu dữ liệu"
+        # và bỏ qua ticker đó khỏi daily_latest. Ở run(), khi daily_flows.get(t) trả về
+        # None, code fallback dùng flow của LẦN CHẠY TRƯỚC (prev["flow"], cache trên R2).
+        # Hậu quả: mỗi khi 1 quỹ nhỏ (BITB/BRRR/BTCW...) có ngày flow=0 THẬT (không giao
+        # dịch), giá trị cache CŨ (có thể là rác từ tận ngày ETF ra mắt, do bug reverse()
+        # trước đây) bị "hồi sinh" và đóng băng mãi — trong khi các quỹ lớn (IBIT, FBTC)
+        # hầu như ngày nào cũng flow≠0 nên không bao giờ dính, luôn cập nhật đúng.
+        # → Kết quả: bảng hiển thị 2 nhóm ticker lệch nhau nhiều tháng/năm dữ liệu.
+        # Sửa: flow=0 LÀ dữ liệu thật, phải ghi vào daily_latest luôn, không bỏ qua.
         asset_latest = {}
         print(f"    Latest: {latest.get('date')} → ", end="")
         for ticker, val in latest.items():
-            if ticker == "date": continue
-            if val != 0:
-                asset_latest[ticker] = val * 1_000_000  # $M → $
+            if ticker in ("date", "TOTAL"): continue
+            asset_latest[ticker] = val * 1_000_000  # $M → $ (bao gồm cả giá trị 0)
         # Merge vào daily_latest, nhưng KHÔNG overwrite ticker đã có từ asset khác
         for k, v in asset_latest.items():
             if k not in daily_latest:
                 daily_latest[k] = v
-        print({k: v/1e6 for k,v in asset_latest.items() if v != 0})
+        print({k: v/1e6 for k,v in asset_latest.items()})
 
         # Convert tất cả flows sang USD (nhân 1M)
         for row in full_history[asset]["rows"]:
