@@ -414,6 +414,14 @@ def _try_vision_klines(symbol, interval, start_ms, limit):
     return rows[:limit]
 
 
+# [SỬA] Cờ cấp module: khi Binance trả 418 (auto-ban IP do gọi quá nhiều/quá
+# nhanh) cho Render, TOÀN BỘ lệnh gọi proxy còn lại trong lần chạy này phải
+# dừng ngay lập tức. Tiếp tục gọi trong lúc đang bị ban sẽ khiến Binance
+# kéo dài thời gian ban (theo docs Binance: escalate dần, có thể tới vài
+# ngày nếu vi phạm lặp lại). Reset về False mỗi lần chạy script mới.
+_render_banned = False
+
+
 def _binance_render_proxy_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
     """
     [FALLBACK] Chỉ dùng khi Binance Vision không có dữ liệu (thường là dữ liệu
@@ -422,6 +430,13 @@ def _binance_render_proxy_klines(symbol, interval, start_ms=None, limit=1000, re
     startTime) — vì gọi thẳng /api/v3/klines từ GitHub Actions bị Binance
     chặn 451 (datacenter Mỹ/EU).
     """
+    global _render_banned
+
+    if _render_banned:
+        # Đã bị 418 trước đó trong lần chạy này — không gọi thêm nữa,
+        # tránh kéo dài thời gian ban. Lần chạy 30 phút sau sẽ tự thử lại.
+        return None
+
     if not fa.PROXY_WORKER_URL:
         print(f"  [warn] PROXY_WORKER_URL rỗng — không thể gọi klines public cho {symbol} từ GitHub Actions (bị Binance chặn IP nếu gọi thẳng)")
         return None
@@ -447,6 +462,14 @@ def _binance_render_proxy_klines(symbol, interval, start_ms=None, limit=1000, re
                     if isinstance(data, list):
                         return data
                     print(f"  [warn] proxy trả 200 nhưng không phải list cho {symbol} klines: {str(data)[:200]}")
+
+                elif res.status_code == 418:
+                    # Binance đã auto-ban IP của Render. KHÔNG retry, KHÔNG
+                    # sleep-rồi-thử-lại — dừng hẳn proxy cho phần còn lại
+                    # của lần chạy này để không làm ban bị kéo dài thêm.
+                    print(f"  [warn] proxy HTTP 418 (Binance đã BAN IP Render) khi lấy klines public {symbol} — dừng toàn bộ lệnh gọi Render cho lần chạy này")
+                    _render_banned = True
+                    return None
 
                 elif res.status_code in (429, 503):
                     print(f"  [warn] proxy HTTP {res.status_code} khi lấy klines public {symbol} — nghỉ 30s")
