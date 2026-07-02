@@ -150,13 +150,26 @@ def minify_token_data(token):
 # ─────────────────────────────────────────────
 # 5. FETCH SMART — có Semaphore + Jitter + 429 Backoff
 # ─────────────────────────────────────────────
+# [SỬA] Cờ cấp module: khi Binance trả 418 (auto-ban IP) cho Render, dừng
+# ngay lệnh gọi PROXY (không phải toàn bộ fetch_smart — vẫn còn nhánh gọi
+# thẳng Binance không qua proxy) cho phần còn lại của lần chạy này, để
+# không kéo dài thời gian ban. Binance ban theo IP, nên nếu script
+# sync_listing_prices.py chạy song song và cũng dính 418, IP Render đó
+# coi như đang bị ban chung — cờ này giúp fetch_alpha.py không góp phần
+# kéo dài ban đó thêm.
+_proxy_banned = False
+
+
 def fetch_smart(target_url, retries=3):
     """
     Gọi Binance internal API qua proxy.
     - Semaphore giới hạn đồng thời tối đa MAX_CONCURRENT requests
     - Jitter 0.3–0.8s trước mỗi request → trông giống human traffic
     - 429/503 → sleep 30s rồi retry (tránh bị ban IP proxy)
+    - 418 → Binance đã ban IP Render rồi, dừng gọi proxy hẳn (không retry)
     """
+    global _proxy_banned
+
     if not target_url or "None" in target_url:
         return None
 
@@ -169,8 +182,8 @@ def fetch_smart(target_url, retries=3):
             # Jitter: thêm delay ngẫu nhiên 0.3–0.8s để tránh burst đồng loạt
             time.sleep(random.uniform(0.3, 0.8))
 
-            # --- Thử qua Proxy trước ---
-            if PROXY_WORKER_URL:
+            # --- Thử qua Proxy trước (bỏ qua nếu đã biết đang bị ban) ---
+            if PROXY_WORKER_URL and not _proxy_banned:
                 try:
                     encoded    = urllib.parse.quote(target_url, safe='')
                     proxy_url  = f"{PROXY_WORKER_URL}?url={encoded}"
@@ -182,6 +195,10 @@ def fetch_smart(target_url, retries=3):
                         if isinstance(data, dict):
                             if "symbols" in data:            return data
                             if data.get("code") == "000000": return data
+
+                    elif res.status_code == 418:
+                        print(f"\n⚠️ HTTP 418 — Binance đã BAN IP Render, dừng gọi proxy cho phần còn lại của lần chạy này", flush=True)
+                        _proxy_banned = True
 
                     elif res.status_code in (429, 503):
                         # Rate-limit hoặc overload: dừng toàn bộ 30s
