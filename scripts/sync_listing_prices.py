@@ -321,13 +321,42 @@ def _download_vision_zip(url, retries=2):
     return None
 
 
+def _normalize_kline_row_ts(r):
+    """
+    Chuẩn hoá open_time (r[0]) và close_time (r[6], nếu có) về MILI-giây.
+
+    [SỬA] Từ 1/1/2025, Binance Vision xuất timestamp ở MICRO-giây (16 chữ
+    số) thay vì MILI-giây (13 chữ số) như REST API cũ:
+    https://github.com/binance/binance-public-data
+    ("The timestamp for SPOT Data from January 1st 2025 onwards will be
+    in microseconds.")
+
+    Không chuẩn hoá sẽ khiến int(ts)/1000 ra sai đơn vị 1000 lần →
+    datetime.utcfromtimestamp() nhận giá trị khổng lồ → "year XXXXX is
+    out of range". Ngưỡng 1e14 phân biệt an toàn: epoch mili-giây cho
+    mọi ngày thực tế (1970–2100) luôn < 5e12, còn epoch micro-giây từ
+    2025 trở đi luôn > 1.7e15 — không thể nhầm lẫn.
+    """
+    try:
+        ot = float(r[0])
+        if ot > 1e14:
+            r[0] = str(ot / 1000.0)
+        if len(r) > 6:
+            ct = float(r[6])
+            if ct > 1e14:
+                r[6] = str(ct / 1000.0)
+    except (ValueError, IndexError):
+        pass
+    return r
+
+
 def _parse_vision_klines_csv(zip_bytes):
     """
     Giải nén + parse CSV klines từ Binance Vision thành list dạng
     [[open_time, open, high, low, close, volume, close_time, ...], ...]
-    — CÙNG THỨ TỰ CỘT như klines trả về từ REST API /api/v3/klines,
-    nên toàn bộ code xử lý phía sau (VWAP, max-price-since,...) dùng
-    index k[2]/k[3]/k[4]/k[5] không cần đổi gì.
+    — CÙNG THỨ TỰ CỘT và CÙNG ĐƠN VỊ (mili-giây) như klines trả về từ
+    REST API /api/v3/klines, nên toàn bộ code xử lý phía sau (VWAP,
+    max-price-since,...) dùng index k[2]/k[3]/k[4]/k[5] không cần đổi gì.
     """
     rows = []
     try:
@@ -343,7 +372,7 @@ def _parse_vision_klines_csv(zip_bytes):
                         float(r[0])  # bỏ dòng header (nếu có) không phải số
                     except ValueError:
                         continue
-                    rows.append(r)
+                    rows.append(_normalize_kline_row_ts(r))
     except Exception:
         return []
     return rows
