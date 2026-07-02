@@ -21,8 +21,11 @@ import threading
 import random
 import urllib.parse
 import requests
+import zipfile
+import io
+import csv as _csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import boto3
 from botocore.config import Config
@@ -292,41 +295,152 @@ def fetch_listing_price(chain_id, contract, target_date_str):
     return None
 
 
-def _binance_public_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
-    """
-    Gọi endpoint public /api/v3/klines của Binance QUA PROXY NỘI BỘ
-    (PROXY_WORKER_URL), tự viết riêng thay vì tái sử dụng fa.fetch_smart(),
-    vì fa.fetch_smart() chỉ chấp nhận response dạng dict có "symbols"
-    (dùng cho exchangeInfo) hoặc "code"=="000000" (dùng cho API aggregator
-    nội bộ) — trong khi /api/v3/klines trả về LIST thô
-    [[open_time, open, high, low, close, volume, ...], ...], không khớp
-    điều kiện nào của fetch_smart nên sẽ luôn bị nó trả về None dù proxy
-    gọi thành công.
+BINANCE_VISION_BASE = "https://data.binance.vision"
 
-    LÝ DO CẦN PROXY: GitHub Actions runner chạy trên datacenter Mỹ/EU —
-    Binance chặn (HTTP 451) traffic public API từ các khu vực này. Gọi
-    thẳng bằng requests.get sẽ fail 100% cho MỌI symbol dù đúng và có
-    cặp USDT thật, không liên quan gì tới "symbol lệch".
-    """
-    target_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval={interval}&limit={limit}"
-    if start_ms is not None:
-        target_url += f"&startTime={start_ms}"
 
+def _download_vision_zip(url, retries=2):
+    """
+    Tải trực tiếp 1 file zip klines từ Binance Vision.
+    Đây là file TĨNH trên CDN (S3), KHÔNG phải REST API — nên:
+      - KHÔNG bị Binance chặn geo (451) như /api/v3/klines
+      - KHÔNG cần proxy qua Render → KHÔNG tốn bandwidth Render
+      - KHÔNG cần x-api-key
+    Trả về bytes nếu có, None nếu file chưa được publish (404, bình thường
+    với dữ liệu quá mới — ví dụ hôm nay/tháng này) hoặc lỗi mạng.
+    """
+    for attempt in range(retries):
+        try:
+            res = requests.get(url, timeout=20)
+            if res.status_code == 200:
+                return res.content
+            if res.status_code == 404:
+                return None  # chưa publish — không phải lỗi, cứ fallback proxy
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return None
+
+
+def _parse_vision_klines_csv(zip_bytes):
+    """
+    Giải nén + parse CSV klines từ Binance Vision thành list dạng
+    [[open_time, open, high, low, close, volume, close_time, ...], ...]
+    — CÙNG THỨ TỰ CỘT như klines trả về từ REST API /api/v3/klines,
+    nên toàn bộ code xử lý phía sau (VWAP, max-price-since,...) dùng
+    index k[2]/k[3]/k[4]/k[5] không cần đổi gì.
+    """
+    rows = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            name = zf.namelist()[0]
+            with zf.open(name) as f:
+                text = io.TextIOWrapper(f, encoding='utf-8')
+                reader = _csv.reader(text)
+                for r in reader:
+                    if not r or not r[0].strip():
+                        continue
+                    try:
+                        float(r[0])  # bỏ dòng header (nếu có) không phải số
+                    except ValueError:
+                        continue
+                    rows.append(r)
+    except Exception:
+        return []
+    return rows
+
+
+def _binance_vision_daily_klines(symbol, interval, date_str):
+    """1 file = 1 ngày. Dùng cho khung nhỏ (1h,...) — ví dụ VWAP 24h tại ngày listing."""
+    pair = f"{symbol}USDT"
+    url = f"{BINANCE_VISION_BASE}/data/spot/daily/klines/{pair}/{interval}/{pair}-{interval}-{date_str}.zip"
+    content = _download_vision_zip(url)
+    return _parse_vision_klines_csv(content) if content else None
+
+
+def _binance_vision_monthly_klines(symbol, interval, year_month):
+    """1 file = 1 tháng. Dùng cho khung lớn (1d,...) — tránh phải tải hàng trăm file ngày."""
+    pair = f"{symbol}USDT"
+    url = f"{BINANCE_VISION_BASE}/data/spot/monthly/klines/{pair}/{interval}/{pair}-{interval}-{year_month}.zip"
+    content = _download_vision_zip(url)
+    return _parse_vision_klines_csv(content) if content else None
+
+
+def _try_vision_klines(symbol, interval, start_ms, limit):
+    """
+    Cố lấy klines từ Binance Vision trước. Trả None nếu không đủ dữ liệu
+    (ví dụ khoảng thời gian quá mới, file chưa publish) để caller fallback
+    sang proxy Render.
+    """
+    if start_ms is None:
+        return None  # Vision cần biết đúng ngày/tháng — không hỗ trợ kiểu "N nến gần nhất tính từ giờ"
+    if start_ms <= 0:
+        # Trick "startTime=0 → nến sớm nhất" chỉ REST API Binance hỗ trợ,
+        # Vision không có cách tương đương (không muốn dò từ 1970) → bỏ
+        # qua Vision, để caller fallback thẳng qua proxy Render.
+        return None
+
+    start_dt = datetime.utcfromtimestamp(start_ms / 1000)
+    rows = []
+
+    if interval == "1d":
+        # Gom các file THÁNG từ tháng listing tới tháng hiện tại
+        cur = start_dt.replace(day=1)
+        today = datetime.utcnow()
+        months_tried = 0
+        while cur <= today and months_tried < 36:  # chặn tối đa 3 năm, tránh vòng lặp vô hạn
+            ym = cur.strftime("%Y-%m")
+            part = _binance_vision_monthly_klines(symbol, interval, ym)
+            if part:
+                rows.extend(part)
+            months_tried += 1
+            cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)  # sang tháng kế tiếp
+    else:
+        # Gom các file NGÀY, đủ số ngày để phủ hết "limit" nến của khung nhỏ
+        cur = start_dt.date()
+        days_needed = max(1, (limit // 24) + 2)
+        for _ in range(days_needed):
+            part = _binance_vision_daily_klines(symbol, interval, cur.strftime("%Y-%m-%d"))
+            if part:
+                rows.extend(part)
+            cur += timedelta(days=1)
+
+    if not rows:
+        return None
+
+    rows = [r for r in rows if float(r[0]) >= start_ms]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: float(r[0]))
+    return rows[:limit]
+
+
+def _binance_render_proxy_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
+    """
+    [FALLBACK] Chỉ dùng khi Binance Vision không có dữ liệu (thường là dữ liệu
+    quá mới, file .zip của ngày/tháng đó chưa được Binance publish lên CDN).
+    Gọi qua route GET /api/spot-klines trên Render (đã có sẵn, đã hỗ trợ
+    startTime) — vì gọi thẳng /api/v3/klines từ GitHub Actions bị Binance
+    chặn 451 (datacenter Mỹ/EU).
+    """
     if not fa.PROXY_WORKER_URL:
         print(f"  [warn] PROXY_WORKER_URL rỗng — không thể gọi klines public cho {symbol} từ GitHub Actions (bị Binance chặn IP nếu gọi thẳng)")
         return None
 
+    parsed      = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
+    render_base = f"{parsed.scheme}://{parsed.netloc}"
+    proxy_url   = f"{render_base}/api/spot-klines?symbol={symbol}USDT&interval={interval}&limit={limit}"
+    if start_ms is not None:
+        proxy_url += f"&startTime={start_ms}"
+
     session   = fa.get_session()
-    is_render = "onrender.com" in (fa.PROXY_WORKER_URL or "")
+    is_render = "onrender.com" in render_base
 
     for attempt in range(retries):
         with fa._request_semaphore:
             time.sleep(random.uniform(0.3, 0.8))
             try:
-                encoded   = urllib.parse.quote(target_url, safe='')
-                proxy_url = f"{fa.PROXY_WORKER_URL}?url={encoded}"
-                timeout   = 60 if (is_render and attempt == 0) else 30
-                res       = session.get(proxy_url, timeout=timeout)
+                timeout = 60 if (is_render and attempt == 0) else 30
+                res     = session.get(proxy_url, timeout=timeout)
 
                 if res.status_code == 200:
                     data = res.json()
@@ -352,6 +466,23 @@ def _binance_public_klines(symbol, interval, start_ms=None, limit=1000, retries=
             time.sleep(1)
 
     return None
+
+
+def _binance_public_klines(symbol, interval, start_ms=None, limit=1000, retries=2):
+    """
+    Lấy klines public Binance cho {symbol}USDT.
+
+    ƯU TIÊN Binance Vision (data.binance.vision) — file tĩnh trên CDN,
+    không giới hạn bandwidth qua Render, không bị 451 geo-block.
+    CHỈ fallback qua proxy Render khi Vision chưa có dữ liệu (dữ liệu quá
+    mới, file .zip chưa được publish) — trường hợp này hiếm với việc lấy
+    giá tại NGÀY LISTING (luôn là quá khứ, ít nhất vài giờ trước khi
+    workflow chạy).
+    """
+    rows = _try_vision_klines(symbol, interval, start_ms, limit)
+    if rows:
+        return rows
+    return _binance_render_proxy_klines(symbol, interval, start_ms, limit, retries)
 
 
 def fetch_listing_price_public_spot(symbol, target_date_str):
