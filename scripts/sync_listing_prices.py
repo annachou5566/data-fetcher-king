@@ -588,7 +588,7 @@ def _process_one(e, idx, total):
 
     result = fetch_listing_price(chain_id, contract, date_str)
 
-    if not result and e.get("spot_listed"):
+    if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
         # [SỬA] Token đã graduate khỏi Alpha — trước đây dùng NHẦM date_str
         # (ngày list Alpha) để tra giá spot, trong khi cặp SYMBOLUSDT
         # thường chỉ bắt đầu có nến THẬT SỰ nhiều tuần/tháng SAU đó → luôn
@@ -596,6 +596,10 @@ def _process_one(e, idx, total):
         # HOLO đều đang giao dịch spot thật trên Binance). Giờ tìm NGÀY
         # SPOT-LISTING THẬT trước (từ chính klines Binance), rồi mới lấy
         # giá đúng ngày đó.
+        # listing_price_unavailable=True nghĩa là đã đối chiếu API Alpha
+        # và xác nhận token CHẾT HẲN (fullyDelisted, chưa từng lên CEX) —
+        # bỏ qua nhánh này vì chắc chắn Binance spot sẽ không có gì, tránh
+        # tốn request/thời gian dò ngày spot-listing vô ích.
         spot_date = fetch_spot_listing_date(symbol, since_date_str=date_str)
         if spot_date:
             result = fetch_listing_price_public_spot(symbol, spot_date)
@@ -684,6 +688,7 @@ def enrich_spot_listing_prices(events):
         e for e in events
         if e.get("spot_listed")
         and not e.get("spot_listing_price")
+        and not e.get("listing_price_unavailable")
         and e.get("contract_address")
         and (e.get("symbol") or e.get("token"))
     ]
@@ -711,6 +716,81 @@ def enrich_spot_listing_prices(events):
     return filled
 
 
+ALPHA_TOKEN_LIST_URL = "https://www.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list"
+
+
+def fetch_alpha_token_status_map():
+    """
+    Đối chiếu với danh sách token Alpha THẬT từ chính Binance — để phân
+    biệt rạch ròi 2 trường hợp "no data" hoàn toàn khác nhau, mà log text
+    (tên tag "DEX pair not found") không phân biệt được:
+
+    1. Token đã fullyDelisted khỏi Alpha NHƯNG listingCex=true → đã
+       GRADUATE lên spot thật (rời Alpha vì THÀNH CÔNG, không phải chết).
+       Ví dụ thực tế: AIGENSYN, GENIUS, CHIP đều đúng case này.
+    2. Token đã fullyDelisted khỏi Alpha VÀ listingCex=false → CHẾT THẬT
+       (rút khỏi Alpha, chưa từng lên spot) — sẽ KHÔNG BAO GIỜ có klines
+       Binance nào cả, retry mỗi 30 phút chỉ tốn request vô ích.
+
+    Trả về dict {SYMBOL: {"listingCex": bool, "fullyDelisted": bool}}.
+    Trả về {} nếu lỗi mạng/API — code gọi PHẢI coi thiếu dữ liệu là
+    "chưa biết", tuyệt đối KHÔNG suy diễn thành "token chết", vì endpoint
+    này chưa chắc đầy đủ 100% (không rõ có giới hạn/xoay vòng dữ liệu).
+    """
+    try:
+        res = requests.get(
+            ALPHA_TOKEN_LIST_URL, timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        if res.status_code != 200:
+            print(f"  [warn] fetch_alpha_token_status_map: HTTP {res.status_code}")
+            return {}
+        payload = res.json()
+        data = payload.get("data") or []
+        out = {}
+        for t in data:
+            sym = (t.get("symbol") or "").upper()
+            if not sym:
+                continue
+            out[sym] = {
+                "listingCex": bool(t.get("listingCex")),
+                "fullyDelisted": bool(t.get("fullyDelisted")),
+            }
+        return out
+    except Exception as ex:
+        print(f"  [warn] fetch_alpha_token_status_map lỗi (bỏ qua, coi như chưa biết): {ex}")
+        return {}
+
+
+def apply_alpha_status(events, status_map):
+    """
+    Mutates events in-place dựa trên status_map (từ fetch_alpha_token_status_map).
+    Trả về (số token tự phát hiện graduate lên spot, số token đánh dấu chết hẳn).
+    Chỉ xử lý event CHƯA có listing_price — không đụng vào event đã xong.
+    """
+    marked_spot, marked_dead = 0, 0
+    if not status_map:
+        return 0, 0
+
+    for e in events:
+        if e.get("listing_price"):
+            continue
+        sym = (e.get("symbol") or e.get("token") or "").upper()
+        st = status_map.get(sym)
+        if not st:
+            continue  # không có trong danh sách API -> chưa biết, không suy diễn
+
+        if st["fullyDelisted"] and st["listingCex"] and not e.get("spot_listed"):
+            e["spot_listed"] = True
+            marked_spot += 1
+        elif st["fullyDelisted"] and not st["listingCex"]:
+            if not e.get("listing_price_unavailable"):
+                e["listing_price_unavailable"] = True
+                marked_dead += 1
+
+    return marked_spot, marked_dead
+
+
 def main():
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
     print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}  (chỉ dùng cho Alpha aggregator API — klines public đã chuyển hẳn sang Binance Vision, KHÔNG còn qua Render)")
@@ -726,6 +806,12 @@ def main():
     if not all_events:
         print("⚠️  No events found — nothing to backfill.")
         return
+
+    print("⏳ Đối chiếu với danh sách token Alpha thật từ Binance...")
+    status_map = fetch_alpha_token_status_map()
+    marked_spot, marked_dead = apply_alpha_status(all_events, status_map)
+    print(f"   Đối chiếu {len(status_map)} token — tự phát hiện {marked_spot} token đã graduate lên spot, "
+          f"đánh dấu {marked_dead} token đã chết hẳn (fullyDelisted, chưa từng lên CEX — sẽ không retry nữa)")
 
     filled = enrich_events(all_events)
     print(f"\n✅ Backfilled {filled} new listing prices")
