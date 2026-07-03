@@ -37,10 +37,15 @@ def load_legacy_snapshots(r2, bucket):
     return snapshots
 
 
-def group_by_date(snapshots):
-    """Gom snapshot theo ngày UTC, mỗi snapshot → 8 record long-format."""
+def group_by_date(snapshots, skip_date=None):
+    """Gom snapshot theo ngày UTC, mỗi snapshot → 8 record long-format.
+    skip_date (nếu có) sẽ bị loại — dùng để tránh đụng vào ngày hôm nay,
+    vì bot live (fetch_p2p.py) đang ghi trực tiếp vào đúng file đó mỗi 10
+    phút; nếu migrate cũng ghi cùng lúc sẽ có race condition (2 job chạy
+    song song trong cùng workflow, không có thứ tự trước-sau)."""
     by_date = defaultdict(list)
     skipped = 0
+    skipped_today = 0
     for snap in snapshots:
         if not isinstance(snap, list) or len(snap) < 9:
             skipped += 1
@@ -51,9 +56,15 @@ def group_by_date(snapshots):
         except Exception:
             skipped += 1
             continue
+        if skip_date and date_str == skip_date:
+            skipped_today += 1
+            continue
         by_date[date_str].extend(build_long_records(snap))
     if skipped:
         print(f"⚠️  Bỏ qua {skipped} snapshot dạng lạ/lỗi (không đủ field)")
+    if skipped_today:
+        print(f"ℹ️  Bỏ qua {skipped_today} snapshot của hôm nay ({skip_date}) — "
+              f"bot live đã tự ghi trực tiếp, tránh race condition")
     return by_date
 
 
@@ -146,7 +157,10 @@ def main():
         print("Không có snapshot nào để migrate — dừng.")
         return
 
-    by_date = group_by_date(snapshots)
+    by_date = group_by_date(snapshots, skip_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    if not by_date:
+        print("Không còn ngày nào cần migrate (có thể chỉ còn dữ liệu hôm nay, đã bỏ qua) — dừng.")
+        return
     print(f"📅 Trải trên {len(by_date)} ngày: {min(by_date)} → {max(by_date)}")
 
     total_added, total_final = 0, 0
