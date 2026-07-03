@@ -224,7 +224,54 @@ def _max_price_since(k_infos, since_date_str, ref_price=None):
     return {"price": best_price, "date": best_date} if best_price is not None else None
 
 
-def fetch_listing_price(chain_id, contract, target_date_str):
+ALPHA_TRADE_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
+
+
+def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=None, limit=1500):
+    """
+    Gọi API Alpha Klines CHÍNH THỨC, có docs công khai của Binance:
+    https://developers.binance.com/docs/alpha/market-data/rest-api/klines
+
+    [SỬA] KHÁC BIỆT SỐNG CÒN so với API nội bộ cũ (chainId+tokenAddress+
+    dataType=aggregate): API này CÓ HỖ TRỢ THẬT startTime/endTime (docs
+    xác nhận rõ). API nội bộ kia âm thầm LỜ HẲN startTime dù không báo
+    lỗi gì — đã kiểm chứng bằng thực nghiệm: 2 lần chạy cách nhau 1 ngày,
+    số nến trả về của MỌI token đều tăng đúng +1, bất kể startTime truyền
+    vào là gì → chứng minh nó luôn trả "N nến gần nhất tính từ lúc gọi",
+    khiến mọi event cũ hơn ~300 ngày luôn "rỗng" dù token vẫn còn sống.
+
+    symbol format: "{alphaId}USDT" (vd "ALPHA_1011USDT") — alphaId lấy
+    từ chính token list API (fetch_alpha_token_status_map trả về).
+
+    Trả về list [[open_time, open, high, low, close, volume, close_time,
+    ...], ...] — CÙNG FORMAT với klines Binance chuẩn (open_time ở mili-
+    giây), tương thích thẳng với _compute_vwap/_max_price_since hiện có,
+    không cần đổi gì thêm. Trả None nếu lỗi/không có dữ liệu.
+    """
+    if not alpha_id:
+        return None
+    params = {"symbol": f"{alpha_id}USDT", "interval": interval, "limit": min(limit, 1500)}
+    if start_ms is not None:
+        params["startTime"] = int(start_ms)
+    if end_ms is not None:
+        params["endTime"] = int(end_ms)
+    try:
+        res = requests.get(
+            ALPHA_TRADE_KLINES_URL, params=params, timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        if res.status_code != 200:
+            return None
+        payload = res.json()
+        if payload.get("code") != "000000":
+            return None
+        data = payload.get("data")
+        return data if isinstance(data, list) and data else None
+    except Exception:
+        return None
+
+
+def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
     """
     Trả về {vwap, open, close, date, max_since} của ngày event (listing
     hoặc airdrop), hoặc None nếu không tìm được dữ liệu nào / token chưa
@@ -237,7 +284,42 @@ def fetch_listing_price(chain_id, contract, target_date_str):
                   (ví dụ thiếu dữ liệu 1h, hoặc volume = 0 cả ngày).
     max_since: {price, date} — giá cao nhất từ ngày event đến hiện tại
                (để so sánh "bán lúc claim" vs "hold" vs "bán đúng đỉnh").
+
+    alpha_id: nếu có (từ fetch_alpha_token_status_map), ƯU TIÊN dùng API
+    Alpha klines CHÍNH THỨC trước — hỗ trợ startTime thật, không giới hạn
+    "N nến gần nhất" như API nội bộ. Chỉ fallback về API nội bộ (chainId/
+    tokenAddress) khi không có alpha_id hoặc API chính thức không có data
+    (vd token đã fullyDelisted khỏi Alpha, API official không còn trả).
     """
+    if alpha_id:
+        try:
+            target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
+            day_start, day_end = target_ms, target_ms + 86400000 - 1
+
+            k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start, end_ms=day_end, limit=24)
+            if k_hourly:
+                open_price  = fa.safe_float(k_hourly[0][1])
+                close_price = fa.safe_float(k_hourly[-1][4])
+                vwap = _compute_vwap(k_hourly, target_date_str)
+                ref_price = vwap if vwap is not None else close_price
+
+                # Nến ngày để tính max_since — kể từ event tới hiện tại
+                k_daily = fetch_alpha_trade_klines_official(alpha_id, "1d", start_ms=day_start, limit=1500)
+                max_since = _max_price_since(k_daily, target_date_str, ref_price=ref_price) if k_daily else None
+
+                _fail_reason_local.value = None
+                return {
+                    "vwap": ref_price,
+                    "open": open_price,
+                    "close": close_price,
+                    "date": target_date_str,
+                    "max_since": max_since,
+                }
+            _fail_reason_local.value = f"API Alpha klines chính thức không có data cho alphaId={alpha_id} tại {target_date_str} (có thể đã fullyDelisted, thử fallback API nội bộ)"
+        except Exception as ex:
+            _fail_reason_local.value = f"fetch_alpha_trade_klines_official lỗi: {ex}"
+            if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
+
     if not API_AGG_KLINES:
         _fail_reason_local.value = "API_AGG_KLINES secret rỗng/chưa truyền vào script"
         if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
@@ -613,6 +695,14 @@ def fetch_spot_listing_date(symbol, since_date_str=None):
 
 
 
+_ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId"}} — set trong main()
+
+
+def _get_alpha_id(symbol):
+    st = _ALPHA_STATUS_MAP.get((symbol or "").upper())
+    return st.get("alphaId") if st else None
+
+
 def _process_one(e, idx, total):
     """Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None)."""
     contract = e.get("contract_address")
@@ -620,7 +710,7 @@ def _process_one(e, idx, total):
     date_str = (e.get("event_time") or e.get("date") or "")[:10]
     symbol = e.get("symbol") or e.get("token") or "?"
 
-    result = fetch_listing_price(chain_id, contract, date_str)
+    result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_get_alpha_id(symbol))
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
     if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
@@ -699,7 +789,7 @@ def _process_spot_one(e, idx, total):
         print(f"  [spot {idx}/{total}] {symbol}... không tìm được ngày spot-listing (symbol lệch/chưa có cặp USDT?)", flush=True)
         return e, None, None
 
-    result = fetch_listing_price(chain_id, contract, spot_date)
+    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_get_alpha_id(symbol))
     if not result:
         result = fetch_listing_price_public_spot(symbol, spot_date)
 
@@ -769,7 +859,7 @@ def fetch_alpha_token_status_map():
        (rút khỏi Alpha, chưa từng lên spot) — sẽ KHÔNG BAO GIỜ có klines
        Binance nào cả, retry mỗi 30 phút chỉ tốn request vô ích.
 
-    Trả về dict {SYMBOL: {"listingCex": bool, "fullyDelisted": bool}}.
+    Trả về dict {SYMBOL: {"listingCex": bool, "fullyDelisted": bool, "alphaId": str|None}}.
     Trả về {} nếu lỗi mạng/API — code gọi PHẢI coi thiếu dữ liệu là
     "chưa biết", tuyệt đối KHÔNG suy diễn thành "token chết", vì endpoint
     này chưa chắc đầy đủ 100% (không rõ có giới hạn/xoay vòng dữ liệu).
@@ -792,6 +882,7 @@ def fetch_alpha_token_status_map():
             out[sym] = {
                 "listingCex": bool(t.get("listingCex")),
                 "fullyDelisted": bool(t.get("fullyDelisted")),
+                "alphaId": t.get("alphaId") or None,
             }
         return out
     except Exception as ex:
@@ -846,6 +937,8 @@ def main():
 
     print("⏳ Đối chiếu với danh sách token Alpha thật từ Binance...")
     status_map = fetch_alpha_token_status_map()
+    global _ALPHA_STATUS_MAP
+    _ALPHA_STATUS_MAP = status_map
     marked_spot, marked_dead = apply_alpha_status(all_events, status_map)
     print(f"   Đối chiếu {len(status_map)} token — tự phát hiện {marked_spot} token đã graduate lên spot, "
           f"đánh dấu {marked_dead} token đã chết hẳn (fullyDelisted, chưa từng lên CEX — sẽ không retry nữa)")
