@@ -301,25 +301,45 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
             day_start, day_end = target_ms, target_ms + 86400000 - 1
 
             k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start, end_ms=day_end, limit=24)
+
+            actual_target_date_str = target_date_str
+            if not k_hourly:
+                # [SỬA] Nhiều token thực tế chỉ CÓ GIAO DỊCH vài ngày SAU
+                # ngày công bố (event_time trong data = ngày công bố
+                # listing, không phải ngày có nến đầu tiên). Query đúng 1
+                # ngày công bố nên gặp cửa sổ rỗng dù token có thật data.
+                # Dò tiến 1d trong 14 ngày kế tiếp để tìm NGÀY THẬT có nến
+                # đầu tiên (giống kỹ thuật đã dùng cho Binance Vision).
+                k_daily_probe = fetch_alpha_trade_klines_official(
+                    alpha_id, "1d", start_ms=day_start,
+                    end_ms=day_start + 14 * 86400000, limit=14
+                )
+                if k_daily_probe:
+                    first_ms = int(float(k_daily_probe[0][0]))
+                    actual_target_date_str = datetime.utcfromtimestamp(first_ms / 1000).strftime('%Y-%m-%d')
+                    day_start2, day_end2 = first_ms, first_ms + 86400000 - 1
+                    k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start2, end_ms=day_end2, limit=24)
+                    day_start = day_start2  # dùng mốc này cho max_since bên dưới
+
             if k_hourly:
                 open_price  = fa.safe_float(k_hourly[0][1])
                 close_price = fa.safe_float(k_hourly[-1][4])
-                vwap = _compute_vwap(k_hourly, target_date_str)
+                vwap = _compute_vwap(k_hourly, actual_target_date_str)
                 ref_price = vwap if vwap is not None else close_price
 
                 # Nến ngày để tính max_since — kể từ event tới hiện tại
                 k_daily = fetch_alpha_trade_klines_official(alpha_id, "1d", start_ms=day_start, limit=1500)
-                max_since = _max_price_since(k_daily, target_date_str, ref_price=ref_price) if k_daily else None
+                max_since = _max_price_since(k_daily, actual_target_date_str, ref_price=ref_price) if k_daily else None
 
                 _fail_reason_local.value = None
                 return {
                     "vwap": ref_price,
                     "open": open_price,
                     "close": close_price,
-                    "date": target_date_str,
+                    "date": actual_target_date_str,
                     "max_since": max_since,
                 }
-            official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} trong ngày {target_date_str} (đã thử, trả rỗng)"
+            official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng)"
         except Exception as ex:
             official_note = f"API chính thức lỗi: {ex}"
             if DEBUG: print(f"[debug] {official_note}", end=" ")
