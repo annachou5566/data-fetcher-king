@@ -5,6 +5,15 @@ on:
     - cron: '*/10 * * * *'   # P2P: mỗi 10 phút
     - cron: '35 1 * * *'     # VCB: 08:35 ICT hàng ngày
   workflow_dispatch:
+    inputs:
+      run_migration:
+        description: 'Chạy migrate lịch sử P2P sang kiến trúc mới (1 lần, an toàn chạy lại nhiều lần)'
+        type: boolean
+        default: false
+      migration_dry_run:
+        description: 'Migrate ở chế độ dry-run (chỉ xem trước, không ghi R2)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,6 +48,43 @@ jobs:
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: python scripts/fetch_p2p.py
+
+  # ✅ Chỉ chạy khi bấm "Run workflow" thủ công và tick "run_migration".
+  #    Không bao giờ chạy theo lịch cron — đây là job MỘT LẦN để đưa lịch sử
+  #    p2p-data.json cũ sang kiến trúc partition theo ngày mới. An toàn chạy
+  #    lại nhiều lần (idempotent, tự dedupe) nếu lần trước bị gián đoạn.
+  p2p-migrate-history:
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_migration == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: job-p2p-migrate-history
+      cancel-in-progress: false
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-p2p-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-p2p-
+    - run: pip install -r requirements.txt
+    - name: Run — Migrate P2P History
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: |
+        if [ "${{ inputs.migration_dry_run }}" = "true" ]; then
+          python scripts/migrate_p2p_history.py --dry-run
+        else
+          python scripts/migrate_p2p_history.py
+        fi
 
   vcb-daily:
     if: >
