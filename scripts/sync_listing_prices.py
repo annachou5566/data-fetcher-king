@@ -291,7 +291,11 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
     tokenAddress) khi không có alpha_id hoặc API chính thức không có data
     (vd token đã fullyDelisted khỏi Alpha, API official không còn trả).
     """
+    official_attempted = False
+    official_note = "không có alphaId (symbol không có trong 637 token đối chiếu, hoặc chưa graduate/chưa từng lên Alpha)"
+
     if alpha_id:
+        official_attempted = True
         try:
             target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
             day_start, day_end = target_ms, target_ms + 86400000 - 1
@@ -315,17 +319,17 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
                     "date": target_date_str,
                     "max_since": max_since,
                 }
-            _fail_reason_local.value = f"API Alpha klines chính thức không có data cho alphaId={alpha_id} tại {target_date_str} (có thể đã fullyDelisted, thử fallback API nội bộ)"
+            official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} trong ngày {target_date_str} (đã thử, trả rỗng)"
         except Exception as ex:
-            _fail_reason_local.value = f"fetch_alpha_trade_klines_official lỗi: {ex}"
-            if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
+            official_note = f"API chính thức lỗi: {ex}"
+            if DEBUG: print(f"[debug] {official_note}", end=" ")
 
     if not API_AGG_KLINES:
-        _fail_reason_local.value = "API_AGG_KLINES secret rỗng/chưa truyền vào script"
+        _fail_reason_local.value = f"[official: {official_note}] API_AGG_KLINES secret rỗng/chưa truyền vào script"
         if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
         return None
     if not chain_id or not contract:
-        _fail_reason_local.value = f"thiếu chain_id={chain_id!r} hoặc contract={contract!r} trong event data"
+        _fail_reason_local.value = f"[official: {official_note}] thiếu chain_id={chain_id!r} hoặc contract={contract!r} trong event data"
         if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
         return None
 
@@ -407,7 +411,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
             "max_since": _max_price_since(k_day, actual_date, ref_price=ref_price),
         }
 
-    _fail_reason_local.value = fail_reason
+    _fail_reason_local.value = f"[official: {official_note}] {fail_reason}"
     return None
 
 
