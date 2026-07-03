@@ -254,13 +254,30 @@ def fetch_listing_price(chain_id, contract, target_date_str):
 
     fail_reason = "không có chain nào để thử (chain_id/contract rỗng?)"
 
+    # [SỬA] BUG THẬT: không truyền startTime thì API (giống mọi API kiểu
+    # Binance klines) mặc định trả về N nến GẦN NHẤT TÍNH TỪ BÂY GIỜ, chứ
+    # không phải N nến kể từ ngày event. Với event càng cũ, cửa sổ trả về
+    # càng không chạm tới được ngày cần tìm — đúng như log thực tế cho
+    # thấy: token trả về đều đặn ~270-320 nến (không phải 1000 như đã xin)
+    # và luôn KHÔNG khớp ngày với các event quá 300 ngày trước. Neo
+    # startTime vào target_date_str (trừ đệm vài ngày) để cửa sổ trả về
+    # LUÔN bao trùm đúng ngày cần tìm, bất kể event cũ bao lâu.
+    try:
+        target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
+    except (ValueError, TypeError):
+        target_ms = None
+    day_start_ms = target_ms - 5 * 86400000 if target_ms is not None else None  # đệm 5 ngày trước
+
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
         base = f"{API_AGG_KLINES}?chainId={cid}&tokenAddress={clean_addr}&dataType=aggregate"
 
         # 1) Nến ngày — luôn cần để có open/close + xác định đúng ngày
+        day_url = f"{base}&interval=1d&limit=1000"
+        if day_start_ms is not None:
+            day_url += f"&startTime={day_start_ms}"
         try:
-            res_day = fa.fetch_smart(f"{base}&interval=1d&limit=1000", retries=2)
+            res_day = fa.fetch_smart(day_url, retries=2)
         except Exception as ex:
             fail_reason = f"fetch_smart exception (1d, chain={cid}): {ex}"
             if DEBUG: print(f"[debug] {fail_reason}", end=" ")
@@ -290,7 +307,9 @@ def fetch_listing_price(chain_id, contract, target_date_str):
         # 2) Nến 1h trong đúng ngày đó — để tính VWAP chính xác hơn
         vwap = None
         try:
-            res_hourly = fa.fetch_smart(f"{base}&interval=1h&limit=1000", retries=1)
+            hour_start_ms = int(day_match[0]) - 86400000  # đệm 1 ngày trước cho chắc
+            hourly_url = f"{base}&interval=1h&limit=1000&startTime={hour_start_ms}"
+            res_hourly = fa.fetch_smart(hourly_url, retries=1)
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
                 vwap = _compute_vwap(k_hourly, actual_date)
@@ -308,6 +327,9 @@ def fetch_listing_price(chain_id, contract, target_date_str):
 
     _fail_reason_local.value = fail_reason
     return None
+
+
+BINANCE_VISION_BASE = "https://data.binance.vision"
 
 
 def _download_vision_zip(url, retries=2):
