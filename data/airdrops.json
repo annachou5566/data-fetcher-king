@@ -16,8 +16,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 1506117124.5446455,
-            "fdv": 6865301199.933988
+            "market_cap": 3594777197.9706793,
+            "fdv": 15965409577.28221
         },
         {
             "token": "ICNT",
@@ -35,8 +35,8 @@
             "chain_id": "8453",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 59631688.89372927,
-            "fdv": 164984865.7445389
+            "market_cap": 47131043.42819202,
+            "fdv": 130398937.48872153
         },
         {
             "token": "CROSS",
@@ -54,8 +54,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 37472782.12736873,
-            "fdv": 82617678.71464674
+            "market_cap": 37282832.01691982,
+            "fdv": 81598573.63044961
         },
         {
             "token": "AIN",
@@ -73,8 +73,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 27614199.4570926,
-            "fdv": 76908958.74737623
+            "market_cap": 30576340.69135622,
+            "fdv": 85158888.22093804
         },
         {
             "token": "FOLKS",
@@ -94,8 +94,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 31198962.02425001,
-            "fdv": 102823028.26722582,
+            "market_cap": 29930398.90104187,
+            "fdv": 98207301.86659211,
             "total_amount": "499992"
         },
         {
@@ -114,8 +114,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 7139764.30267534,
-            "fdv": 10473808.02854717
+            "market_cap": 7137918.54649719,
+            "fdv": 10471100.36271145
         },
         {
             "token": "LONG",
@@ -135,8 +135,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 259183.58447402,
-            "fdv": 800135.53133634,
+            "market_cap": 245265.10068993,
+            "fdv": 757167.24906422,
             "total_amount": "7500000"
         },
         {
@@ -157,8 +157,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 33426871.47804102,
-            "fdv": 112843902.21394196,
+            "market_cap": 31718307.29371462,
+            "fdv": 107076056.13031945,
             "total_amount": "10000000"
         },
         {
@@ -179,8 +179,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 9182631.11530355,
-            "fdv": 53621204.94765139,
+            "market_cap": 9729389.57895866,
+            "fdv": 56970180.53900875,
             "total_amount": "12000000"
         },
         {
@@ -201,8 +201,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 155892.89231764,
-            "fdv": 351800.98146016,
+            "market_cap": 127819.31080253,
+            "fdv": 288447.78181593,
             "total_amount": "9999750"
         },
         {
@@ -223,8 +223,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 288809092.5615589,
-            "fdv": 1237577760.6517048,
+            "market_cap": 254540243.41567758,
+            "fdv": 1063210209.4024675,
             "total_amount": "50000000"
         },
         {
@@ -245,8 +245,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2800106.39024975,
-            "fdv": 7178647.8819158,
+            "market_cap": 2676087.94406083,
+            "fdv": 6795492.57525071,
             "total_amount": "10000000"
         },
         {
@@ -265,8 +265,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 525185.07176068,
-            "fdv": 1172133.74078119
+            "market_cap": 85244.20396219,
+            "fdv": 190252.18545368
         },
         {
             "token": "BEAT",
@@ -286,8 +286,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 727973983.9110391,
-            "fdv": 2527541180.2421155,
+            "market_cap": 983997312.2187912,
+            "fdv": 3181711514.3563232,
             "total_amount": "9999920",
             "created_timestamp": 1762942561,
             "updated_timestamp": 1762942561
@@ -310,8 +310,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 4951392.04866394,
-            "fdv": 11999738.37907046,
+            "market_cap": 5115323.33730011,
+            "fdv": 12103693.19680594,
             "total_amount": "20000000"
         },
         {
@@ -332,8 +332,8 @@
             "has_homonym": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 359226.05866285,
-            "fdv": 1207482.55012723,
+            "market_cap": 315552.47121215,
+            "fdv": 1060680.57550304,
             "total_amount": "10000000"
         },
         {
@@ -353,8 +353,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 29060804.29511553,
-            "fdv": 79422307.10626942
+            "market_cap": 25833679.32653204,
+            "fdv": 70602671.29294723
         },
         {
             "token": "PEAQ",
@@ -373,8 +373,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 47262122.02275802,
-            "fdv": 118140222.82760666
+            "market_cap": 46133734.42798339,
+            "fdv": 118184683.28934105
         },
         {
             "token": "SPA",
@@ -393,8 +393,8 @@
             "amount": "4607",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 11023305.68397312,
-            "fdv": 12141282.92501656
+            "market_cap": 10132867.87146647,
+            "fdv": 11152163.41207031
         },
         {
             "token": "RION",
@@ -417,8 +417,8 @@
             "tge_total": "",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 5051355.09112434,
-            "fdv": 16439747.40043913
+            "market_cap": 5022627.30781267,
+            "fdv": 16346252.19123315
         },
         {
             "token": "TAC",
@@ -437,8 +437,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 96245568.2381589,
-            "fdv": 212001804.71516612
+            "market_cap": 164950189.77653548,
+            "fdv": 362113938.82346904
         },
         {
             "token": "TAKER",
@@ -457,8 +457,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 45153.1560181,
-            "fdv": 113168.33608136
+            "market_cap": 39749.3570335,
+            "fdv": 99570.01034671
         },
         {
             "token": "BAS",
@@ -482,8 +482,8 @@
             "pretge": true,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 106524167.84649047,
-            "fdv": 426096671.3859619
+            "market_cap": 66871467.24192711,
+            "fdv": 267485868.96770847
         },
         {
             "token": "ESPORTS",
@@ -502,8 +502,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 19125112.47728957,
-            "fdv": 27098375.04140408
+            "market_cap": 15401833.67409739,
+            "fdv": 21822860.68757107
         },
         {
             "token": "ERA",
@@ -522,8 +522,8 @@
             "completed": true,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 22884628.66133691,
-            "fdv": 81343634.5747558
+            "market_cap": 24021702.24525879,
+            "fdv": 85385373.65927131
         },
         {
             "token": "TA",
@@ -542,8 +542,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 24736316.87111597,
-            "fdv": 73885629.31602985
+            "market_cap": 25556914.47695282,
+            "fdv": 76336696.33778521
         },
         {
             "token": "G",
@@ -562,8 +562,8 @@
             "has_homonym": true,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 300669.62822504,
-            "fdv": 569134.37684674
+            "market_cap": 299276.76649852,
+            "fdv": 566497.84424331
         },
         {
             "token": "ZKWASM",
@@ -586,8 +586,8 @@
             "tge_total": "",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 293105.29519955,
-            "fdv": 2113211.91181521
+            "market_cap": 234198.44177164,
+            "fdv": 1686681.35799035
         },
         {
             "token": "UPTOP",
@@ -606,8 +606,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 16213.29062451,
-            "fdv": 77206.14583102
+            "market_cap": 16154.10418459,
+            "fdv": 76924.30564091
         },
         {
             "token": "COA",
@@ -626,8 +626,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 43021.72579485,
-            "fdv": 100464.25872796
+            "market_cap": 43953.49139909,
+            "fdv": 102640.11613507
         },
         {
             "token": "YALA",
@@ -646,8 +646,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 77352.43958688,
-            "fdv": 259376.59747276
+            "market_cap": 82815.55055212,
+            "fdv": 273312.29389827
         },
         {
             "token": "LN",
@@ -666,8 +666,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 412052.89650795,
-            "fdv": 4756291.53689078
+            "market_cap": 408744.87651805,
+            "fdv": 4718107.34351377
         },
         {
             "token": "PHY",
@@ -686,8 +686,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 27083.58307127,
-            "fdv": 60677.1771367
+            "market_cap": 28786.15243763,
+            "fdv": 64491.55807582
         },
         {
             "token": "ASP",
@@ -706,8 +706,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 8549198.97456134,
-            "fdv": 24812978.52140102
+            "market_cap": 8004539.31022021,
+            "fdv": 23232172.10983153
         },
         {
             "token": "DELABS",
@@ -730,8 +730,8 @@
             "tge_total": "60000000",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 403786.83232473,
-            "fdv": 892100.1542662
+            "market_cap": 437018.46723401,
+            "fdv": 965519.94970232
         },
         {
             "token": "VRA",
@@ -750,8 +750,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 703850.79150143,
-            "fdv": 1510864.74445796
+            "market_cap": 825742.32041326,
+            "fdv": 1772513.40054333
         },
         {
             "token": "PLAY",
@@ -770,8 +770,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 100985.57756399,
-            "fdv": 626580.06619855
+            "market_cap": 95508.67655236,
+            "fdv": 549489.885885
         },
         {
             "token": "RHEA",
@@ -790,8 +790,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 7291422.41578507,
-            "fdv": 12726709.39304353
+            "market_cap": 7939975.29230521,
+            "fdv": 13525417.12609376
         },
         {
             "token": "TREE",
@@ -810,8 +810,8 @@
             "completed": true,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 15501346.06789474,
-            "fdv": 41536126.72076795
+            "market_cap": 16580521.26474132,
+            "fdv": 41893046.93253453
         },
         {
             "token": "GAIA",
@@ -830,8 +830,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1293605.18819208,
-            "fdv": 5465937.41489611
+            "market_cap": 1354301.41431997,
+            "fdv": 5417205.65727991
         },
         {
             "token": "AIO",
@@ -850,8 +850,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 33748484.04886927,
-            "fdv": 95402075.04980713
+            "market_cap": 34657850.51916189,
+            "fdv": 94667715.15750313
         },
         {
             "token": "NAORIS",
@@ -870,8 +870,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 54489705.37595854,
-            "fdv": 152081970.63833097
+            "market_cap": 52122679.2450213,
+            "fdv": 143479146.0351076
         },
         {
             "token": "MIA",
@@ -890,8 +890,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 12554014.26504683,
-            "fdv": 12659510.18362735
+            "market_cap": 12757683.80209973,
+            "fdv": 12864891.22940125
         },
         {
             "token": "MM",
@@ -910,8 +910,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3173.91039231,
-            "fdv": 12207.34766275
+            "market_cap": 3722.54706606,
+            "fdv": 14317.48871564
         },
         {
             "token": "TOSHI",
@@ -930,8 +930,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 53117317.84263086,
-            "fdv": 53117317.84263086
+            "market_cap": 49045191.31378012,
+            "fdv": 49045191.31378012
         },
         {
             "token": "CYC",
@@ -950,8 +950,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1255594.17053247,
-            "fdv": 8169122.77509741
+            "market_cap": 1238622.5919216,
+            "fdv": 8058702.61497463
         },
         {
             "token": "DARK",
@@ -970,8 +970,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 5909.67173387,
-            "fdv": 14154.09514687
+            "market_cap": 5780.94593606,
+            "fdv": 13490.95939242
         },
         {
             "token": "FIR",
@@ -990,8 +990,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 335967.48578112,
-            "fdv": 658195.278545
+            "market_cap": 375228.69836703,
+            "fdv": 727498.16106057
         },
         {
             "token": "SUP",
@@ -1010,8 +1010,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 889467.21403056,
-            "fdv": 2594617.21503902
+            "market_cap": 1009528.21260171,
+            "fdv": 2944840.72955833
         },
         {
             "token": "IN",
@@ -1030,8 +1030,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 37900520.7556148,
-            "fdv": 105560341.34757826
+            "market_cap": 21208926.69217862,
+            "fdv": 58614781.29569166
         },
         {
             "token": "TOWNS",
@@ -1050,8 +1050,8 @@
             "completed": true,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 5811982.04952799,
-            "fdv": 20072879.08578491
+            "market_cap": 6457969.12167788,
+            "fdv": 20696520.58312072
         },
         {
             "token": "X",
@@ -1070,8 +1070,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1035976.5661565,
-            "fdv": 4504245.93981088
+            "market_cap": 867723.19129807,
+            "fdv": 3772709.52738294
         },
         {
             "token": "PROVE",
@@ -1090,8 +1090,8 @@
             "completed": true,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 38395194.83892121,
-            "fdv": 191975973.2347262
+            "market_cap": 39370859.84473941,
+            "fdv": 196854298.23942557
         },
         {
             "token": "SLAY",
@@ -1110,8 +1110,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 550495.39415675,
-            "fdv": 1775791.59405405
+            "market_cap": 590910.30303971,
+            "fdv": 1906162.26787004
         },
         {
             "token": "BSU",
@@ -1150,8 +1150,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 81284.01889261,
-            "fdv": 108378.88589097
+            "market_cap": 76213.48260537,
+            "fdv": 101618.15873738
         },
         {
             "token": "XCX",
@@ -1171,8 +1171,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3807607.36952354,
-            "fdv": 5467935.35247418
+            "market_cap": 3420938.27962226,
+            "fdv": 4870255.39590088
         },
         {
             "token": "GAME",
@@ -1192,8 +1192,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 19326780.31314141,
-            "fdv": 21381187.96478621
+            "market_cap": 19340481.50414086,
+            "fdv": 21396345.57176234
         },
         {
             "token": "WAI",
@@ -1213,8 +1213,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 8068089.36439479,
-            "fdv": 18418751.41639596
+            "market_cap": 6515365.34647374,
+            "fdv": 14874016.54638246
         },
         {
             "token": "SLAY",
@@ -1234,8 +1234,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 550495.39415675,
-            "fdv": 1775791.59405405
+            "market_cap": 590910.30303971,
+            "fdv": 1906162.26787004
         },
         {
             "token": "OVL",
@@ -1257,8 +1257,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 370634.006125,
-            "fdv": 625456.34436261
+            "market_cap": 369141.17331327,
+            "fdv": 622893.20643059
         },
         {
             "token": "BTR",
@@ -1285,8 +1285,8 @@
             "pretge": true,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 8273823.49616613,
-            "fdv": 19455040.69953924
+            "market_cap": 8405799.74635386,
+            "fdv": 19765369.20968507
         },
         {
             "token": "PUBLIC",
@@ -1308,8 +1308,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2433920.4990839,
-            "fdv": 8778996.48224482
+            "market_cap": 2151552.13026938,
+            "fdv": 7760511.72998899
         },
         {
             "token": "TCOM",
@@ -1331,8 +1331,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1929082.15720502,
-            "fdv": 8094051.00925185
+            "market_cap": 1919917.38472324,
+            "fdv": 8055597.41841919
         },
         {
             "token": "REVA",
@@ -1385,8 +1385,8 @@
             "tge_total": "20000000",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 9402.47078192,
-            "fdv": 22359.27754207
+            "market_cap": 9390.16454212,
+            "fdv": 22330.0130394
         },
         {
             "token": "PUBLIC",
@@ -1408,8 +1408,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2433920.4990839,
-            "fdv": 8778996.48224482
+            "market_cap": 2151552.13026938,
+            "fdv": 7760511.72998899
         },
         {
             "token": "DAM",
@@ -1431,8 +1431,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 2216123.70624218,
-            "fdv": 7187621.61844948
+            "market_cap": 1982284.78982251,
+            "fdv": 6429204.72766012
         },
         {
             "token": "RICE",
@@ -1459,8 +1459,8 @@
             "tge_total": "20000000",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3019446.81349688,
-            "fdv": 6435978.86548542
+            "market_cap": 3098934.82274435,
+            "fdv": 6605408.29384607
         },
         {
             "token": "MLK",
@@ -1482,8 +1482,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 19832261.86053075,
-            "fdv": 35038060.7401994
+            "market_cap": 19460535.06484763,
+            "fdv": 34018731.71037249
         },
         {
             "token": "WILD",
@@ -1505,8 +1505,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 8602909.75778208,
-            "fdv": 8603444.74351713
+            "market_cap": 8970684.27167275,
+            "fdv": 8971242.12805554
         },
         {
             "token": "DGC",
@@ -1528,8 +1528,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 11107.19366712,
-            "fdv": 27043.74004352
+            "market_cap": 13393.10203063,
+            "fdv": 32609.45838776
         },
         {
             "token": "XPIN",
@@ -1552,8 +1552,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 60088830.88660115,
-            "fdv": 135349089.76462415
+            "market_cap": 62755196.32173237,
+            "fdv": 141355033.4533262
         },
         {
             "token": "AKE",
@@ -1581,8 +1581,8 @@
             "tge_total": "",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 8580087.32344464,
-            "fdv": 37638152.43052979
+            "market_cap": 9253767.70077666,
+            "fdv": 40593376.98427007
         },
         {
             "token": "ARIA",
@@ -1604,8 +1604,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 9467825.24007361,
-            "fdv": 26041169.61906296
+            "market_cap": 10075828.20547155,
+            "fdv": 27713476.4001182
         },
         {
             "token": "SAPIEN",
@@ -1628,8 +1628,8 @@
             "utc": "utc8",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 24699154.43058528,
-            "fdv": 74788182.17168543
+            "market_cap": 25244852.2824986,
+            "fdv": 76029959.8763146
         },
         {
             "token": "FST",
@@ -1680,8 +1680,8 @@
             "tge_total": "100000000",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 4394526.31298054,
-            "fdv": 44956790.92563221
+            "market_cap": 4741368.72053154,
+            "fdv": 48505050.84942759
         },
         {
             "token": "MTP",
@@ -1704,8 +1704,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 187282.80324056,
-            "fdv": 212821.36731882
+            "market_cap": 194661.92799701,
+            "fdv": 221206.73636024
         },
         {
             "token": "DORA",
@@ -1728,8 +1728,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 7869258.31678149,
-            "fdv": 7948058.6338203
+            "market_cap": 7875864.72427798,
+            "fdv": 7954731.19583659
         },
         {
             "token": "TOWN",
@@ -1781,8 +1781,8 @@
             "tge_total": "",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 5136672.95786749,
-            "fdv": 16035109.18492546
+            "market_cap": 5553277.39014543,
+            "fdv": 17335619.77092043
         },
         {
             "token": "DOLO",
@@ -1804,8 +1804,8 @@
             "chain_id": "1",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 14624136.31890339,
-            "fdv": 23121398.53788359
+            "market_cap": 14787327.42880013,
+            "fdv": 23291726.72246093
         },
         {
             "token": "CELB",
@@ -1828,8 +1828,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 11130.8161786,
-            "fdv": 21075.71125659
+            "market_cap": 11600.76804293,
+            "fdv": 21965.54445823
         },
         {
             "token": "XLAB",
@@ -1852,8 +1852,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 318608.50257681,
-            "fdv": 411192.10596344
+            "market_cap": 207546.64407495,
+            "fdv": 267857.07529022
         },
         {
             "token": "MITO",
@@ -1880,8 +1880,8 @@
             "tge_total": "10000000",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 8734936.22202751,
-            "fdv": 23843288.57803251
+            "market_cap": 8755861.83494769,
+            "fdv": 23900408.10527871
         },
         {
             "token": "BLUM",
@@ -1904,8 +1904,8 @@
             "chain_id": "56",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 327282.70511529,
-            "fdv": 1845979.96653545
+            "market_cap": 313326.48663134,
+            "fdv": 1767262.39506802
         },
         {
             "token": "XLAB",
@@ -1927,8 +1927,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 318608.50257681,
-            "fdv": 411192.10596344
+            "market_cap": 207546.64407495,
+            "fdv": 267857.07529022
         },
         {
             "token": "ZENT",
@@ -1947,8 +1947,8 @@
             "completed": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 21956550.38678169,
-            "fdv": 23354537.01164183
+            "market_cap": 20290765.13021766,
+            "fdv": 21560083.92486742
         },
         {
             "token": "PTB",
@@ -1970,8 +1970,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 3812249.02423096,
-            "fdv": 4081683.60163793
+            "market_cap": 4254095.46766308,
+            "fdv": 4499938.50020468
         },
         {
             "token": "Q",
@@ -1993,8 +1993,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 70266915.4870897,
-            "fdv": 172785492.23153782
+            "market_cap": 72106181.96503185,
+            "fdv": 172938139.3351655
         },
         {
             "token": "FOREST",
@@ -2021,8 +2021,8 @@
             "tge_total": "20000000",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 5525038.7115985,
-            "fdv": 23445952.52110548
+            "market_cap": 5717356.57020055,
+            "fdv": 22613143.98233576
         },
         {
             "token": "WOD",
@@ -2044,8 +2044,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 4458334.755529,
-            "fdv": 8248870.22334783
+            "market_cap": 4202109.34917383,
+            "fdv": 7753938.09279043
         },
         {
             "token": "HOLO",
@@ -2072,8 +2072,8 @@
             "tge_total": "20480000",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 50055906.16940022,
-            "fdv": 141146513.2562176
+            "market_cap": 50992149.31959211,
+            "fdv": 143786513.32267934
         },
         {
             "token": "PTB",
@@ -2095,8 +2095,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 3812249.02423096,
-            "fdv": 4081683.60163793
+            "market_cap": 4254095.46766308,
+            "fdv": 4499938.50020468
         },
         {
             "token": "MCH",
@@ -2119,8 +2119,8 @@
             "has_homonym": true,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 9771.94573134,
-            "fdv": 20502.42359584
+            "market_cap": 10719.62101799,
+            "fdv": 21998.6083828
         },
         {
             "token": "BOT",
@@ -2148,8 +2148,8 @@
             "tge_total": "",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 115862.7088378,
-            "fdv": 177456.46025861
+            "market_cap": 95895.8685374,
+            "fdv": 146875.05198843
         },
         {
             "token": "SOMI",
@@ -2171,8 +2171,8 @@
             "completed": true,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 26864362.56228259,
-            "fdv": 103031780.715429
+            "market_cap": 27906654.37402373,
+            "fdv": 103553599.20657746
         },
         {
             "token": "TRADOOR",
@@ -2195,8 +2195,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 6063654.74470037,
-            "fdv": 25355027.15743413
+            "market_cap": 5796971.05311942,
+            "fdv": 24239895.68521609
         },
         {
             "token": "GATA",
@@ -2219,8 +2219,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 95560.90258511,
-            "fdv": 313828.90832551
+            "market_cap": 86088.12397065,
+            "fdv": 282719.61895124
         },
         {
             "token": "U",
@@ -2243,8 +2243,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1431575.85538177,
-            "fdv": 7459815.30122601
+            "market_cap": 1550493.11677779,
+            "fdv": 8079482.64390086
         },
         {
             "token": "SHARDS",
@@ -2267,8 +2267,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 8519.85126724,
-            "fdv": 20865.40641615
+            "market_cap": 10579.16827315,
+            "fdv": 25908.74401915
         },
         {
             "token": "BOOST",
@@ -2291,8 +2291,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 14134.09659367,
-            "fdv": 23035.2572082
+            "market_cap": 27562.53793104,
+            "fdv": 44919.83078457
         },
         {
             "token": "STAR",
@@ -2320,8 +2320,8 @@
             "tge_total": "12500000",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 24690903.42895831,
-            "fdv": 132668944.52078371
+            "market_cap": 28748251.24123212,
+            "fdv": 154469849.9982544
         },
         {
             "token": "SAROS",
@@ -2343,8 +2343,8 @@
             "chain_id": "501",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1345570.72432308,
-            "fdv": 3408328.28442567
+            "market_cap": 1134537.69422019,
+            "fdv": 2873781.99371866
         },
         {
             "token": "OPEN",
@@ -2366,8 +2366,8 @@
             "chain_id": "56",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 48240245.93871241,
-            "fdv": 159749481.34687144
+            "market_cap": 47163527.50946174,
+            "fdv": 156183885.70608765
         },
         {
             "token": "MIRROR",
@@ -2390,8 +2390,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 43324.9522257,
-            "fdv": 451410.91176462
+            "market_cap": 33579.50285073,
+            "fdv": 349871.22246516
         },
         {
             "token": "REKT",
@@ -2404,8 +2404,8 @@
             "contract_address": "0x20482b0b4d9d8f60d3ab432b92f4c4b901a0d10c",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 20075532.6394406,
-            "fdv": 29968795.01499521
+            "market_cap": 21518243.99039998,
+            "fdv": 32121754.64996676
         },
         {
             "token": "MORE",
@@ -2418,8 +2418,8 @@
             "contract_address": "0xfe723495f73714426493384eb5e49aa5b827e1d5",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 5122.80071111,
-            "fdv": 16260.56227331
+            "market_cap": 5472.36063866,
+            "fdv": 17370.11958203
         },
         {
             "token": "CESS",
@@ -2432,8 +2432,8 @@
             "contract_address": "0x0c78d4605c2972e5f989de9019de1fb00c5d3462",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3234666.31349832,
-            "fdv": 12206287.97546538
+            "market_cap": 3250243.78194744,
+            "fdv": 12265070.87527339
         },
         {
             "token": "XO",
@@ -2446,8 +2446,8 @@
             "contract_address": "0x90f9eb95f62d31fbe2179313547e360db86d88d2399103a94286291b63f469ba::xo::XO",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 57819.23758198,
-            "fdv": 138477.18728658
+            "market_cap": 60080.38783407,
+            "fdv": 143892.64657031
         },
         {
             "token": "SAHARA",
@@ -2460,8 +2460,8 @@
             "contract_address": "0xfdffb411c4a70aa7c95d5c981a6fb4da867e1111",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 46474419.77362537,
-            "fdv": 102895394.3327499
+            "market_cap": 41268091.66784522,
+            "fdv": 91368468.63729568
         },
         {
             "token": "H",
@@ -2474,8 +2474,8 @@
             "contract_address": "0x44f161ae29361e332dea039dfa2f404e0bc5b5cc",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 2904.73667269,
-            "fdv": 9364.44198218
+            "market_cap": 4411.23600168,
+            "fdv": 14221.17329803
         },
         {
             "token": "NEWT",
@@ -2488,8 +2488,8 @@
             "contract_address": "0xb8a677e6d805c8d743e6f14c8bc9c19305b5defc",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 26640072.22284854,
-            "fdv": 59921436.9624763
+            "market_cap": 12928152.7865723,
+            "fdv": 29079256.45852551
         },
         {
             "token": "DMC",
@@ -2502,8 +2502,8 @@
             "contract_address": "0x4c981f3ff786cdb9e514da897ab8a953647dae2ace9679e8358eec1e3e8871ac::dmc::DMC",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 3633604.05548544,
-            "fdv": 6383933.34204087
+            "market_cap": 3459699.39753844,
+            "fdv": 6078397.64600705
         },
         {
             "token": "MGO",
@@ -2516,8 +2516,8 @@
             "contract_address": "0x5e0d6791edbeeba6a14d1d38e2b8233257118eb1",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 15953913.35806187,
-            "fdv": 99527641.94147497
+            "market_cap": 16032255.99327972,
+            "fdv": 100016378.31428306
         },
         {
             "token": "CARV",
@@ -2530,8 +2530,8 @@
             "contract_address": "0xc08cd26474722ce93f4d0c34d16201461c10aa8c",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 23622448.62421062,
-            "fdv": 36951627.54771708
+            "market_cap": 23203972.37036133,
+            "fdv": 36297022.30692275
         },
         {
             "token": "BULLA",
@@ -2544,8 +2544,8 @@
             "contract_address": "0x595e21b20e78674f8a64c1566a20b2b316bc3511",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 5983831.82070038,
-            "fdv": 5983831.82070038
+            "market_cap": 6188981.79948573,
+            "fdv": 6188981.79948573
         },
         {
             "token": "BRIC",
@@ -2558,8 +2558,8 @@
             "contract_address": "0xb40f2e5291c3db45abb0ca8df76f1c21e9f112a9",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 225328.23132659,
-            "fdv": 559052.55358176
+            "market_cap": 249373.80516004,
+            "fdv": 617713.22294759
         },
         {
             "token": "LOT",
@@ -2572,8 +2572,8 @@
             "contract_address": "0xbfe78de7d1c51e0868501d5fa3e88e674c79acdd",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2968801.88098556,
-            "fdv": 6232543.87427098
+            "market_cap": 3090631.96748787,
+            "fdv": 6409240.19198903
         },
         {
             "token": "AVAIL",
@@ -2586,8 +2586,8 @@
             "contract_address": "0x39702843a6733932ec7ce0dde404e5a6dbd8c989",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 20968252.96612867,
-            "fdv": 34692502.10890262
+            "market_cap": 19155653.38924996,
+            "fdv": 31681475.4802064
         },
         {
             "token": "MAT",
@@ -2600,8 +2600,8 @@
             "contract_address": "0xfe2dd2d57a05f89438f3aec94eafa4070396bab0",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 849634.61769392,
-            "fdv": 5465257.51565047
+            "market_cap": 681923.91946603,
+            "fdv": 4385963.51599594
         },
         {
             "token": "BEE",
@@ -2614,8 +2614,8 @@
             "contract_address": "0xdb6f1f098b55e36b036603c8e54663a8d907d6e1",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 4983634.9250375,
-            "fdv": 15698548.12979396
+            "market_cap": 5165576.28199557,
+            "fdv": 16271666.98620471
         },
         {
             "token": "SPK",
@@ -2628,8 +2628,8 @@
             "contract_address": "0xaff2e841851700d1fc101995ee6b81ae21bb87d7",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 79513601.73617482,
-            "fdv": 185241993.11287227
+            "market_cap": 79987175.36552115,
+            "fdv": 185341473.42416018
         },
         {
             "token": "BOMB",
@@ -2642,8 +2642,8 @@
             "contract_address": "0x7e975d85714b11d862c7cffee3c88d565a139eb7",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 123137.13005591,
-            "fdv": 135450.8430615
+            "market_cap": 141166.27242594,
+            "fdv": 155282.89966854
         },
         {
             "token": "ULTI",
@@ -2656,8 +2656,8 @@
             "contract_address": "0x0e7779e698052f8fe56c415c3818fcf89de9ac6d",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 328108.14724292,
-            "fdv": 376174.9458836
+            "market_cap": 295323.26551619,
+            "fdv": 338587.18339436
         },
         {
             "token": "VELO",
@@ -2670,8 +2670,8 @@
             "contract_address": "0xf486ad071f3bee968384d2e39e2d8af0fcf6fd46",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 75999473.68469144,
-            "fdv": 76000093.24695161
+            "market_cap": 80175587.17223364,
+            "fdv": 80176240.7789705
         },
         {
             "token": "F",
@@ -2684,8 +2684,8 @@
             "contract_address": "0xc9ccbd76c2353e593cc975f13295e8289d04d3bb",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 13292532.24271258,
-            "fdv": 30401271.91702135,
+            "market_cap": 12587366.08864543,
+            "fdv": 28788490.57445748,
             "time": "",
             "phase": "",
             "status": "",
@@ -2702,8 +2702,8 @@
             "contract_address": "0x4ed4e862860bed51a9570b96d89af5e1b0efefed",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 61573318.51032823,
-            "fdv": 62208412.93040565
+            "market_cap": 61432102.66804245,
+            "fdv": 62108406.88319067
         },
         {
             "token": "ROAM",
@@ -2716,8 +2716,8 @@
             "contract_address": "0x3fefe29da25bea166fb5f6ade7b5976d2b0e586b",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2950809.35335825,
-            "fdv": 8338578.50816771
+            "market_cap": 2781900.40073282,
+            "fdv": 7849413.18850215
         },
         {
             "token": "SGC",
@@ -2730,8 +2730,8 @@
             "contract_address": "0xe0a441d23cedb44822dfc8562e4d8d39c6b7f946",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 14657.52553365,
-            "fdv": 42952.32944926
+            "market_cap": 12910.23781882,
+            "fdv": 37695.01874128
         },
         {
             "token": "PUNDIAI",
@@ -2758,8 +2758,8 @@
             "contract_address": "0x3b4de3c7855c03bb9f50ea252cd2c9fa1125ab07",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 24597165.86468813,
-            "fdv": 112831036.07655105
+            "market_cap": 15704365.64005627,
+            "fdv": 72038374.49567099
         },
         {
             "token": "HOME",
@@ -2772,8 +2772,8 @@
             "contract_address": "0x4bfaa776991e85e5f8b1255461cbbd216cfc714f",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 92628092.59556814,
-            "fdv": 187106460.17843807
+            "market_cap": 83993912.05657493,
+            "fdv": 169665628.65612438
         },
         {
             "token": "RESOLV",
@@ -2786,8 +2786,8 @@
             "contract_address": "0xda6cef7f667d992a60eb823ab215493aa0c6b360",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 9371873.36549228,
-            "fdv": 21558010.9432076
+            "market_cap": 8865847.76184492,
+            "fdv": 20326137.85102417
         },
         {
             "token": "SKATE",
@@ -2800,8 +2800,8 @@
             "contract_address": "0x61dbbbb552dc893ab3aad09f289f811e67cef285",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 338014.62728385,
-            "fdv": 925934.06671345
+            "market_cap": 330395.87851367,
+            "fdv": 901972.07112746
         },
         {
             "token": "OL",
@@ -2814,8 +2814,8 @@
             "contract_address": "0x3f160760535eb715d5809a26cf55408a2d9844c1",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 8940801.93465885,
-            "fdv": 26296476.27840838
+            "market_cap": 9337320.29176271,
+            "fdv": 27462706.74047858
         },
         {
             "token": "AB",
@@ -2828,8 +2828,8 @@
             "contract_address": "0x95034f653d5d161890836ad2b6b8cc49d14e029a",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 98329672.07937579,
-            "fdv": 98329672.07937579
+            "market_cap": 97607263.30044843,
+            "fdv": 97607263.30044843
         },
         {
             "token": "FLY",
@@ -2842,8 +2842,8 @@
             "contract_address": "0x6c9b3a74ae4779da5ca999371ee8950e8db3407f",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 154643.31269864,
-            "fdv": 1302633.58541571
+            "market_cap": 146698.24621631,
+            "fdv": 1231349.39137643
         },
         {
             "token": "CUDIS",
@@ -2856,8 +2856,8 @@
             "contract_address": "0xc1353d3ee02fdbd4f65f92eee543cfd709049cb1",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 2099280.19376599,
-            "fdv": 5168342.41583695
+            "market_cap": 1866002.15899649,
+            "fdv": 4594021.38648478
         },
         {
             "token": "LA",
@@ -2870,8 +2870,8 @@
             "contract_address": "0x389ad4bb96d0d6ee5b6ef0efaf4b7db0ba2e02a0",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 14715529.88536624,
-            "fdv": 52202395.17161853
+            "market_cap": 12819576.24306336,
+            "fdv": 45476621.64979734
         },
         {
             "token": "ZRC",
@@ -2884,8 +2884,8 @@
             "contract_address": "0xdac991621fd8048d9f235324780abd6c3ad26421",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 5965375.99684504,
-            "fdv": 10170002.56705209
+            "market_cap": 5940649.58227796,
+            "fdv": 9724653.32488406
         },
         {
             "token": "BDXN",
@@ -2898,8 +2898,8 @@
             "contract_address": "0x1036b2379f506761f237fba7463857924ef21ce3",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 347313.23066334,
-            "fdv": 563086.25653837
+            "market_cap": 301725.99927687,
+            "fdv": 489177.34319715
         },
         {
             "token": "EDGEN",
@@ -2912,8 +2912,8 @@
             "contract_address": "0x0c808f0464c423d5ea4f4454fcc23b6e2ae75562",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 494212.3111801,
-            "fdv": 1173765.3880401
+            "market_cap": 526138.24306527,
+            "fdv": 1197025.62768641
         },
         {
             "token": "SQD",
@@ -2926,8 +2926,8 @@
             "contract_address": "0xe50e3d1a46070444f44df911359033f2937fcc13",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 36563387.97619142,
-            "fdv": 44776759.44194577
+            "market_cap": 37001537.0196097,
+            "fdv": 45096816.3423813
         },
         {
             "token": "TAIKO",
@@ -2940,8 +2940,8 @@
             "contract_address": "0x30c60b20c25b2810ca524810467a0c342294fc61",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 46257824.40833581,
-            "fdv": 54608584.89009863
+            "market_cap": 105682476.84775373,
+            "fdv": 124601653.2431181
         },
         {
             "token": "ASRR",
@@ -2968,8 +2968,8 @@
             "contract_address": "0xd86e6ef14b96d942ef0abf0720c549197ea8c528",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 47515.02093043,
-            "fdv": 101136.12112724
+            "market_cap": 48449.96980485,
+            "fdv": 103126.16765903
         },
         {
             "token": "SOPH",
@@ -2982,8 +2982,8 @@
             "contract_address": "0x31dba3c96481fde3cd81c2aaf51f2d8bf618c742",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 17581437.20004636,
-            "fdv": 50870716.90474381
+            "market_cap": 14307661.40454536,
+            "fdv": 41047132.48120897
         },
         {
             "token": "PFVS",
@@ -3010,8 +3010,8 @@
             "contract_address": "0x799a290f9cc4085a0ce5b42b5f2c30193a7a872b",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 13629.15268543,
-            "fdv": 21411.71792102
+            "market_cap": 14166.40893976,
+            "fdv": 21434.93727836
         },
         {
             "token": "HUMA",
@@ -3024,8 +3024,8 @@
             "contract_address": "0x92516e0ddf1ddbf7fab1b79cac26689fdc5ba8e6",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 71474362.93607663,
-            "fdv": 219181009.86561877
+            "market_cap": 70645859.46504205,
+            "fdv": 216640347.4518672
         },
         {
             "token": "OBT",
@@ -3038,8 +3038,8 @@
             "contract_address": "0xcef5b397051fc92026249670e918c0ad7b8585e4",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 9637456.86783788,
-            "fdv": 17522648.85061433
+            "market_cap": 9710703.2002963,
+            "fdv": 17655824.00053873
         },
         {
             "token": "SOON",
@@ -3052,8 +3052,8 @@
             "contract_address": "0xb9e1fd5a02d3a33b25a14d661414e6ed6954a721",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 93003769.42847717,
-            "fdv": 173437258.43862048
+            "market_cap": 88885081.78387232,
+            "fdv": 165641585.07716787
         },
         {
             "token": "RWA",
@@ -3066,8 +3066,8 @@
             "contract_address": "0x9c8b5ca345247396bdfac0395638ca9045c6586e",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 4056078.65916473,
-            "fdv": 12332718.65086143
+            "market_cap": 3868778.61362189,
+            "fdv": 11763223.0963918
         },
         {
             "token": "TGT",
@@ -3080,8 +3080,8 @@
             "contract_address": "0x6c58e4a513d3a8062e57f41a1442e003af14ebb5",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 31022.86093693,
-            "fdv": 192901.24907792
+            "market_cap": 31424.85783003,
+            "fdv": 195400.88001014
         },
         {
             "token": "MERL",
@@ -3094,8 +3094,8 @@
             "contract_address": "0xa0c56a8c0692bd10b3fa8f8ba79cf5332b7107f9",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 24253248.1594426,
-            "fdv": 38763461.52146493
+            "market_cap": 25527665.99443087,
+            "fdv": 40800337.01063948
         },
         {
             "token": "XTER",
@@ -3108,8 +3108,8 @@
             "contract_address": "0x103071da56e7cd95b415320760d6a0ddc4da1ca5",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 4377740.34451643,
-            "fdv": 11625534.52485693
+            "market_cap": 4217404.4439354,
+            "fdv": 11199746.24115626
         },
         {
             "token": "REX",
@@ -3122,8 +3122,8 @@
             "contract_address": "0x90869b3a42e399951bd5f5ff278b8cc5ee1dc0fe",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 89292.26820014,
-            "fdv": 97137.68798835
+            "market_cap": 74664.55625836,
+            "fdv": 80989.62064128
         },
         {
             "token": "AGT",
@@ -3136,8 +3136,8 @@
             "contract_address": "0x5dbde81fce337ff4bcaaee4ca3466c00aecae274",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 56867867.09297751,
-            "fdv": 103710695.3655419
+            "market_cap": 46960456.17385588,
+            "fdv": 80565975.917382
         },
         {
             "token": "NXPC",
@@ -3150,8 +3150,8 @@
             "contract_address": "0xf2b51cc1850fed939658317a22d73d3482767591",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 79088494.6554506,
-            "fdv": 267732441.13364744
+            "market_cap": 80439462.19223413,
+            "fdv": 270633959.9484366
         },
         {
             "token": "PRAI",
@@ -3164,8 +3164,8 @@
             "contract_address": "0x899357e54c2c4b014ea50a9a7bf140ba6df2ec73",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 273526.09887553,
-            "fdv": 664626.33821224
+            "market_cap": 294052.41288808,
+            "fdv": 714502.12328447
         },
         {
             "token": "RDAC",
@@ -3178,8 +3178,8 @@
             "contract_address": "0xd3f68c6e8aee820569d58adf8d85d94489315192",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 47012.32079565,
-            "fdv": 98316.56880557
+            "market_cap": 52394.63044827,
+            "fdv": 109572.55890219
         },
         {
             "token": "PUFFER",
@@ -3192,8 +3192,8 @@
             "contract_address": "0x87d00066cf131ff54b72b134a217d5401e5392b6",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 6582692.63503522,
-            "fdv": 13605792.67189517
+            "market_cap": 6756070.37802265,
+            "fdv": 13964147.79430403
         },
         {
             "token": "DOOD",
@@ -3206,8 +3206,8 @@
             "contract_address": "0x722294f6c97102fb0ddb5b907c8d16bdeab3f6d9",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 11331191.24362836,
-            "fdv": 14527168.261062
+            "market_cap": 11872913.98810057,
+            "fdv": 15221684.60012894
         },
         {
             "token": "OBOL",
@@ -3220,8 +3220,8 @@
             "contract_address": "0x0b010000b7624eb9b3dfbc279673c76e9d29d5f7",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 1228713.31023845,
-            "fdv": 2052977.97741534
+            "market_cap": 1131230.73961579,
+            "fdv": 1888593.2069195
         },
         {
             "token": "ZKJ",
@@ -3234,8 +3234,8 @@
             "contract_address": "0xc71b5f631354be6853efe9c3ab6b9590f8302e81",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 6214720.84063187,
-            "fdv": 8117393.92511273
+            "market_cap": 6392925.45948694,
+            "fdv": 8242497.07195745
         },
         {
             "token": "MYX",
@@ -3248,8 +3248,8 @@
             "contract_address": "0xd82544bf0dfe8385ef8fa34d67e6e4940cc63e16",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 32628590.42861684,
-            "fdv": 98836751.7062409
+            "market_cap": 29105480.97411411,
+            "fdv": 88164740.14170833
         },
         {
             "token": "BOOP",
@@ -3262,8 +3262,8 @@
             "contract_address": "0x9a70815dfb644a24b57358e1041f8d0324c8f6e1",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3995132.77326839,
-            "fdv": 5285052.27799135
+            "market_cap": 4097659.38267129,
+            "fdv": 5319287.76314971
         },
         {
             "token": "B2",
@@ -3276,8 +3276,8 @@
             "contract_address": "0x783c3f003f172c6ac5ac700218a357d2d66ee2a2",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 40511232.67202297,
-            "fdv": 109125681.96125793
+            "market_cap": 41531171.49049811,
+            "fdv": 107399965.42650235
         },
         {
             "token": "HAEDAL",
@@ -3290,8 +3290,8 @@
             "contract_address": "0x3d9be0ac1001cd81c32464276d863d2ffdca4967",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 7284899.72536547,
-            "fdv": 16040146.18429095
+            "market_cap": 7424579.15220705,
+            "fdv": 16347697.20387042
         },
         {
             "token": "MILK",
@@ -3304,8 +3304,8 @@
             "contract_address": "0x7b4bf9feccff207ef2cb7101ceb15b8516021acd",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 23753.6960002,
-            "fdv": 55563.29851016
+            "market_cap": 16012.99435558,
+            "fdv": 36288.92990936
         },
         {
             "token": "SIGN",
@@ -3318,8 +3318,8 @@
             "contract_address": "0x868fced65edbf0056c4163515dd840e9f287a4c3",
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 20641160.6303722,
-            "fdv": 84517946.16621922
+            "market_cap": 21095060.91614484,
+            "fdv": 86086213.58115797
         },
         {
             "token": "AIOT",
@@ -3332,8 +3332,8 @@
             "contract_address": "0x55ad16bd573b3365f43a9daeb0cc66a73821b4a5",
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 18083237.6648122,
-            "fdv": 51191048.02831778
+            "market_cap": 23523772.3106836,
+            "fdv": 54296070.0865082
         },
         {
             "token": "SWTCH",
@@ -3356,8 +3356,8 @@
             "chain_id": "501",
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 416432.64328948,
-            "fdv": 921837.93156074
+            "market_cap": 350345.52367613,
+            "fdv": 774037.5607794
         },
         {
             "token": "POP",
@@ -3380,8 +3380,8 @@
             "has_homonym": true,
             "futures_listed": false,
             "spot_listed": false,
-            "market_cap": 5932899.29920683,
-            "fdv": 20115469.11640352
+            "market_cap": 6031567.30010351,
+            "fdv": 20450002.54175254
         },
         {
             "token": "AVNT",
@@ -3403,8 +3403,8 @@
             "has_homonym": false,
             "futures_listed": true,
             "spot_listed": true,
-            "market_cap": 37476786.72911144,
-            "fdv": 94654724.7798789
+            "market_cap": 39559755.60956245,
+            "fdv": 98902906.88855734
         },
         {
             "token": "LINEA",
@@ -3424,8 +3424,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 58894481.38204189,
-            "fdv": 164126188.60381496
+            "market_cap": 65984799.00722324,
+            "fdv": 176565565.07348147
         },
         {
             "token": "PINGPONG",
@@ -3445,8 +3445,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 15214.18178109,
-            "fdv": 19228.29678516
+            "market_cap": 11159.1946346,
+            "fdv": 14103.4404219
         },
         {
             "token": "UB",
@@ -3466,8 +3466,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 320335665.176227,
-            "fdv": 854228440.4699386
+            "market_cap": 337133673.3418127,
+            "fdv": 899023128.9115006
         },
         {
             "token": "AA",
@@ -3487,8 +3487,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1214894.75340381,
-            "fdv": 4302281.32961572
+            "market_cap": 1191759.71612176,
+            "fdv": 4220353.70693098
         },
         {
             "token": "ZEUS",
@@ -3510,8 +3510,8 @@
             "completed": true,
             "has_homonym": false,
             "spot_listed": false,
-            "market_cap": 1894936.68726807,
-            "fdv": 1968772.34666054
+            "market_cap": 1746904.7444606,
+            "fdv": 1814972.38206016
         },
         {
             "token": "ALEO",
@@ -3531,8 +3531,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 29489155.64155677,
-            "fdv": 120569171.2803814
+            "market_cap": 23876180.83932793,
+            "fdv": 96869608.14978722
         },
         {
             "token": "ZKC",
@@ -3552,8 +3552,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 10852737.66261413,
-            "fdv": 37634368.77534234
+            "market_cap": 10865622.59041016,
+            "fdv": 37592388.94997127
         },
         {
             "token": "VLR",
@@ -3573,8 +3573,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 541740.29991579,
-            "fdv": 570252.94727978
+            "market_cap": 633994.13586148,
+            "fdv": 667362.24827524
         },
         {
             "token": "STBL",
@@ -3594,8 +3594,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 17521817.37999242,
-            "fdv": 250311676.8570346
+            "market_cap": 18006373.96856856,
+            "fdv": 257233913.83669382
         },
         {
             "token": "MAIGA",
@@ -3615,8 +3615,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1549492.04226111,
-            "fdv": 4456630.57906479
+            "market_cap": 1559429.09560161,
+            "fdv": 4485211.41367072
         },
         {
             "token": "AIA",
@@ -3636,8 +3636,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 1080368.39057469,
-            "fdv": 5441785.04946883
+            "market_cap": 1031458.89166445,
+            "fdv": 5195429.28576016
         },
         {
             "token": "BARD",
@@ -3683,8 +3683,8 @@
             "actual_bnb": "100294.12",
             "collection_address": "0xEA3F20FEd5B18C57F9B705b1c15D5005560Ce687",
             "tge_total": "2000000",
-            "market_cap": 190563312.12919003,
-            "fdv": 359835217.1449423
+            "market_cap": 202853882.94035864,
+            "fdv": 383043148.23754376
         },
         {
             "token": "JOJO",
@@ -3709,8 +3709,8 @@
             "actual_bnb": "77826.06",
             "collection_address": "0xD09725a33C6c3F733cFE3225BE80083961d8dACe",
             "tge_total": "16000000",
-            "market_cap": 24128.95252714,
-            "fdv": 88568.77081063
+            "market_cap": 29748.34252701,
+            "fdv": 109195.54540576
         },
         {
             "token": "DL",
@@ -3730,8 +3730,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2690628.26964323,
-            "fdv": 10982156.20262546
+            "market_cap": 2695386.47854557,
+            "fdv": 11001577.46345132
         },
         {
             "token": "AOP",
@@ -3751,8 +3751,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 11995959.17606679,
-            "fdv": 47919943.63776328
+            "market_cap": 11790107.24162661,
+            "fdv": 46724335.35674088
         },
         {
             "token": "FROGGIE",
@@ -3772,8 +3772,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 4924001.11351017,
-            "fdv": 4924001.11351017
+            "market_cap": 4561276.4290672,
+            "fdv": 4561276.4290672
         },
         {
             "token": "NUMI",
@@ -3795,8 +3795,8 @@
             "contract_address": "0xc61eb549acf4a05ed6e3fe0966f5e213b23541ce",
             "chain_id": "56",
             "spot_listed": false,
-            "market_cap": 7373972.33828066,
-            "fdv": 19027656.15651925
+            "market_cap": 7954153.78395161,
+            "fdv": 19227985.44600342
         },
         {
             "token": "0G",
@@ -3816,8 +3816,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 71795389.59161781,
-            "fdv": 224283725.21804437
+            "market_cap": 70706802.61604151,
+            "fdv": 220883056.40776464
         },
         {
             "token": "BLESS",
@@ -3837,8 +3837,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 18957518.53731302,
-            "fdv": 78618318.92791976
+            "market_cap": 18546844.17494522,
+            "fdv": 76915220.08631454
         },
         {
             "token": "ZBT",
@@ -3863,8 +3863,8 @@
             "actual_bnb": "77416.74",
             "collection_address": "0x36d9b74667d25cfdfd8cc1d36e1af0a1e7995d68",
             "tge_total": "10000000",
-            "market_cap": 31948905.79710933,
-            "fdv": 103286873.53586026
+            "market_cap": 43640734.40763665,
+            "fdv": 141085113.97537324
         },
         {
             "token": "GAIN",
@@ -3884,8 +3884,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 546328.875243,
-            "fdv": 1227703.27729585
+            "market_cap": 565054.76201636,
+            "fdv": 1269783.85111083
         },
         {
             "token": "COAI",
@@ -3905,8 +3905,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 76487003.9738691,
-            "fdv": 278543923.5716261
+            "market_cap": 80861482.91410775,
+            "fdv": 294474532.22786015
         },
         {
             "token": "XPL",
@@ -3926,8 +3926,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 256487752.04721308,
-            "fdv": 986491354.0277426
+            "market_cap": 253417258.38900828,
+            "fdv": 974681763.0346472
         },
         {
             "token": "MIRA",
@@ -3947,8 +3947,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 13337968.0396116,
-            "fdv": 43036613.82933047
+            "market_cap": 15135437.04748216,
+            "fdv": 48836371.2835527
         },
         {
             "token": "HANA",
@@ -3968,8 +3968,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 27312631.22038848,
-            "fdv": 38238876.60244134
+            "market_cap": 28346337.73209145,
+            "fdv": 39676483.68972846
         },
         {
             "token": "GOATED",
@@ -3989,8 +3989,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3203698.23528539,
-            "fdv": 15724678.93282807
+            "market_cap": 3109011.76675047,
+            "fdv": 15198615.89943993
         },
         {
             "token": "LIGHT",
@@ -4010,8 +4010,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 5106290.60709619,
-            "fdv": 49809402.6440225
+            "market_cap": 5136579.19132673,
+            "fdv": 50104853.17818515
         },
         {
             "token": "SERAPH",
@@ -4031,8 +4031,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2159419.88813869,
-            "fdv": 5072110.52417356
+            "market_cap": 1998300.75943841,
+            "fdv": 4693669.05810428
         },
         {
             "token": "XAN",
@@ -4052,8 +4052,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 25246276.35579746,
-            "fdv": 100985105.42318985
+            "market_cap": 26866237.15742161,
+            "fdv": 107464948.62968644
         },
         {
             "token": "FF",
@@ -4073,8 +4073,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 191219155.56972557,
-            "fdv": 665110106.3294803
+            "market_cap": 183167049.6657303,
+            "fdv": 616724072.9485868
         },
         {
             "token": "EDEN",
@@ -4094,8 +4094,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 25309290.43421074,
-            "fdv": 44290814.36699852
+            "market_cap": 24535392.95550021,
+            "fdv": 42936507.35243582
         },
         {
             "token": "VFY",
@@ -4115,8 +4115,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 2189048.81908732,
-            "fdv": 5907027.26027391
+            "market_cap": 2230313.46204332,
+            "fdv": 6015447.57332312
         },
         {
             "token": "STRIKE",
@@ -4136,8 +4136,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1888207.43570311,
-            "fdv": 17991495.33780959
+            "market_cap": 1877952.80811116,
+            "fdv": 17893785.68948228
         },
         {
             "token": "TRUTH",
@@ -4157,8 +4157,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 32598268.08849613,
-            "fdv": 156323719.54598752
+            "market_cap": 27916945.04541096,
+            "fdv": 133874618.00155099
         },
         {
             "token": "2Z",
@@ -4178,8 +4178,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 221199079.64792007,
-            "fdv": 637201027.0960497
+            "market_cap": 230355546.61627984,
+            "fdv": 663577765.0377111
         },
         {
             "token": "BTG",
@@ -4199,8 +4199,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 6586463.78710996,
-            "fdv": 14685537.52845582
+            "market_cap": 5919401.95605908,
+            "fdv": 13198220.2258283
         },
         {
             "token": "EVAA",
@@ -4220,8 +4220,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 14037938.73524014,
-            "fdv": 36504662.04545718
+            "market_cap": 20929839.12103182,
+            "fdv": 50942509.94186974
         },
         {
             "token": "P",
@@ -4241,8 +4241,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2384528.98613106,
-            "fdv": 7874419.14754192
+            "market_cap": 2346766.8042238,
+            "fdv": 7749717.26721547
         },
         {
             "token": "CYPR",
@@ -4262,8 +4262,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 471288.06426318,
-            "fdv": 4969617.91236091
+            "market_cap": 343638.81747855,
+            "fdv": 3623587.67857589
         },
         {
             "token": "LYN",
@@ -4283,8 +4283,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 8726183.29137095,
-            "fdv": 34134846.28462346
+            "market_cap": 8869072.66499288,
+            "fdv": 34693797.04710791
         },
         {
             "token": "KLINK",
@@ -4312,8 +4312,8 @@
             "actual_bnb": "61524.28",
             "collection_address": "0xfd18fa5b167e4a903ae8d385b53fdc6f0a807c13",
             "tge_total": "20000000",
-            "market_cap": 69372.11642757,
-            "fdv": 159136.87313475
+            "market_cap": 89963.28040567,
+            "fdv": 203726.9522825
         },
         {
             "token": "KGEN",
@@ -4333,8 +4333,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 43899675.52731922,
-            "fdv": 204683767.16738364
+            "market_cap": 38176672.1718895,
+            "fdv": 178000064.5606991
         },
         {
             "token": "SLX(old)",
@@ -4354,8 +4354,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 3229417.49841206,
-            "fdv": 11611388.75833552,
+            "market_cap": 3229483.15959689,
+            "fdv": 11611624.84349444,
             "total_amount": ""
         },
         {
@@ -4376,8 +4376,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 2996693.12948402,
-            "fdv": 10754326.68036613
+            "market_cap": 3148001.25619541,
+            "fdv": 11297330.90326724
         },
         {
             "token": "WAL",
@@ -4397,8 +4397,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 79941416.69773696,
-            "fdv": 166204541.86275372
+            "market_cap": 80008874.22626121,
+            "fdv": 162682645.11536458
         },
         {
             "token": "EUL",
@@ -4418,8 +4418,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 27156514.88478687,
-            "fdv": 27775761.65931394
+            "market_cap": 27167784.11921624,
+            "fdv": 27781560.02023023
         },
         {
             "token": "CDL",
@@ -4441,8 +4441,8 @@
             "spot_listed": false,
             "contract_address": "0x84575b87395c970f1f48e87d87a8db36ed653716",
             "chain_id": "56",
-            "market_cap": 1333528.77688918,
-            "fdv": 6517882.33899573
+            "market_cap": 1311566.94052115,
+            "fdv": 6410539.57453811
         },
         {
             "token": "CORL",
@@ -4462,8 +4462,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 13546.93564167,
-            "fdv": 50148.45755108
+            "market_cap": 15928.43026681,
+            "fdv": 58964.34664037
         },
         {
             "token": "YB",
@@ -4488,8 +4488,8 @@
             "actual_bnb": "456051.16",
             "collection_address": "0x0190e70c8bf2a495e88d3cad06599af3e444ed89",
             "tge_total": "25000000",
-            "market_cap": 9112259.40642118,
-            "fdv": 70154515.41218129
+            "market_cap": 9516425.74994834,
+            "fdv": 73436965.12883133
         },
         {
             "token": "ENSO",
@@ -4509,8 +4509,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 15964275.31356566,
-            "fdv": 75373018.54951338
+            "market_cap": 17357564.1405409,
+            "fdv": 81575747.68989465
         },
         {
             "token": "LAB",
@@ -4530,13 +4530,13 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 7616911845.609922,
+            "market_cap": 5163793560.667712,
             "pretge": false,
             "target_bnb": "153.47",
             "actual_bnb": "91167.88",
             "collection_address": "0x5029fa9818000abe8691b44b574079cc621afba6",
             "tge_total": "20000000",
-            "fdv": 17040328225.331476
+            "fdv": 11484010556.100985
         },
         {
             "token": "CLO",
@@ -4556,8 +4556,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 18487302.40893524,
-            "fdv": 143201412.9274612
+            "market_cap": 17006022.424675,
+            "fdv": 131727516.84488769
         },
         {
             "token": "WBAI",
@@ -4577,8 +4577,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 703944.33687158,
-            "fdv": 1716866.47285588
+            "market_cap": 618856.47486044,
+            "fdv": 1509343.67612008
         },
         {
             "token": "RECALL",
@@ -4598,8 +4598,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 9997314.33103642,
-            "fdv": 30940174.84070167
+            "market_cap": 10509783.43914638,
+            "fdv": 32526189.17218632
         },
         {
             "token": "RVV",
@@ -4624,8 +4624,8 @@
             "actual_bnb": "96724.14",
             "collection_address": "0xea6d6f436078b870949235df75a045b6dc35e447",
             "tge_total": "150000000",
-            "market_cap": 470632.25001963,
-            "fdv": 1578290.38919312
+            "market_cap": 454970.14489842,
+            "fdv": 1525766.68308013
         },
         {
             "token": "ANOME",
@@ -4645,8 +4645,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 257712.26960092,
-            "fdv": 8590408.98669756
+            "market_cap": 221683.83294023,
+            "fdv": 7389461.09800773
         },
         {
             "token": "SUBHUB",
@@ -4687,8 +4687,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 24253248.1594426,
-            "fdv": 38763461.52146493,
+            "market_cap": 25527665.99443087,
+            "fdv": 40800337.01063948,
             "total_amount": ""
         },
         {
@@ -4709,8 +4709,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 32628590.42861684,
-            "fdv": 98836751.7062409
+            "market_cap": 29105480.97411411,
+            "fdv": 88164740.14170833
         },
         {
             "token": "SVSA",
@@ -4730,8 +4730,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 424727.92319144,
-            "fdv": 1174445.82801833
+            "market_cap": 429685.05614099,
+            "fdv": 1173254.34900901
         },
         {
             "token": "SIGMA",
@@ -4751,8 +4751,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 920174.45449917,
-            "fdv": 4279960.39231958
+            "market_cap": 914926.18071004,
+            "fdv": 4255549.36478486
         },
         {
             "token": "BLUAI",
@@ -4772,8 +4772,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 15992333.29478532,
-            "fdv": 130230727.15623225
+            "market_cap": 17805905.57302554,
+            "fdv": 144999231.05069664
         },
         {
             "token": "TURTLE",
@@ -4793,8 +4793,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 8412820.80313452,
-            "fdv": 33845926.71983985
+            "market_cap": 8856153.84415351,
+            "fdv": 35450603.30822696
         },
         {
             "token": "APR",
@@ -4814,8 +4814,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 47396328.84855036,
-            "fdv": 191985129.51311538
+            "market_cap": 49783057.86082695,
+            "fdv": 201652892.60081804
         },
         {
             "token": "MET",
@@ -4835,8 +4835,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 88308027.68540359,
-            "fdv": 164903940.25373116
+            "market_cap": 94524233.41737896,
+            "fdv": 176511910.26354694
         },
         {
             "token": "ON",
@@ -4856,8 +4856,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 53162608.10389648,
-            "fdv": 75946583.0055664
+            "market_cap": 57521650.23010388,
+            "fdv": 82173786.04300556
         },
         {
             "token": "AT",
@@ -4877,8 +4877,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 38491866.11507904,
-            "fdv": 141891584.89480114,
+            "market_cap": 38690225.20298638,
+            "fdv": 142622790.94434193,
             "created_timestamp": 1764232817,
             "updated_timestamp": 1764232817
         },
@@ -4900,8 +4900,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 40511232.67202297,
-            "fdv": 109125681.96125793
+            "market_cap": 41531171.49049811,
+            "fdv": 107399965.42650235
         },
         {
             "token": "AIO",
@@ -4921,8 +4921,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 33748484.04886927,
-            "fdv": 95402075.04980713
+            "market_cap": 34657850.51916189,
+            "fdv": 94667715.15750313
         },
         {
             "token": "XNAP",
@@ -4942,8 +4942,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 10828.42740686,
-            "fdv": 30576.30177948
+            "market_cap": 10384.44188691,
+            "fdv": 29322.61694294
         },
         {
             "token": "42",
@@ -4963,8 +4963,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 1103746.17286188,
-            "fdv": 3411889.25150504
+            "market_cap": 973527.90813527,
+            "fdv": 3009359.83967627
         },
         {
             "token": "COMMON",
@@ -4984,8 +4984,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 246708.20403929,
-            "fdv": 1311247.60592705
+            "market_cap": 309590.98685812,
+            "fdv": 1645467.94021353
         },
         {
             "token": "PIGGY",
@@ -5033,8 +5033,8 @@
             "tge_total": "20000000",
             "created_timestamp": 1763020087,
             "updated_timestamp": 1763020087,
-            "market_cap": 211135965.2257411,
-            "fdv": 768465751.5040623,
+            "market_cap": 188281126.49144146,
+            "fdv": 685281625.0825895,
             "total_amount": ""
         },
         {
@@ -5055,8 +5055,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 515191.04420623,
-            "fdv": 1311586.16142116
+            "market_cap": 422295.43546414,
+            "fdv": 1075090.2124851
         },
         {
             "token": "BANK",
@@ -5076,8 +5076,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 24757036.80230632,
-            "fdv": 76349482.99845327
+            "market_cap": 26059684.04535109,
+            "fdv": 80366782.98188922
         },
         {
             "token": "MMT",
@@ -5102,8 +5102,8 @@
             "actual_bnb": "522966.86",
             "collection_address": "0xa852ec7FCe6E1E6968d4DE3ED8185c48379412eA",
             "tge_total": "15000000",
-            "market_cap": 45150386.77108744,
-            "fdv": 177725941.35325414
+            "market_cap": 38340671.9576963,
+            "fdv": 150920789.45736507
         },
         {
             "token": "LITKEY",
@@ -5123,8 +5123,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 1054199.93924778,
-            "fdv": 4791817.90567174,
+            "market_cap": 1008113.71473214,
+            "fdv": 4582335.06696428,
             "total_amount": "10000000"
         },
         {
@@ -5145,8 +5145,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 98615211.08690315,
-            "fdv": 306228067.8593009,
+            "market_cap": 108597101.62642169,
+            "fdv": 337224655.7062416,
             "total_amount": "9968000"
         },
         {
@@ -5167,8 +5167,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 231950.89946459,
-            "fdv": 696549.24764141,
+            "market_cap": 223278.76173264,
+            "fdv": 670506.79198992,
             "total_amount": "10000000"
         },
         {
@@ -5189,8 +5189,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": false,
-            "market_cap": 407686.82487194,
-            "fdv": 2149768.53298074,
+            "market_cap": 336935.87698055,
+            "fdv": 1776692.55363494,
             "total_amount": "21000000"
         },
         {
@@ -5211,8 +5211,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "futures_listed": true,
-            "market_cap": 59664316.94295153,
-            "fdv": 259552545.4426681,
+            "market_cap": 52285563.10091522,
+            "fdv": 227453387.35247162,
             "total_amount": "500000000"
         },
         {
@@ -5233,8 +5233,8 @@
             "has_homonym": false,
             "spot_listed": true,
             "futures_listed": true,
-            "market_cap": 59993498.81778835,
-            "fdv": 299219445.47525364,
+            "market_cap": 66846895.52843575,
+            "fdv": 333400975.2041684,
             "total_amount": "14990000"
         },
         {
@@ -5256,8 +5256,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 37472782.12736873,
-            "fdv": 82617678.71464674
+            "market_cap": 37282832.01691982,
+            "fdv": 81598573.63044961
         },
         {
             "token": "PLANCK",
@@ -5278,8 +5278,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "15000000",
-            "market_cap": 23144.32530353,
-            "fdv": 86494.02530791
+            "market_cap": 29913.90621232,
+            "fdv": 110638.1393031
         },
         {
             "token": "ELIZAOS",
@@ -5300,8 +5300,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "165000000",
-            "market_cap": 5498477.67019004,
-            "fdv": 6491728.98206929
+            "market_cap": 4987062.90260892,
+            "fdv": 5816251.36671518
         },
         {
             "token": "PLAYSOLANA",
@@ -5325,8 +5325,8 @@
             "has_homonym": false,
             "spot_listed": false,
             "total_amount": "50000000",
-            "market_cap": 1205512.95624729,
-            "fdv": 3380162.62662601
+            "market_cap": 1045035.65912156,
+            "fdv": 2930197.02538109
         },
         {
             "token": "DGRAM",
@@ -5347,8 +5347,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "99999600",
-            "market_cap": 334499.24907196,
-            "fdv": 1600038.50180557
+            "market_cap": 47362.09247007,
+            "fdv": 226551.09596938
         },
         {
             "token": "GAIB",
@@ -5369,8 +5369,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "4999925",
-            "market_cap": 3012503.26915365,
-            "fdv": 14707214.53023011
+            "market_cap": 2630455.70530797,
+            "fdv": 12842036.31125052
         },
         {
             "token": "BOB",
@@ -5391,8 +5391,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "100000000",
-            "market_cap": 10763921.90105619,
-            "fdv": 48486134.68944233,
+            "market_cap": 10582173.65173936,
+            "fdv": 47667448.88170886,
             "created_timestamp": 1763717402,
             "updated_timestamp": 1763717402
         },
@@ -5415,8 +5415,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2800000",
-            "market_cap": 6267755.95538313,
-            "fdv": 28244831.83181378
+            "market_cap": 6207550.9770472,
+            "fdv": 27973499.31864176
         },
         {
             "token": "DIGI",
@@ -5437,8 +5437,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "999975000",
-            "market_cap": 4594.53891042,
-            "fdv": 12157.50844122
+            "market_cap": 4919.27304717,
+            "fdv": 13016.7803041
         },
         {
             "token": "KO",
@@ -5459,8 +5459,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 3095636.97717999,
-            "fdv": 8755895.49497977
+            "market_cap": 3230696.10078767,
+            "fdv": 9137905.26572159
         },
         {
             "token": "SSS",
@@ -5481,8 +5481,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 770.54364626,
-            "fdv": 6315.93152674
+            "market_cap": 735.82988326,
+            "fdv": 6031.39248575
         },
         {
             "token": "IRYS",
@@ -5503,8 +5503,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "90000000",
-            "market_cap": 38469352.37073981,
-            "fdv": 149872039.54013312,
+            "market_cap": 39018089.20038504,
+            "fdv": 152009853.22197378,
             "created_timestamp": 1764168257,
             "updated_timestamp": 1764168257
         },
@@ -5527,8 +5527,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1670000",
-            "market_cap": 93003769.42847717,
-            "fdv": 173437258.43862048
+            "market_cap": 88885081.78387232,
+            "fdv": 165641585.07716787
         },
         {
             "token": "GUA",
@@ -5549,8 +5549,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "15000000",
-            "market_cap": 66082149.02938185,
-            "fdv": 222610450.42868036,
+            "market_cap": 16948071.66391042,
+            "fdv": 57092844.62469827,
             "created_timestamp": 1766306536,
             "updated_timestamp": 1766306536
         },
@@ -5573,8 +5573,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "17203200",
-            "market_cap": 114197721.18008009,
-            "fdv": 131754759.65050821
+            "market_cap": 119532070.76105589,
+            "fdv": 137857800.96621564
         },
         {
             "token": "GAIX",
@@ -5595,8 +5595,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 2072696.77607529,
-            "fdv": 7184390.90494036
+            "market_cap": 2128636.08748524,
+            "fdv": 7185269.49362108
         },
         {
             "token": "SQD",
@@ -5617,8 +5617,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "26740000",
-            "market_cap": 36563387.97619142,
-            "fdv": 44776759.44194577
+            "market_cap": 37001537.0196097,
+            "fdv": 45096816.3423813
         },
         {
             "token": "RLS",
@@ -5639,8 +5639,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "50000000",
-            "market_cap": 4914950.20479667,
-            "fdv": 24795323.63377898,
+            "market_cap": 4763357.37876251,
+            "fdv": 23290259.14399122,
             "created_timestamp": 1764665056,
             "updated_timestamp": 1764665056
         },
@@ -5663,8 +5663,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1666665",
-            "market_cap": 5136672.95786749,
-            "fdv": 16035109.18492546
+            "market_cap": 5553277.39014543,
+            "fdv": 17335619.77092043
         },
         {
             "token": "H",
@@ -5685,8 +5685,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "8330000",
-            "market_cap": 2904.73667269,
-            "fdv": 9364.44198218
+            "market_cap": 4411.23600168,
+            "fdv": 14221.17329803
         },
         {
             "token": "ESPORTS",
@@ -5707,8 +5707,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1250000",
-            "market_cap": 19125112.47728957,
-            "fdv": 27098375.04140408
+            "market_cap": 15401833.67409739,
+            "fdv": 21822860.68757107
         },
         {
             "token": "POWER",
@@ -5729,8 +5729,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "7500000",
-            "market_cap": 22787357.12884575,
-            "fdv": 75643329.3979113,
+            "market_cap": 23799170.88471617,
+            "fdv": 79002076.12715608,
             "created_timestamp": 1765006817,
             "updated_timestamp": 1765006817
         },
@@ -5753,8 +5753,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "300000000",
-            "market_cap": 894001154.3841623,
-            "fdv": 3724714428.714004
+            "market_cap": 835917266.4248818,
+            "fdv": 3463388771.3735375
         },
         {
             "token": "NIGHT",
@@ -5775,8 +5775,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "120000000",
-            "market_cap": 505956411.1411035,
-            "fdv": 731000707.8858526,
+            "market_cap": 535664752.22143084,
+            "fdv": 773923018.7443212,
             "created_timestamp": 1765359977,
             "updated_timestamp": 1773228736
         },
@@ -5799,8 +5799,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "1496000",
-            "market_cap": 13538862.83301635,
-            "fdv": 58864621.01311458,
+            "market_cap": 15268959.72538234,
+            "fdv": 66386781.41470586,
             "created_timestamp": 1765345577,
             "updated_timestamp": 1765345577
         },
@@ -5823,8 +5823,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "5603400",
-            "market_cap": 4484298.66391741,
-            "fdv": 16295331.89518189
+            "market_cap": 4387991.52059389,
+            "fdv": 15945364.82520029
         },
         {
             "token": "CYS",
@@ -5845,8 +5845,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 56221025.95355719,
-            "fdv": 349633245.9798333,
+            "market_cap": 53863076.17217487,
+            "fdv": 334969379.180192,
             "created_timestamp": 1765531096,
             "updated_timestamp": 1765531096
         },
@@ -5869,8 +5869,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "15000000",
-            "market_cap": 5677048.1562802,
-            "fdv": 23771260.60580139
+            "market_cap": 7443640.72046577,
+            "fdv": 31123639.55347708
         },
         {
             "token": "US",
@@ -5891,8 +5891,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "49999990",
-            "market_cap": 35016345.77634706,
-            "fdv": 117583809.21388291
+            "market_cap": 52911067.56592708,
+            "fdv": 177248991.8404802
         },
         {
             "token": "RAVE",
@@ -5913,8 +5913,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 78796709.54523145,
-            "fdv": 305796271.5339352,
+            "market_cap": 79385769.11607821,
+            "fdv": 308082607.39144933,
             "created_timestamp": 1765721896,
             "updated_timestamp": 1765721896
         },
@@ -5937,8 +5937,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "5000000",
-            "market_cap": 18083237.6648122,
-            "fdv": 51191048.02831778
+            "market_cap": 23523772.3106836,
+            "fdv": 54296070.0865082
         },
         {
             "token": "MAGMA",
@@ -5959,8 +5959,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "9999900",
-            "market_cap": 119025492.21273454,
-            "fdv": 450214627.75502425,
+            "market_cap": 140376480.46557805,
+            "fdv": 530974867.00927866,
             "created_timestamp": 1767181576,
             "updated_timestamp": 1767181576
         },
@@ -5983,8 +5983,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 2532426.28475439,
-            "fdv": 13473305.72483688
+            "market_cap": 2326577.47200926,
+            "fdv": 12378125.18437788
         },
         {
             "token": "IR",
@@ -6005,13 +6005,13 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "7500000",
-            "market_cap": 2889185.99848733,
+            "market_cap": 2872465.09004141,
             "pretge": false,
             "target_bnb": "174.71",
             "actual_bnb": "125716.54",
             "collection_address": "0xa3ea0e2f9f2c4b702275ad957a799276672f7dd1",
             "tge_total": "7500000",
-            "fdv": 14093590.23652356,
+            "fdv": 14012024.82947029,
             "created_timestamp": 1766306057,
             "updated_timestamp": 1766306057
         },
@@ -6034,8 +6034,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 745924.82814836,
-            "fdv": 1973998.88362121
+            "market_cap": 757068.99428807,
+            "fdv": 2003490.55716328
         },
         {
             "token": "VOOI",
@@ -6056,8 +6056,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 1629845.77463926,
-            "fdv": 5176533.12903184
+            "market_cap": 2579484.15874449,
+            "fdv": 7479957.86054416
         },
         {
             "token": "RTX",
@@ -6078,8 +6078,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1000000",
-            "market_cap": 28392835.22418168,
-            "fdv": 105124078.02696705
+            "market_cap": 28226667.37701423,
+            "fdv": 104508843.88119674
         },
         {
             "token": "ZKP",
@@ -6100,8 +6100,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "5000000",
-            "market_cap": 13274162.16707345,
-            "fdv": 47034544.96708781,
+            "market_cap": 14066637.4660517,
+            "fdv": 49842535.00186048,
             "created_timestamp": 1766306536,
             "updated_timestamp": 1766306536
         },
@@ -6124,8 +6124,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "9999750",
-            "market_cap": 97081.16434855,
-            "fdv": 706044.83162583
+            "market_cap": 26940.80022897,
+            "fdv": 195933.09257436
         },
         {
             "token": "BTW",
@@ -6151,8 +6151,8 @@
             "actual_bnb": "93394.48",
             "collection_address": "0xa04f0364d5972c6777ac50fcf1c7935eddd4e1ac",
             "tge_total": "100000000",
-            "market_cap": 153857628.1390086,
-            "fdv": 614230216.8190287,
+            "market_cap": 166857362.63450146,
+            "fdv": 640155295.856273,
             "created_timestamp": 1780577176,
             "updated_timestamp": 1780577176
         },
@@ -6175,8 +6175,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "285710",
-            "market_cap": 727973983.9110391,
-            "fdv": 2527541180.2421155
+            "market_cap": 983997312.2187912,
+            "fdv": 3181711514.3563232
         },
         {
             "token": "UB",
@@ -6197,8 +6197,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "28570000",
-            "market_cap": 320335665.176227,
-            "fdv": 854228440.4699386
+            "market_cap": 337133673.3418127,
+            "fdv": 899023128.9115006
         },
         {
             "token": "KGEN",
@@ -6219,8 +6219,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "5560000",
-            "market_cap": 43899675.52731922,
-            "fdv": 204683767.16738364
+            "market_cap": 38176672.1718895,
+            "fdv": 178000064.5606991
         },
         {
             "token": "SENTIS",
@@ -6241,8 +6241,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "9090000",
-            "market_cap": 33426871.47804102,
-            "fdv": 112843902.21394196
+            "market_cap": 31718307.29371462,
+            "fdv": 107076056.13031945
         },
         {
             "token": "COLLECT",
@@ -6263,13 +6263,13 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "60000000",
-            "market_cap": 23811165.59375626,
+            "market_cap": 20200498.43765948,
             "pretge": false,
             "target_bnb": "241.13",
             "actual_bnb": "86579.32",
             "collection_address": "0x9d1dd2d8e2fe143649b5cf0da64f9562ee15ee2b",
             "tge_total": "60000000",
-            "fdv": 133023271.47349867,
+            "fdv": 112851946.57910326,
             "created_timestamp": 1767181576,
             "updated_timestamp": 1767181576
         },
@@ -6292,8 +6292,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "28570000",
-            "market_cap": 407686.82487194,
-            "fdv": 2149768.53298074
+            "market_cap": 336935.87698055,
+            "fdv": 1776692.55363494
         },
         {
             "token": "OOOO",
@@ -6314,8 +6314,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 3867.56823033,
-            "fdv": 24385.6761055
+            "market_cap": 2829.33894382,
+            "fdv": 17839.4637063
         },
         {
             "token": "Q",
@@ -6336,8 +6336,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "89000000",
-            "market_cap": 70266915.4870897,
-            "fdv": 172785492.23153782
+            "market_cap": 72106181.96503185,
+            "fdv": 172938139.3351655
         },
         {
             "token": "AIAV",
@@ -6358,8 +6358,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "4043995",
-            "market_cap": 136986.77817245,
-            "fdv": 948890.44322138
+            "market_cap": 118579.41559648,
+            "fdv": 821384.92286189
         },
         {
             "token": "ESIM",
@@ -6380,8 +6380,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "9999750",
-            "market_cap": 2968886.59515387,
-            "fdv": 22073506.28367191
+            "market_cap": 3251740.86076731,
+            "fdv": 24176511.97596513
         },
         {
             "token": "BREV",
@@ -6402,8 +6402,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "9982350",
-            "market_cap": 24875536.72086604,
-            "fdv": 72951759.32437934
+            "market_cap": 28895726.47134814,
+            "fdv": 84741652.278508
         },
         {
             "token": "ZTC",
@@ -6429,8 +6429,8 @@
             "actual_bnb": "138492.20",
             "collection_address": "0x510cb932a0f875148f14d06b1004f15f1936bc86",
             "tge_total": "210000000",
-            "market_cap": 3039888.43581086,
-            "fdv": 11450734.77996803
+            "market_cap": 3144477.03335254,
+            "fdv": 11844701.96552337
         },
         {
             "token": "BLESS",
@@ -6451,8 +6451,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "71430000",
-            "market_cap": 18957518.53731302,
-            "fdv": 78618318.92791976
+            "market_cap": 18546844.17494522,
+            "fdv": 76915220.08631454
         },
         {
             "token": "DN",
@@ -6473,8 +6473,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1000000",
-            "market_cap": 7088786.76375405,
-            "fdv": 31505718.95001804
+            "market_cap": 6008155.26310196,
+            "fdv": 26702912.28045318
         },
         {
             "token": "CAI",
@@ -6495,8 +6495,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1000000",
-            "market_cap": 335062.13926982,
-            "fdv": 1987270.89100188
+            "market_cap": 323705.87332168,
+            "fdv": 1919916.28985718
         },
         {
             "token": "FOGO",
@@ -6523,8 +6523,8 @@
             "collection_address": "0x0f9485e528a11112429e5c99cb48b2735cdf1511",
             "bnb_limit": "6",
             "tge_total": "200000000",
-            "market_cap": 151017927.43888104,
-            "fdv": 393393409.7084094
+            "market_cap": 151114860.6866103,
+            "fdv": 393490342.9561387
         },
         {
             "token": "SIGHT",
@@ -6567,8 +6567,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "20000000",
-            "market_cap": 260969.95014081,
-            "fdv": 1581636.06145945
+            "market_cap": 276534.66386184,
+            "fdv": 1675967.65976876
         },
         {
             "token": "FUN",
@@ -6589,8 +6589,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "6000000",
-            "market_cap": 7157081.82586057,
-            "fdv": 24577778.63123281
+            "market_cap": 7735128.87790849,
+            "fdv": 24250721.27686311
         },
         {
             "token": "ROLL",
@@ -6611,8 +6611,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "9999995",
-            "market_cap": 11696388.0338635,
-            "fdv": 75460567.9604097
+            "market_cap": 10598510.76450359,
+            "fdv": 68377488.80324903
         },
         {
             "token": "SENT",
@@ -6638,8 +6638,8 @@
             "actual_bnb": "173909.33",
             "collection_address": "0x5fef53eff668946262be0878f28d2336a4ce9e75",
             "tge_total": "687194767",
-            "market_cap": 109842103.82091434,
-            "fdv": 450944808.2642099
+            "market_cap": 113651563.07024843,
+            "fdv": 464972232.93423134
         },
         {
             "token": "ELSA",
@@ -6660,8 +6660,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 42965127.5494278,
-            "fdv": 42965127.5494278,
+            "market_cap": 46138006.01390061,
+            "fdv": 46138006.01390061,
             "created_timestamp": 1769064496,
             "updated_timestamp": 1769064496
         },
@@ -6684,8 +6684,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "5000000",
-            "market_cap": 17549415.77637156,
-            "fdv": 80872883.76208094,
+            "market_cap": 16009956.90464473,
+            "fdv": 73778603.24721074,
             "created_timestamp": 1768994296,
             "updated_timestamp": 1768994296
         },
@@ -6708,8 +6708,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "75000000",
-            "market_cap": 277665947.7731571,
-            "fdv": 1586662558.7037551,
+            "market_cap": 219124703.53551975,
+            "fdv": 1252141163.060113,
             "created_timestamp": 1769657416,
             "updated_timestamp": 1769657416
         },
@@ -6732,8 +6732,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "100000000",
-            "market_cap": 6843203.68032089,
-            "fdv": 33381481.36741902,
+            "market_cap": 7067402.27472403,
+            "fdv": 34475133.04743433,
             "created_timestamp": 1769163376,
             "updated_timestamp": 1769163376
         },
@@ -6756,8 +6756,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "482865600",
-            "market_cap": 33476812.77154823,
-            "fdv": 128336487.60009962,
+            "market_cap": 35142083.77655427,
+            "fdv": 132889798.56887639,
             "created_timestamp": 1769163376,
             "updated_timestamp": 1769163376
         },
@@ -6780,8 +6780,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "9940000",
-            "market_cap": 34185544.05282534,
-            "fdv": 80129049.18077987
+            "market_cap": 29672503.69073792,
+            "fdv": 69550728.92442402
         },
         {
             "token": "XPIN",
@@ -6802,8 +6802,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "454540000",
-            "market_cap": 60088830.88660115,
-            "fdv": 135349089.76462415
+            "market_cap": 62755196.32173237,
+            "fdv": 141355033.4533262
         },
         {
             "token": "BIRB",
@@ -6824,8 +6824,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "6000000",
-            "market_cap": 18821558.9306639,
-            "fdv": 66040557.65145231
+            "market_cap": 23086529.48595706,
+            "fdv": 81005366.6173932
         },
         {
             "token": "ZAMA",
@@ -6851,8 +6851,8 @@
             "actual_bnb": "225209.54",
             "collection_address": "0xa071c811dfa06a96fd617eb4468eef8768b1bd4e",
             "tge_total": "440000000",
-            "market_cap": 84030626.06330736,
-            "fdv": 344448057.6069546
+            "market_cap": 85823213.65433754,
+            "fdv": 349152656.5639999
         },
         {
             "token": "KIN",
@@ -6873,8 +6873,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 426968.39323234,
-            "fdv": 2900846.83300106
+            "market_cap": 417205.52569019,
+            "fdv": 2834517.37199281
         },
         {
             "token": "INX",
@@ -6895,8 +6895,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "29970000",
-            "market_cap": 15310895.71696334,
-            "fdv": 76773282.43977004
+            "market_cap": 16095456.09121362,
+            "fdv": 80707296.25038171
         },
         {
             "token": "ELON",
@@ -6917,8 +6917,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1000000",
-            "market_cap": 835063.03406881,
-            "fdv": 6185652.10421342
+            "market_cap": 827099.71686893,
+            "fdv": 6126664.56939951
         },
         {
             "token": "TRIA",
@@ -6939,8 +6939,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "75000000",
-            "market_cap": 40457368.31009065,
-            "fdv": 187504893.28808695,
+            "market_cap": 43769819.50204552,
+            "fdv": 202856875.71336454,
             "created_timestamp": 1770373096,
             "updated_timestamp": 1770373096
         },
@@ -6963,8 +6963,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 1923701.43320238,
-            "fdv": 7684968.9725247
+            "market_cap": 2167239.36820958,
+            "fdv": 8657875.39233616
         },
         {
             "token": "RNBW",
@@ -6985,8 +6985,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "4999610",
-            "market_cap": 3596455.92741338,
-            "fdv": 17125980.60673042
+            "market_cap": 3296915.25515282,
+            "fdv": 15699596.45310869
         },
         {
             "token": "STABLE",
@@ -7007,8 +7007,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "52630000",
-            "market_cap": 894001154.3841623,
-            "fdv": 3724714428.714004
+            "market_cap": 835917266.4248818,
+            "fdv": 3463388771.3735375
         },
         {
             "token": "COAI",
@@ -7029,8 +7029,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1720000",
-            "market_cap": 76487003.9738691,
-            "fdv": 278543923.5716261
+            "market_cap": 80861482.91410775,
+            "fdv": 294474532.22786015
         },
         {
             "token": "ESP",
@@ -7056,8 +7056,8 @@
             "actual_bnb": "64091.54",
             "collection_address": "0x68297d833d16e2e4e9807512164334ba6c4699da",
             "tge_total": "53850000",
-            "market_cap": 41031203.05382177,
-            "fdv": 241375585.50324866
+            "market_cap": 42268642.29933787,
+            "fdv": 248655109.38216954
         },
         {
             "token": "BTG",
@@ -7078,8 +7078,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "52080",
-            "market_cap": 6586463.78710996,
-            "fdv": 14685537.52845582
+            "market_cap": 5919401.95605908,
+            "fdv": 13198220.2258283
         },
         {
             "token": "ARTX",
@@ -7100,8 +7100,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1086911",
-            "market_cap": 6267755.95538313,
-            "fdv": 28244831.83181378
+            "market_cap": 6207550.9770472,
+            "fdv": 27973499.31864176
         },
         {
             "token": "NAORIS",
@@ -7122,8 +7122,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "11363560",
-            "market_cap": 54489705.37595854,
-            "fdv": 152081970.63833097
+            "market_cap": 52122679.2450213,
+            "fdv": 143479146.0351076
         },
         {
             "token": "IP",
@@ -7144,8 +7144,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1022940",
-            "market_cap": 109659707.53804253,
-            "fdv": 316947599.4363664
+            "market_cap": 109611089.30356833,
+            "fdv": 316691663.4721585
         },
         {
             "token": "VELVET",
@@ -7166,8 +7166,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "6250000",
-            "market_cap": 767506486.0588783,
-            "fdv": 1748745553.0784822
+            "market_cap": 192151582.5901155,
+            "fdv": 437812880.6401767
         },
         {
             "token": "JCT",
@@ -7188,8 +7188,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "147042800",
-            "market_cap": 59664316.94295153,
-            "fdv": 259552545.4426681
+            "market_cap": 52285563.10091522,
+            "fdv": 227453387.35247162
         },
         {
             "token": "ICNT",
@@ -7210,8 +7210,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "675640",
-            "market_cap": 59631688.89372927,
-            "fdv": 164984865.7445389
+            "market_cap": 47131043.42819202,
+            "fdv": 130398937.48872153
         },
         {
             "token": "TRUTH",
@@ -7232,8 +7232,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "52081458",
-            "market_cap": 32598268.08849613,
-            "fdv": 156323719.54598752
+            "market_cap": 27916945.04541096,
+            "fdv": 133874618.00155099
         },
         {
             "token": "GUA",
@@ -7254,8 +7254,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3120000",
-            "market_cap": 66082149.02938185,
-            "fdv": 222610450.42868036
+            "market_cap": 16948071.66391042,
+            "fdv": 57092844.62469827
         },
         {
             "token": "LYN",
@@ -7276,8 +7276,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1562465",
-            "market_cap": 8726183.29137095,
-            "fdv": 34134846.28462346
+            "market_cap": 8869072.66499288,
+            "fdv": 34693797.04710791
         },
         {
             "token": "ROBO",
@@ -7298,8 +7298,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "49955328",
-            "market_cap": 44679452.95311567,
-            "fdv": 173616167.50575516
+            "market_cap": 39557461.1458676,
+            "fdv": 153713045.8515256
         },
         {
             "token": "BSB",
@@ -7320,8 +7320,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 54079124.09234207,
-            "fdv": 242888498.05678004,
+            "market_cap": 47888847.49652776,
+            "fdv": 215085773.62015614,
             "created_timestamp": 1774433777,
             "updated_timestamp": 1774433777
         },
@@ -7344,8 +7344,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "20000000",
-            "market_cap": 44679452.95311567,
-            "fdv": 173616167.50575516,
+            "market_cap": 39557461.1458676,
+            "fdv": 153713045.8515256,
             "created_timestamp": 1773804617,
             "updated_timestamp": 1773804617
         },
@@ -7369,8 +7369,8 @@
             "futures_listed": false,
             "total_amount": "4995000",
             "pretge": true,
-            "market_cap": 18260972.29033982,
-            "fdv": 57106583.7643926
+            "market_cap": 19316037.91448182,
+            "fdv": 55688283.2107531
         },
         {
             "token": "MAGMA",
@@ -7391,8 +7391,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "5000000",
-            "market_cap": 119025492.21273454,
-            "fdv": 450214627.75502425
+            "market_cap": 140376480.46557805,
+            "fdv": 530974867.00927866
         },
         {
             "token": "LAB",
@@ -7413,8 +7413,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3450000",
-            "market_cap": 7616911845.609922,
-            "fdv": 17040328225.331476
+            "market_cap": 5163793560.667712,
+            "fdv": 11484010556.100985
         },
         {
             "token": "SN3",
@@ -7435,8 +7435,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 214820.9249095,
-            "fdv": 522882.96159836
+            "market_cap": 182985.70023181,
+            "fdv": 444180.84512523
         },
         {
             "token": "UP",
@@ -7462,8 +7462,8 @@
             "actual_bnb": "91712.29",
             "collection_address": "0xb03a10926da0f7e4d879581e36e120ee20df33b5",
             "tge_total": "10000000",
-            "market_cap": 66493081.13608898,
-            "fdv": 277054549.3615158
+            "market_cap": 61976950.64636497,
+            "fdv": 249907098.01429117
         },
         {
             "token": "KAT",
@@ -7516,8 +7516,8 @@
             "futures_listed": false,
             "spot_listed": false,
             "pre_price": "",
-            "market_cap": 37900520.7556148,
-            "fdv": 105560341.34757826
+            "market_cap": 21208926.69217862,
+            "fdv": 58614781.29569166
         },
         {
             "id": "warning_69bbc712c2d820.28872200",
@@ -7543,8 +7543,8 @@
             "futures_listed": false,
             "spot_listed": false,
             "pre_price": "",
-            "market_cap": 15992333.29478532,
-            "fdv": 130230727.15623225
+            "market_cap": 17805905.57302554,
+            "fdv": 144999231.05069664
         },
         {
             "token": "CYS",
@@ -7565,8 +7565,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1040000",
-            "market_cap": 56221025.95355719,
-            "fdv": 349633245.9798333
+            "market_cap": 53863076.17217487,
+            "fdv": 334969379.180192
         },
         {
             "token": "AIA",
@@ -7587,8 +7587,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2777485",
-            "market_cap": 10399298.75093267,
-            "fdv": 52380973.89880331
+            "market_cap": 10472049.84047313,
+            "fdv": 52747419.08069468
         },
         {
             "token": "SIGMA",
@@ -7609,8 +7609,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3124875",
-            "market_cap": 920174.45449917,
-            "fdv": 4279960.39231958
+            "market_cap": 914926.18071004,
+            "fdv": 4255549.36478486
         },
         {
             "token": "PRL",
@@ -7636,8 +7636,8 @@
             "actual_bnb": "61858.82143261",
             "collection_address": "0xd4b27c86228ec0a3286f0c93f73fa2e2832519a0",
             "tge_total": "10000000",
-            "market_cap": 31305689.0623437,
-            "fdv": 152178120.24824387,
+            "market_cap": 35032183.59520921,
+            "fdv": 170292748.93434298,
             "created_timestamp": 1775037136,
             "updated_timestamp": 1775037136
         },
@@ -7660,8 +7660,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "232550",
-            "market_cap": 6063654.74470037,
-            "fdv": 25355027.15743413
+            "market_cap": 5796971.05311942,
+            "fdv": 24239895.68521609
         },
         {
             "token": "BASED",
@@ -7682,8 +7682,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "9999866",
-            "market_cap": 18920252.84719219,
-            "fdv": 80511714.24337105,
+            "market_cap": 23001575.66562408,
+            "fdv": 97879045.3856344,
             "created_timestamp": 1774863736,
             "updated_timestamp": 1774863736
         },
@@ -7706,8 +7706,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "9999750",
-            "market_cap": 199372.04121042,
-            "fdv": 1721227.27224071
+            "market_cap": 190700.7971099,
+            "fdv": 1566369.69567494
         },
         {
             "token": "EDGE",
@@ -7728,8 +7728,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "998580",
-            "market_cap": 102224863.4706982,
-            "fdv": 292071038.4877091
+            "market_cap": 94691837.08593275,
+            "fdv": 270548105.9598078
         },
         {
             "token": "CHECK",
@@ -7750,8 +7750,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "8000000",
-            "market_cap": 8025419.41266705,
-            "fdv": 25964185.43523137
+            "market_cap": 10951140.4268783,
+            "fdv": 35429605.12717108
         },
         {
             "token": "ST",
@@ -7777,8 +7777,8 @@
             "actual_bnb": "56775.66",
             "collection_address": "0x8343179c139f2de6059fa85a9ce5876d1dbff5b1",
             "tge_total": "10000000",
-            "market_cap": 2695354.76684817,
-            "fdv": 21913453.38900955
+            "market_cap": 2535657.72481226,
+            "fdv": 20615103.45375823
         },
         {
             "token": "SOON",
@@ -7799,8 +7799,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "4550000",
-            "market_cap": 93003769.42847717,
-            "fdv": 173437258.43862048
+            "market_cap": 88885081.78387232,
+            "fdv": 165641585.07716787
         },
         {
             "token": "AOP",
@@ -7821,8 +7821,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "7142370",
-            "market_cap": 11995959.17606679,
-            "fdv": 47919943.63776328
+            "market_cap": 11790107.24162661,
+            "fdv": 46724335.35674088
         },
         {
             "token": "CLO",
@@ -7843,8 +7843,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3333225",
-            "market_cap": 18487302.40893524,
-            "fdv": 143201412.9274612
+            "market_cap": 17006022.424675,
+            "fdv": 131727516.84488769
         },
         {
             "token": "REKT",
@@ -7865,8 +7865,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1922923120930",
-            "market_cap": 20075532.6394406,
-            "fdv": 29968795.01499521
+            "market_cap": 21518243.99039998,
+            "fdv": 32121754.64996676
         },
         {
             "token": "GENIUS",
@@ -7887,8 +7887,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "7500000",
-            "market_cap": 126271364.20625435,
-            "fdv": 376505669.7162293,
+            "market_cap": 130453644.82669131,
+            "fdv": 388976053.4476251,
             "created_timestamp": 1776305057,
             "updated_timestamp": 1780041617
         },
@@ -7911,8 +7911,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2941020",
-            "market_cap": 257712.26960092,
-            "fdv": 8590408.98669756
+            "market_cap": 221683.83294023,
+            "fdv": 7389461.09800773
         },
         {
             "token": "VELO",
@@ -7933,8 +7933,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "62502928",
-            "market_cap": 75999473.68469144,
-            "fdv": 76000093.24695161
+            "market_cap": 80175587.17223364,
+            "fdv": 80176240.7789705
         },
         {
             "token": "POWER",
@@ -7955,8 +7955,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2222180",
-            "market_cap": 22787357.12884575,
-            "fdv": 75643329.3979113
+            "market_cap": 23799170.88471617,
+            "fdv": 79002076.12715608
         },
         {
             "token": "HANA",
@@ -7977,8 +7977,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2499400",
-            "market_cap": 27312631.22038848,
-            "fdv": 38238876.60244134
+            "market_cap": 28346337.73209145,
+            "fdv": 39676483.68972846
         },
         {
             "token": "DAM",
@@ -7999,8 +7999,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3884800",
-            "market_cap": 2216123.70624218,
-            "fdv": 7187621.61844948
+            "market_cap": 1982284.78982251,
+            "fdv": 6429204.72766012
         },
         {
             "token": "AGT",
@@ -8021,8 +8021,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "19998700",
-            "market_cap": 56867867.09297751,
-            "fdv": 103710695.3655419
+            "market_cap": 46960456.17385588,
+            "fdv": 80565975.917382
         },
         {
             "token": "OPG",
@@ -8035,12 +8035,12 @@
             "phase": 1,
             "language": "en",
             "status": "announced",
-            "system_timestamp": 1776869537,
+            "system_timestamp": 1782795616,
             "completed": true,
             "contract_address": "0x5feccd17c393caf1001d18164236a37e731fcb9d",
             "chain_id": "56",
             "has_homonym": false,
-            "spot_listed": false,
+            "spot_listed": true,
             "futures_listed": true,
             "total_amount": "10000000",
             "pretge": false,
@@ -8048,10 +8048,10 @@
             "actual_bnb": "117907.25858394",
             "collection_address": "0x3530204d59c3e19e8a5cb88c6bdd703f63997c85",
             "tge_total": "10000000",
-            "market_cap": 25305759.98995411,
-            "fdv": 128069637.96726522,
+            "market_cap": 24646470.3505882,
+            "fdv": 124733046.3982833,
             "created_timestamp": 1776869537,
-            "updated_timestamp": 1776869537
+            "updated_timestamp": 1782795616
         },
         {
             "token": "CHIP",
@@ -8072,8 +8072,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "24984750",
-            "market_cap": 63407321.42570922,
-            "fdv": 309933954.15708214,
+            "market_cap": 62512190.46898806,
+            "fdv": 305558568.6232515,
             "created_timestamp": 1777363217,
             "updated_timestamp": 1777363217
         },
@@ -8096,8 +8096,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "246796",
-            "market_cap": 14037938.73524014,
-            "fdv": 36504662.04545718
+            "market_cap": 20929839.12103182,
+            "fdv": 50942509.94186974
         },
         {
             "token": "ROLL",
@@ -8118,8 +8118,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3328955",
-            "market_cap": 11696388.0338635,
-            "fdv": 75460567.9604097
+            "market_cap": 10598510.76450359,
+            "fdv": 68377488.80324903
         },
         {
             "token": "RION",
@@ -8140,8 +8140,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "498532",
-            "market_cap": 5051355.09112434,
-            "fdv": 16439747.40043913
+            "market_cap": 5022627.30781267,
+            "fdv": 16346252.19123315
         },
         {
             "token": "AIGENSYN",
@@ -8162,8 +8162,8 @@
             "spot_listed": true,
             "futures_listed": true,
             "total_amount": "20000001",
-            "market_cap": 32546730.48353627,
-            "fdv": 219531417.25030556,
+            "market_cap": 48223839.96137891,
+            "fdv": 306689336.13575214,
             "created_timestamp": 1777469297,
             "updated_timestamp": 1779361216
         },
@@ -8186,8 +8186,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "13332310",
-            "market_cap": 96245568.2381589,
-            "fdv": 212001804.71516612
+            "market_cap": 164950189.77653548,
+            "fdv": 362113938.82346904
         },
         {
             "token": "RECALL",
@@ -8208,8 +8208,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "4081390",
-            "market_cap": 9997314.33103642,
-            "fdv": 30940174.84070167
+            "market_cap": 10509783.43914638,
+            "fdv": 32526189.17218632
         },
         {
             "token": "CARV",
@@ -8230,8 +8230,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "",
-            "market_cap": 23622448.62421062,
-            "fdv": 36951627.54771708
+            "market_cap": 23203972.37036133,
+            "fdv": 36297022.30692275
         },
         {
             "token": "UAI",
@@ -8252,8 +8252,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1060580",
-            "market_cap": 98615211.08690315,
-            "fdv": 306228067.8593009
+            "market_cap": 108597101.62642169,
+            "fdv": 337224655.7062416
         },
         {
             "token": "BILL",
@@ -8274,8 +8274,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "80000000",
-            "market_cap": 108933935.35480513,
-            "fdv": 448621137.50394994,
+            "market_cap": 109771139.9911757,
+            "fdv": 452068985.9183933,
             "created_timestamp": 1778137218,
             "updated_timestamp": 1778137218
         },
@@ -8298,8 +8298,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "3888720",
-            "market_cap": 24559849.72276568,
-            "fdv": 152385247.83764222
+            "market_cap": 27519633.23253847,
+            "fdv": 158328653.16957185
         },
         {
             "token": "SHARE",
@@ -8320,8 +8320,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "1000000",
-            "market_cap": 3411545.40660988,
-            "fdv": 18953030.03672159
+            "market_cap": 3484090.80996712,
+            "fdv": 19356060.05537291
         },
         {
             "token": "BR",
@@ -8342,8 +8342,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2684475",
-            "market_cap": 36937936.11964122,
-            "fdv": 141389229.1660908
+            "market_cap": 46427955.4157289,
+            "fdv": 153904824.9226479
         },
         {
             "token": "PHAROS",
@@ -8364,8 +8364,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "1999980",
-            "market_cap": 62906018.11713876,
-            "fdv": 463908688.17948943,
+            "market_cap": 56861494.17867421,
+            "fdv": 419332552.94007534,
             "created_timestamp": 1778732057,
             "updated_timestamp": 1778732057
         },
@@ -8388,8 +8388,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "833300",
-            "market_cap": 40511232.67202297,
-            "fdv": 109125681.96125793
+            "market_cap": 41531171.49049811,
+            "fdv": 107399965.42650235
         },
         {
             "token": "ZEST",
@@ -8410,8 +8410,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 34962530.58821205,
-            "fdv": 239469387.59049353
+            "market_cap": 32703048.87134273,
+            "fdv": 223993485.42015573
         },
         {
             "token": "NEX",
@@ -8432,8 +8432,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "999992499750",
-            "market_cap": 113736245.60679267,
-            "fdv": 189560409.34465447
+            "market_cap": 110807826.32839997,
+            "fdv": 184679710.5473333
         },
         {
             "token": "GWEI",
@@ -8454,8 +8454,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "4170000",
-            "market_cap": 277665947.7731571,
-            "fdv": 1586662558.7037551
+            "market_cap": 219124703.53551975,
+            "fdv": 1252141163.060113
         },
         {
             "token": "SLX",
@@ -8476,8 +8476,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 137656515.65458107,
-            "fdv": 566827761.7498176,
+            "market_cap": 116793590.89542133,
+            "fdv": 480920568.1196712,
             "created_timestamp": 1780294577,
             "updated_timestamp": 1780294577
         },
@@ -8500,8 +8500,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "39998640",
-            "market_cap": 16574293.75979635,
-            "fdv": 110495291.73197567,
+            "market_cap": 16500401.9831911,
+            "fdv": 110002679.88794073,
             "created_timestamp": 1779956297,
             "updated_timestamp": 1779956297
         },
@@ -8524,8 +8524,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "99990754",
-            "market_cap": 5358257.19695716,
-            "fdv": 107165143.93914321
+            "market_cap": 3735051.83383891,
+            "fdv": 74701036.67677827
         },
         {
             "token": "RTX",
@@ -8546,8 +8546,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "318162",
-            "market_cap": 28392835.22418168,
-            "fdv": 105124078.02696705
+            "market_cap": 28226667.37701423,
+            "fdv": 104508843.88119674
         },
         {
             "token": "FOLKS",
@@ -8568,8 +8568,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "185188",
-            "market_cap": 31198962.02425001,
-            "fdv": 102823028.26722582
+            "market_cap": 29930398.90104187,
+            "fdv": 98207301.86659211
         },
         {
             "token": "FOREST",
@@ -8590,8 +8590,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "5207955",
-            "market_cap": 5525038.7115985,
-            "fdv": 23445952.52110548
+            "market_cap": 5717356.57020055,
+            "fdv": 22613143.98233576
         },
         {
             "token": "TRIA",
@@ -8612,8 +8612,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "15490000",
-            "market_cap": 40457368.31009065,
-            "fdv": 187504893.28808695
+            "market_cap": 43769819.50204552,
+            "fdv": 202856875.71336454
         },
         {
             "token": "KGEN",
@@ -8634,8 +8634,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2780000",
-            "market_cap": 43899675.52731922,
-            "fdv": 204683767.16738364
+            "market_cap": 38176672.1718895,
+            "fdv": 178000064.5606991
         },
         {
             "token": "TRUST",
@@ -8656,8 +8656,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "2083355",
-            "market_cap": 9182631.11530355,
-            "fdv": 53621204.94765139
+            "market_cap": 9729389.57895866,
+            "fdv": 56970180.53900875
         },
         {
             "token": "BLESS",
@@ -8678,8 +8678,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "24997930",
-            "market_cap": 18957518.53731302,
-            "fdv": 78618318.92791976
+            "market_cap": 18546844.17494522,
+            "fdv": 76915220.08631454
         },
         {
             "token": "RE",
@@ -8705,8 +8705,8 @@
             "actual_bnb": "77171.95",
             "collection_address": "0xc5510b179d80451d3b062732b1768085d9ef8689",
             "tge_total": "10000000",
-            "market_cap": 128127237.47948997,
-            "fdv": 633822594.5065049
+            "market_cap": 140251191.42447996,
+            "fdv": 693797632.5722481
         },
         {
             "token": "O",
@@ -8727,8 +8727,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "10000000",
-            "market_cap": 79295345.79087749,
-            "fdv": 495595911.19298434,
+            "market_cap": 85268082.96698318,
+            "fdv": 532925518.5436449,
             "created_timestamp": 1782297137,
             "updated_timestamp": 1782297137
         },
@@ -8751,8 +8751,8 @@
             "spot_listed": false,
             "futures_listed": true,
             "total_amount": "8499896",
-            "market_cap": 57059277.73660405,
-            "fdv": 271507199.64665985,
+            "market_cap": 45349460.12302332,
+            "fdv": 217158304.34601778,
             "created_timestamp": 1782185537,
             "updated_timestamp": 1782185537
         },
@@ -8775,8 +8775,8 @@
             "spot_listed": false,
             "futures_listed": false,
             "total_amount": "10000000",
-            "market_cap": 24507072.92627697,
-            "fdv": 173194861.66980192
+            "market_cap": 31009361.33358188,
+            "fdv": 219147429.91930664
         },
         {
             "token": "CAP",
@@ -8802,10 +8802,76 @@
             "actual_bnb": "93971.27866319",
             "collection_address": "0xa43d3f9f24a4ad3406a434be411af77e5d410b3b",
             "tge_total": "100000000",
-            "market_cap": 41374744.92031909,
-            "fdv": 265222723.84819934,
+            "market_cap": 34678784.01216764,
+            "fdv": 222299897.51389512,
             "created_timestamp": 1782557536,
             "updated_timestamp": 1782557536
+        },
+        {
+            "token": "COLLECT",
+            "name": "Collect on Fanable",
+            "date": "2026-06-30",
+            "time": "18:00",
+            "points": "224",
+            "amount": "800",
+            "type": "grab",
+            "phase": 1,
+            "language": "zh",
+            "status": "announced",
+            "system_timestamp": 1782813903,
+            "completed": true,
+            "contract_address": "0x4b3d30992f003c8167699735f5ab2831b2a087d3",
+            "chain_id": "56",
+            "has_homonym": false,
+            "spot_listed": false,
+            "futures_listed": false,
+            "total_amount": "12500000",
+            "market_cap": 20200498.43765948,
+            "fdv": 112851946.57910326
+        },
+        {
+            "token": "ACU",
+            "name": "ACU",
+            "date": "2026-07-02",
+            "time": "18:00",
+            "points": "226",
+            "amount": "355",
+            "type": "grab",
+            "phase": 1,
+            "language": "en",
+            "status": "announced",
+            "system_timestamp": 1782986482,
+            "completed": true,
+            "contract_address": "0x6ef2ffb38d64afe18ce782da280b300e358cfeaf",
+            "chain_id": "56",
+            "has_homonym": false,
+            "spot_listed": false,
+            "futures_listed": false,
+            "total_amount": "1899075",
+            "market_cap": 16009956.90464473,
+            "fdv": 73778603.24721074
+        },
+        {
+            "token": "WMTX",
+            "name": "WMTX",
+            "date": "2026-07-02",
+            "time": "18:00",
+            "points": "226",
+            "amount": "737",
+            "type": "grab",
+            "phase": 1,
+            "language": "zh",
+            "status": "announced",
+            "system_timestamp": 1782986482,
+            "completed": true,
+            "contract_address": "0xdbb5cf12408a3ac17d668037ce289f9ea75439d7",
+            "chain_id": "56",
+            "has_homonym": false,
+            "spot_listed": false,
+            "futures_listed": false,
+            "total_amount": "3947592",
+            "market_cap": 29672503.69073792,
+            "fdv": 69550728.92442402
         }
     ]
 }
