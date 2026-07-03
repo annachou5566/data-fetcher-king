@@ -719,12 +719,35 @@ def fetch_spot_listing_date(symbol, since_date_str=None):
 
 
 
-_ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId"}} — set trong main()
+_ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId", "contractAddress", "chainId"}} — set trong main()
 
 
-def _get_alpha_id(symbol):
+def _get_alpha_id(symbol, contract_address=None):
+    """
+    [SỬA] Ticker Alpha có thể bị TÁI SỬ DỤNG cho token khác sau khi token
+    cũ rời Alpha (đã xác minh thực tế qua "BTW": event data ghi ngày
+    2025-12-22, nhưng alphaId hiện tại của ký hiệu "BTW" trên Binance lại
+    là 1 token khác, chỉ bắt đầu giao dịch từ 2026-03-02). Nếu dùng nhầm
+    alphaId của token MỚI để tra giá cho event CŨ, kết quả sẽ hoàn toàn
+    sai (hoặc rỗng, như đã thấy).
+
+    contract_address là thứ DUY NHẤT không thể trùng giữa 2 token khác
+    nhau — nếu event có contract_address và nó KHÔNG khớp với
+    contractAddress hiện tại của symbol đó trên Binance, coi như KHÔNG
+    có alphaId đáng tin (an toàn hơn là trả về sai).
+    Nếu event không có contract_address để so sánh, đành chấp nhận rủi ro
+    và trả alphaId theo symbol (tốt hơn là bỏ hẳn).
+    """
     st = _ALPHA_STATUS_MAP.get((symbol or "").upper())
-    return st.get("alphaId") if st else None
+    if not st or not st.get("alphaId"):
+        return None
+    if contract_address and st.get("contractAddress"):
+        if str(contract_address).lower() != st["contractAddress"]:
+            print(f"  [warn] {symbol}: alphaId={st['alphaId']} hiện tại là TICKER KHÁC "
+                  f"(contract hiện tại {st['contractAddress'][:10]}... != event contract "
+                  f"{str(contract_address)[:10]}...) — bỏ qua, không dùng nhầm")
+            return None  # ticker bị tái sử dụng cho token khác — không tin alphaId này
+    return st["alphaId"]
 
 
 def _process_one(e, idx, total):
@@ -734,7 +757,7 @@ def _process_one(e, idx, total):
     date_str = (e.get("event_time") or e.get("date") or "")[:10]
     symbol = e.get("symbol") or e.get("token") or "?"
 
-    result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_get_alpha_id(symbol))
+    result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_get_alpha_id(symbol, contract_address=contract))
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
     if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
@@ -813,7 +836,7 @@ def _process_spot_one(e, idx, total):
         print(f"  [spot {idx}/{total}] {symbol}... không tìm được ngày spot-listing (symbol lệch/chưa có cặp USDT?)", flush=True)
         return e, None, None
 
-    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_get_alpha_id(symbol))
+    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_get_alpha_id(symbol, contract_address=contract))
     if not result:
         result = fetch_listing_price_public_spot(symbol, spot_date)
 
@@ -907,6 +930,14 @@ def fetch_alpha_token_status_map():
                 "listingCex": bool(t.get("listingCex")),
                 "fullyDelisted": bool(t.get("fullyDelisted")),
                 "alphaId": t.get("alphaId") or None,
+                # [SỬA] Ticker có thể bị TÁI SỬ DỤNG cho token Alpha khác
+                # sau khi token cũ rời Alpha (đã xác minh thực tế: "BTW"
+                # hiện tại trỏ tới token bắt đầu giao dịch 2026-03, không
+                # phải token event 2025-12-22 trong data). contractAddress
+                # là thứ DUY NHẤT không thể trùng giữa 2 token khác nhau —
+                # dùng để đối chiếu, không match alphaId nếu contract khác.
+                "contractAddress": (t.get("contractAddress") or "").lower(),
+                "chainId": str(t.get("chainId") or ""),
             }
         return out
     except Exception as ex:
