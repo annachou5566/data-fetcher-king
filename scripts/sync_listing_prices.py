@@ -16,6 +16,7 @@ Env cần (đã có sẵn trong GitHub Secrets, dùng chung với fetch_alpha.py
 
 import json
 import os
+import re
 import time
 import threading
 import random
@@ -41,6 +42,13 @@ fa._request_semaphore = threading.Semaphore(MAX_CONCURRENT)
 API_AGG_KLINES = os.getenv("BINANCE_INTERNAL_KLINES_API")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+# [MỚI] Danh sách token bạn TỰ XÁC NHẬN đã delisted (kiểm tra trực tiếp
+# trên Binance), nhưng token-list API của Binance CHƯA cập nhật
+# fullyDelisted=true kịp thời — cross-check tự động không bắt được nên
+# vẫn cứ retry vô ích mỗi 30 phút. Thêm symbol vào đây để dừng hẳn, xoá
+# đi bất cứ lúc nào nếu Binance list lại / bạn xác nhận sai.
+MANUAL_CONFIRMED_DEAD = {"MIRROR", "CYPR", "RDAC"}
 
 # [SỬA] fetch_listing_price chạy đa luồng (ThreadPoolExecutor) — lý do fail
 # phải lưu theo TỪNG THREAD riêng (threading.local), KHÔNG được gắn lên
@@ -919,27 +927,63 @@ def enrich_spot_listing_prices(events):
 FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 
 
+def _fetch_futures_symbols_via_vision():
+    """
+    [SỬA] fapi.binance.com/fapi/v1/exchangeInfo bị Binance chặn 451 với
+    IP GitHub Actions Mỹ/EU (đã xác nhận qua log thật) — y hệt vấn đề đã
+    gặp với /api/v3/klines trước đây. Thử lấy danh sách symbol Futures từ
+    Binance Vision (data.binance.vision) thay thế — CÙNG CDN tĩnh đang
+    dùng ổn định cho klines lịch sử, không bị áp geo-block như REST API,
+    bằng cách liệt kê thư mục con (mỗi symbol = 1 thư mục) theo chuẩn S3
+    bucket listing (?prefix=...&delimiter=/).
+
+    LƯU Ý QUAN TRỌNG: chưa tự kiểm chứng được response thật do tool nội
+    bộ bị cache khi test — cần chạy thật trên GitHub Actions để xác nhận
+    đúng format. Nếu parse ra rỗng, hàm trả set() an toàn (coi là "chưa
+    biết"), không làm hỏng luồng chính hay suy diễn sai.
+    """
+    url = "https://data.binance.vision/?prefix=data/futures/um/monthly/klines/&delimiter=/"
+    try:
+        res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if res.status_code != 200:
+            print(f"  [warn] fetch_futures_symbols (Vision): HTTP {res.status_code}")
+            return set()
+        prefixes = re.findall(r"data/futures/um/monthly/klines/([^/<\"]+)/", res.text)
+        out = {p.upper() for p in prefixes if p.upper().endswith("USDT")}
+        return out
+    except Exception as ex:
+        print(f"  [warn] fetch_futures_symbols (Vision) lỗi: {ex}")
+        return set()
+
+
 def fetch_futures_symbols():
     """
     Lấy danh sách symbol ĐANG có hợp đồng Futures (USDT-M) trên Binance —
     dùng để trả lời câu hỏi "token có lên Future không". Trả về set các
-    base asset (vd {"BTC", "ETH",...}), rỗng nếu lỗi mạng (coi là "chưa
-    biết", KHÔNG suy diễn thành "chưa lên future").
+    cặp đầy đủ (vd {"BTCUSDT", "ETHUSDT",...}), rỗng nếu cả 2 nguồn đều
+    lỗi (coi là "chưa biết", KHÔNG suy diễn thành "chưa lên future").
+
+    Thử Binance Vision trước (không bị geo-block), fapi.binance.com REST
+    chỉ là fallback phụ (nhiều khả năng cũng bị 451 như Vision, nhưng thử
+    cũng không hại gì — có thể một số runner IP may mắn không bị chặn).
     """
+    out = _fetch_futures_symbols_via_vision()
+    if out:
+        return out
+
     try:
         res = requests.get(FUTURES_EXCHANGE_INFO_URL, timeout=15,
                             headers={"User-Agent": "Mozilla/5.0"})
         if res.status_code != 200:
-            print(f"  [warn] fetch_futures_symbols: HTTP {res.status_code}")
+            print(f"  [warn] fetch_futures_symbols (fapi REST): HTTP {res.status_code}")
             return set()
         data = res.json()
-        out = set()
         for s in data.get("symbols", []):
             if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING":
-                out.add((s.get("baseAsset") or "").upper())
+                out.add(f"{(s.get('baseAsset') or '').upper()}USDT")
         return out
     except Exception as ex:
-        print(f"  [warn] fetch_futures_symbols lỗi (bỏ qua, coi như chưa biết): {ex}")
+        print(f"  [warn] fetch_futures_symbols (fapi REST) lỗi (bỏ qua, coi như chưa biết): {ex}")
         return set()
 
 
@@ -1030,7 +1074,17 @@ def apply_alpha_status(events, status_map, futures_symbols=None):
 
         # Future — độc lập với Alpha token list, cập nhật cho mọi event
         if futures_symbols:
-            e["is_futures_listed"] = sym in futures_symbols
+            e["is_futures_listed"] = f"{sym}USDT" in futures_symbols
+
+        # [MỚI] Override thủ công — ưu tiên cao hơn cross-check tự động,
+        # vì bạn đã tự xác nhận trực tiếp trên Binance, đáng tin hơn API
+        # token-list (có thể cập nhật trễ).
+        if sym in MANUAL_CONFIRMED_DEAD:
+            e["alpha_delisted"] = True
+            if not e.get("listing_price") and not e.get("listing_price_unavailable"):
+                e["listing_price_unavailable"] = True
+                marked_dead += 1
+            continue
 
         if not status_map:
             continue
