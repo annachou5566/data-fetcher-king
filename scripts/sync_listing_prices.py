@@ -16,7 +16,6 @@ Env cần (đã có sẵn trong GitHub Secrets, dùng chung với fetch_alpha.py
 
 import json
 import os
-import re
 import time
 import threading
 import random
@@ -820,6 +819,7 @@ def enrich_events(events):
     todo = [
         e for e in events
         if not e.get("listing_price")
+        and (e.get("symbol") or e.get("token") or "").upper() not in MANUAL_CONFIRMED_DEAD
         and e.get("contract_address")
         and (e.get("event_time") or e.get("date"))
     ]
@@ -927,63 +927,40 @@ def enrich_spot_listing_prices(events):
 FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 
 
-def _fetch_futures_symbols_via_vision():
-    """
-    [SỬA] fapi.binance.com/fapi/v1/exchangeInfo bị Binance chặn 451 với
-    IP GitHub Actions Mỹ/EU (đã xác nhận qua log thật) — y hệt vấn đề đã
-    gặp với /api/v3/klines trước đây. Thử lấy danh sách symbol Futures từ
-    Binance Vision (data.binance.vision) thay thế — CÙNG CDN tĩnh đang
-    dùng ổn định cho klines lịch sử, không bị áp geo-block như REST API,
-    bằng cách liệt kê thư mục con (mỗi symbol = 1 thư mục) theo chuẩn S3
-    bucket listing (?prefix=...&delimiter=/).
-
-    LƯU Ý QUAN TRỌNG: chưa tự kiểm chứng được response thật do tool nội
-    bộ bị cache khi test — cần chạy thật trên GitHub Actions để xác nhận
-    đúng format. Nếu parse ra rỗng, hàm trả set() an toàn (coi là "chưa
-    biết"), không làm hỏng luồng chính hay suy diễn sai.
-    """
-    url = "https://data.binance.vision/?prefix=data/futures/um/monthly/klines/&delimiter=/"
-    try:
-        res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        if res.status_code != 200:
-            print(f"  [warn] fetch_futures_symbols (Vision): HTTP {res.status_code}")
-            return set()
-        prefixes = re.findall(r"data/futures/um/monthly/klines/([^/<\"]+)/", res.text)
-        out = {p.upper() for p in prefixes if p.upper().endswith("USDT")}
-        return out
-    except Exception as ex:
-        print(f"  [warn] fetch_futures_symbols (Vision) lỗi: {ex}")
-        return set()
-
-
 def fetch_futures_symbols():
     """
     Lấy danh sách symbol ĐANG có hợp đồng Futures (USDT-M) trên Binance —
-    dùng để trả lời câu hỏi "token có lên Future không". Trả về set các
-    cặp đầy đủ (vd {"BTCUSDT", "ETHUSDT",...}), rỗng nếu cả 2 nguồn đều
-    lỗi (coi là "chưa biết", KHÔNG suy diễn thành "chưa lên future").
+    dùng để trả lời câu hỏi "token có lên Future không".
 
-    Thử Binance Vision trước (không bị geo-block), fapi.binance.com REST
-    chỉ là fallback phụ (nhiều khả năng cũng bị 451 như Vision, nhưng thử
-    cũng không hại gì — có thể một số runner IP may mắn không bị chặn).
+    [SỬA] Đã thử fapi.binance.com/fapi/v1/exchangeInfo — bị Binance chặn
+    451 với IP GitHub Actions Mỹ/EU (xác nhận qua log thật). Đã thử thêm
+    phương án lấy qua data.binance.vision (liệt kê thư mục symbol) —
+    KHÔNG hoạt động, vì trang đó là web app render bằng JavaScript phía
+    client, không phải REST/XML API tĩnh như phần tải file .zip klines —
+    fetch HTML thô về không có dữ liệu thật để parse (đã thử, luôn ra 0
+    kết quả dù HTTP 200). Không tìm được endpoint public nào khác không
+    bị chặn để lấy danh sách Futures từ GitHub Actions tại thời điểm này.
+
+    → Hiện KHÔNG có nguồn nào hoạt động được. Trả về set() (coi là "chưa
+    biết") — field is_futures_listed sẽ KHÔNG được set trong trường hợp
+    này (xem apply_alpha_status), tránh suy diễn sai thành "chưa lên
+    future". Nếu sau này có nguồn khác (proxy Render riêng cho fapi
+    tương tự đã làm với spot-klines, hoặc bạn cung cấp), có thể bật lại.
     """
-    out = _fetch_futures_symbols_via_vision()
-    if out:
-        return out
-
     try:
         res = requests.get(FUTURES_EXCHANGE_INFO_URL, timeout=15,
                             headers={"User-Agent": "Mozilla/5.0"})
         if res.status_code != 200:
-            print(f"  [warn] fetch_futures_symbols (fapi REST): HTTP {res.status_code}")
+            print(f"  [warn] fetch_futures_symbols: HTTP {res.status_code} (nhiều khả năng bị chặn geo — is_futures_listed sẽ không được cập nhật lần này)")
             return set()
         data = res.json()
+        out = set()
         for s in data.get("symbols", []):
             if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING":
                 out.add(f"{(s.get('baseAsset') or '').upper()}USDT")
         return out
     except Exception as ex:
-        print(f"  [warn] fetch_futures_symbols (fapi REST) lỗi (bỏ qua, coi như chưa biết): {ex}")
+        print(f"  [warn] fetch_futures_symbols lỗi (bỏ qua, coi như chưa biết): {ex}")
         return set()
 
 
