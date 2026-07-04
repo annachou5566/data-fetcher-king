@@ -986,7 +986,8 @@ def fetch_futures_symbols(r2):
     parsed = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
     url = f"{parsed.scheme}://{parsed.netloc}/api/futures-tickers"
     try:
-        res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        session = fa.get_session()  # có sẵn header x-api-key cho middleware bảo mật Render
+        res = session.get(url, timeout=20)
         if res.status_code != 200:
             print(f"  [warn] fetch_futures_symbols (qua Render): HTTP {res.status_code}")
             return set(cached["symbols"]) if cached and cached.get("symbols") else set()
