@@ -832,6 +832,12 @@ def enrich_events(events):
             e, result = fut.result()
             if result:
                 e["listing_price"] = result
+                # [MỚI] Đưa ATH (max_since) ra field top-level cho dễ dùng
+                # — trước đây bị lồng bên trong listing_price.max_since,
+                # dễ bị bỏ sót khi đọc data.
+                ms = result.get("max_since")
+                e["ath_since_listing_price"] = ms.get("price") if ms else None
+                e["ath_since_listing_date"]  = ms.get("date") if ms else None
                 filled += 1
             else:
                 e["listing_price"] = None  # đánh dấu đã thử, lần sau vẫn tự retry vì None là falsy
@@ -900,11 +906,41 @@ def enrich_spot_listing_prices(events):
                 e["spot_listed_at"] = spot_date
             if result:
                 e["spot_listing_price"] = result
+                ms = result.get("max_since")
+                e["spot_ath_price"] = ms.get("price") if ms else None
+                e["spot_ath_date"]  = ms.get("date") if ms else None
                 filled += 1
             else:
                 e["spot_listing_price"] = None  # đánh dấu đã thử, None là falsy -> tự retry lần sau
 
     return filled
+
+
+FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+
+
+def fetch_futures_symbols():
+    """
+    Lấy danh sách symbol ĐANG có hợp đồng Futures (USDT-M) trên Binance —
+    dùng để trả lời câu hỏi "token có lên Future không". Trả về set các
+    base asset (vd {"BTC", "ETH",...}), rỗng nếu lỗi mạng (coi là "chưa
+    biết", KHÔNG suy diễn thành "chưa lên future").
+    """
+    try:
+        res = requests.get(FUTURES_EXCHANGE_INFO_URL, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if res.status_code != 200:
+            print(f"  [warn] fetch_futures_symbols: HTTP {res.status_code}")
+            return set()
+        data = res.json()
+        out = set()
+        for s in data.get("symbols", []):
+            if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING":
+                out.add((s.get("baseAsset") or "").upper())
+        return out
+    except Exception as ex:
+        print(f"  [warn] fetch_futures_symbols lỗi (bỏ qua, coi như chưa biết): {ex}")
+        return set()
 
 
 ALPHA_TOKEN_LIST_URL = "https://www.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list"
@@ -972,23 +1008,42 @@ def fetch_alpha_token_status_map():
         return {}
 
 
-def apply_alpha_status(events, status_map):
+def apply_alpha_status(events, status_map, futures_symbols=None):
     """
-    Mutates events in-place dựa trên status_map (từ fetch_alpha_token_status_map).
-    Trả về (số token tự phát hiện graduate lên spot, số token đánh dấu chết hẳn).
-    Chỉ xử lý event CHƯA có listing_price — không đụng vào event đã xong.
+    Mutates events in-place dựa trên status_map (từ fetch_alpha_token_status_map)
+    và futures_symbols (từ fetch_futures_symbols). Trả về (số token tự phát
+    hiện graduate lên spot, số token đánh dấu chết hẳn).
+
+    [MỚI] Các field MÔ TẢ trạng thái (alpha_delisted, is_spot_listed,
+    is_futures_listed) được cập nhật cho MỌI event có symbol khớp —
+    không chỉ event còn thiếu giá — vì đây là thông tin trạng thái hiện
+    tại, cần đúng cho cả event đã có giá từ trước. Phần TỰ ĐỘNG HÀNH ĐỘNG
+    (đánh dấu spot_listed để kích hoạt dò giá / đánh dấu chết hẳn để dừng
+    retry) thì vẫn chỉ chạy cho event chưa có listing_price, để không
+    tốn công lặp lại vô ích.
     """
     marked_spot, marked_dead = 0, 0
-    if not status_map:
-        return 0, 0
+    futures_symbols = futures_symbols or set()
 
     for e in events:
-        if e.get("listing_price"):
-            continue
         sym = (e.get("symbol") or e.get("token") or "").upper()
+
+        # Future — độc lập với Alpha token list, cập nhật cho mọi event
+        if futures_symbols:
+            e["is_futures_listed"] = sym in futures_symbols
+
+        if not status_map:
+            continue
         st = status_map.get(sym)
         if not st:
             continue  # không có trong danh sách API -> chưa biết, không suy diễn
+
+        # Field mô tả — luôn cập nhật, kể cả event đã có giá từ trước
+        e["alpha_delisted"] = st["fullyDelisted"]
+        e["is_spot_listed"] = bool(st["listingCex"])
+
+        if e.get("listing_price"):
+            continue  # đã có giá — không cần chạy tiếp phần tự động dưới
 
         if st["fullyDelisted"] and st["listingCex"] and not e.get("spot_listed"):
             e["spot_listed"] = True
@@ -1021,8 +1076,11 @@ def main():
     status_map = fetch_alpha_token_status_map()
     global _ALPHA_STATUS_MAP
     _ALPHA_STATUS_MAP = status_map
-    marked_spot, marked_dead = apply_alpha_status(all_events, status_map)
-    print(f"   Đối chiếu {len(status_map)} token — tự phát hiện {marked_spot} token đã graduate lên spot, "
+    print("⏳ Đối chiếu danh sách hợp đồng Futures (USDT-M) từ Binance...")
+    futures_symbols = fetch_futures_symbols()
+    marked_spot, marked_dead = apply_alpha_status(all_events, status_map, futures_symbols)
+    print(f"   Đối chiếu {len(status_map)} token Alpha + {len(futures_symbols)} symbol Futures — "
+          f"tự phát hiện {marked_spot} token đã graduate lên spot, "
           f"đánh dấu {marked_dead} token đã chết hẳn (fullyDelisted, chưa từng lên CEX — sẽ không retry nữa)")
 
     filled = enrich_events(all_events)
