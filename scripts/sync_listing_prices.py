@@ -1076,7 +1076,7 @@ def apply_alpha_status(events, status_map, futures_symbols=None):
     hiện graduate lên spot, số token đánh dấu chết hẳn).
 
     [MỚI] Các field MÔ TẢ trạng thái (alpha_delisted, is_spot_listed,
-    is_futures_listed) được cập nhật cho MỌI event có symbol khớp —
+    futures_listed) được cập nhật cho MỌI event có symbol khớp —
     không chỉ event còn thiếu giá — vì đây là thông tin trạng thái hiện
     tại, cần đúng cho cả event đã có giá từ trước. Phần TỰ ĐỘNG HÀNH ĐỘNG
     (đánh dấu spot_listed để kích hoạt dò giá / đánh dấu chết hẳn để dừng
@@ -1091,7 +1091,7 @@ def apply_alpha_status(events, status_map, futures_symbols=None):
 
         # Future — độc lập với Alpha token list, cập nhật cho mọi event
         if futures_symbols:
-            e["is_futures_listed"] = f"{sym}USDT" in futures_symbols
+            e["futures_listed"] = f"{sym}USDT" in futures_symbols
 
         # [MỚI] Override thủ công — ưu tiên cao hơn cross-check tự động,
         # vì bạn đã tự xác nhận trực tiếp trên Binance, đáng tin hơn API
