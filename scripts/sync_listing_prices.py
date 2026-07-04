@@ -271,7 +271,7 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
         return None
 
 
-def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
+def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alpha_listing_time_ms=None):
     """
     Trả về {vwap, open, close, date, max_since} của ngày event (listing
     hoặc airdrop), hoặc None nếu không tìm được dữ liệu nào / token chưa
@@ -290,6 +290,14 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
     "N nến gần nhất" như API nội bộ. Chỉ fallback về API nội bộ (chainId/
     tokenAddress) khi không có alpha_id hoặc API chính thức không có data
     (vd token đã fullyDelisted khỏi Alpha, API official không còn trả).
+
+    alpha_listing_time_ms: [SỬA] mốc "listingTime" THẬT lấy từ chính API
+    token-list Binance — QUAN TRỌNG vì target_date_str (event_time trong
+    data của mình) thực ra là ngày CÔNG BỐ Pre-TGE, KHÔNG PHẢI ngày
+    listing thật để giao dịch. Khoảng cách 2 mốc này thay đổi tuỳ token
+    (đã xác minh thực tế: SENT cách 3 ngày, PIEVERSE cách 16 ngày, BTW
+    cách ~70 ngày) — không có cửa sổ dò cố định nào đủ tin cậy. Nếu có
+    mốc này, dùng THẲNG làm ngày mục tiêu, khỏi cần dò mò.
     """
     official_attempted = False
     official_note = "không có alphaId (symbol không có trong 637 token đối chiếu, hoặc chưa graduate/chưa từng lên Alpha)"
@@ -297,19 +305,23 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
     if alpha_id:
         official_attempted = True
         try:
-            target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
+            if alpha_listing_time_ms:
+                # Có mốc listingTime thật — dùng thẳng, chính xác tuyệt đối
+                target_ms = int(alpha_listing_time_ms)
+                target_date_str_real = datetime.utcfromtimestamp(target_ms / 1000).strftime('%Y-%m-%d')
+            else:
+                target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
+                target_date_str_real = target_date_str
             day_start, day_end = target_ms, target_ms + 86400000 - 1
 
             k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start, end_ms=day_end, limit=24)
 
-            actual_target_date_str = target_date_str
-            if not k_hourly:
-                # [SỬA] Nhiều token thực tế chỉ CÓ GIAO DỊCH vài ngày SAU
-                # ngày công bố (event_time trong data = ngày công bố
-                # listing, không phải ngày có nến đầu tiên). Query đúng 1
-                # ngày công bố nên gặp cửa sổ rỗng dù token có thật data.
-                # Dò tiến 1d trong 14 ngày kế tiếp để tìm NGÀY THẬT có nến
-                # đầu tiên (giống kỹ thuật đã dùng cho Binance Vision).
+            actual_target_date_str = target_date_str_real
+            if not k_hourly and not alpha_listing_time_ms:
+                # Chỉ dò mò khi KHÔNG có listingTime thật để dựa vào —
+                # nhiều token thực tế chỉ có giao dịch vài ngày SAU ngày
+                # công bố. Dò tiến 1d trong 14 ngày kế tiếp để tìm ngày
+                # thật có nến đầu tiên (giống kỹ thuật dùng cho Vision).
                 k_daily_probe = fetch_alpha_trade_klines_official(
                     alpha_id, "1d", start_ms=day_start,
                     end_ms=day_start + 14 * 86400000, limit=14
@@ -339,7 +351,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None):
                     "date": actual_target_date_str,
                     "max_since": max_since,
                 }
-            official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng)"
+            if alpha_listing_time_ms:
+                official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} tại đúng listingTime thật ({target_date_str_real}) — token có thể chưa từng thật sự khớp lệnh dù đã lên lịch listing"
+            else:
+                official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng, không có listingTime thật để dùng)"
         except Exception as ex:
             official_note = f"API chính thức lỗi: {ex}"
             if DEBUG: print(f"[debug] {official_note}", end=" ")
@@ -722,32 +737,32 @@ def fetch_spot_listing_date(symbol, since_date_str=None):
 _ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId", "contractAddress", "chainId"}} — set trong main()
 
 
-def _get_alpha_id(symbol, contract_address=None):
+def _get_alpha_info(symbol, contract_address=None):
     """
-    [SỬA] Ticker Alpha có thể bị TÁI SỬ DỤNG cho token khác sau khi token
-    cũ rời Alpha (đã xác minh thực tế qua "BTW": event data ghi ngày
-    2025-12-22, nhưng alphaId hiện tại của ký hiệu "BTW" trên Binance lại
-    là 1 token khác, chỉ bắt đầu giao dịch từ 2026-03-02). Nếu dùng nhầm
-    alphaId của token MỚI để tra giá cho event CŨ, kết quả sẽ hoàn toàn
-    sai (hoặc rỗng, như đã thấy).
+    Trả về (alpha_id, listing_time_ms) hoặc (None, None).
 
-    contract_address là thứ DUY NHẤT không thể trùng giữa 2 token khác
-    nhau — nếu event có contract_address và nó KHÔNG khớp với
-    contractAddress hiện tại của symbol đó trên Binance, coi như KHÔNG
-    có alphaId đáng tin (an toàn hơn là trả về sai).
-    Nếu event không có contract_address để so sánh, đành chấp nhận rủi ro
-    và trả alphaId theo symbol (tốt hơn là bỏ hẳn).
+    [SỬA] Ticker Alpha có thể bị TÁI SỬ DỤNG cho token khác sau khi token
+    cũ rời Alpha — contract_address (không thể trùng giữa 2 token khác
+    nhau) dùng để đối chiếu an toàn trước khi tin alphaId.
+
+    listing_time_ms lấy từ field "listingTime" của chính API — đây là
+    mốc CHÍNH XÁC Binance ghi nhận ngày token bắt đầu giao dịch Alpha.
+    QUAN TRỌNG: event_time trong data của mình ghi ngày CÔNG BỐ Pre-TGE,
+    KHÔNG PHẢI ngày listing thật — khoảng cách 2 mốc này thay đổi tuỳ
+    token (đã xác minh: SENT cách 3 ngày, PIEVERSE cách 16 ngày, BTW
+    cách ~70 ngày) nên không thể đoán bằng 1 cửa sổ cố định — phải dùng
+    listingTime thật thay vì dò mò.
     """
     st = _ALPHA_STATUS_MAP.get((symbol or "").upper())
     if not st or not st.get("alphaId"):
-        return None
+        return None, None
     if contract_address and st.get("contractAddress"):
         if str(contract_address).lower() != st["contractAddress"]:
             print(f"  [warn] {symbol}: alphaId={st['alphaId']} hiện tại là TICKER KHÁC "
                   f"(contract hiện tại {st['contractAddress'][:10]}... != event contract "
                   f"{str(contract_address)[:10]}...) — bỏ qua, không dùng nhầm")
-            return None  # ticker bị tái sử dụng cho token khác — không tin alphaId này
-    return st["alphaId"]
+            return None, None  # ticker bị tái sử dụng cho token khác — không tin alphaId này
+    return st["alphaId"], st.get("listingTime")
 
 
 def _process_one(e, idx, total):
@@ -757,7 +772,8 @@ def _process_one(e, idx, total):
     date_str = (e.get("event_time") or e.get("date") or "")[:10]
     symbol = e.get("symbol") or e.get("token") or "?"
 
-    result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_get_alpha_id(symbol, contract_address=contract))
+    _alpha_id, _listing_ms = _get_alpha_info(symbol, contract_address=contract)
+    result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_alpha_id, alpha_listing_time_ms=_listing_ms)
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
     if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
@@ -836,7 +852,8 @@ def _process_spot_one(e, idx, total):
         print(f"  [spot {idx}/{total}] {symbol}... không tìm được ngày spot-listing (symbol lệch/chưa có cặp USDT?)", flush=True)
         return e, None, None
 
-    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_get_alpha_id(symbol, contract_address=contract))
+    _alpha_id2, _listing_ms2 = _get_alpha_info(symbol, contract_address=contract)
+    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_alpha_id2, alpha_listing_time_ms=_listing_ms2)
     if not result:
         result = fetch_listing_price_public_spot(symbol, spot_date)
 
@@ -938,6 +955,16 @@ def fetch_alpha_token_status_map():
                 # dùng để đối chiếu, không match alphaId nếu contract khác.
                 "contractAddress": (t.get("contractAddress") or "").lower(),
                 "chainId": str(t.get("chainId") or ""),
+                # [SỬA] event_time trong data của mình = ngày công bố
+                # Pre-TGE, KHÔNG PHẢI ngày listing thật để giao dịch trên
+                # Alpha. Khoảng cách 2 mốc này thay đổi tuỳ token — đã xác
+                # minh thực tế: SENT chỉ cách 3 ngày, PIEVERSE cách 16
+                # ngày (tin tức xác nhận Pre-TGE 29/10 nhưng Alpha trading
+                # mở 14/11/2025), BTW cách tới ~70 ngày. Không thể đoán
+                # bằng 1 cửa sổ cố định. May mắn field "listingTime" của
+                # chính API này là mốc CHÍNH XÁC Binance ghi nhận — dùng
+                # thẳng, không cần dò mò nữa.
+                "listingTime": t.get("listingTime"),
             }
         return out
     except Exception as ex:
