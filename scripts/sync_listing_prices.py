@@ -924,44 +924,83 @@ def enrich_spot_listing_prices(events):
     return filled
 
 
-FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+def _load_json_dict(r2, key):
+    """
+    [MỚI] load_json() ở trên chỉ hỗ trợ LIST (ép về [] nếu không phải
+    list) — dùng riêng cho alpha-events. Cache Futures là DICT
+    ({"ts":..., "symbols":[...]}) nên cần hàm đọc riêng, không ép kiểu.
+    """
+    try:
+        obj = r2.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+        data = json.loads(obj['Body'].read().decode('utf-8'))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
-def fetch_futures_symbols():
+def _upload_json_dict(r2, key, data):
+    body = json.dumps(data, default=str, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    r2.put_object(
+        Bucket=R2_BUCKET_NAME, Key=key, Body=body,
+        ContentType='application/json', CacheControl='public, max-age=60',
+    )
+
+
+FUTURES_SYMBOLS_CACHE_KEY = "alpha-events/_futures_symbols_cache.json"
+FUTURES_SYMBOLS_CACHE_MAX_AGE_SEC = 24 * 3600  # 1 ngày — Futures hiếm khi list mới, không cần mới hơn
+
+
+def fetch_futures_symbols(r2):
     """
     Lấy danh sách symbol ĐANG có hợp đồng Futures (USDT-M) trên Binance —
     dùng để trả lời câu hỏi "token có lên Future không".
 
-    [SỬA] Đã thử fapi.binance.com/fapi/v1/exchangeInfo — bị Binance chặn
-    451 với IP GitHub Actions Mỹ/EU (xác nhận qua log thật). Đã thử thêm
-    phương án lấy qua data.binance.vision (liệt kê thư mục symbol) —
-    KHÔNG hoạt động, vì trang đó là web app render bằng JavaScript phía
-    client, không phải REST/XML API tĩnh như phần tải file .zip klines —
-    fetch HTML thô về không có dữ liệu thật để parse (đã thử, luôn ra 0
-    kết quả dù HTTP 200). Không tìm được endpoint public nào khác không
-    bị chặn để lấy danh sách Futures từ GitHub Actions tại thời điểm này.
+    [SỬA] fapi.binance.com/fapi/v1/exchangeInfo bị Binance chặn 451 với
+    IP GitHub Actions (xác nhận qua log thật). data.binance.vision cũng
+    không dùng được (web app JS, không phải REST/XML tĩnh).
 
-    → Hiện KHÔNG có nguồn nào hoạt động được. Trả về set() (coi là "chưa
-    biết") — field is_futures_listed sẽ KHÔNG được set trong trường hợp
-    này (xem apply_alpha_status), tránh suy diễn sai thành "chưa lên
-    future". Nếu sau này có nguồn khác (proxy Render riêng cho fapi
-    tương tự đã làm với spot-klines, hoặc bạn cung cấp), có thể bật lại.
+    → Dùng lại route CÓ SẴN trên Render: GET /api/futures-tickers (vốn
+    để hiện bảng ticker Futures ở frontend) — Render gọi fapi.binance.com
+    bằng IP KHÔNG bị chặn, và response ticker/24hr đã sẵn danh sách MỌI
+    symbol Futures đang giao dịch (mỗi symbol 1 dòng), không cần route
+    exchangeInfo riêng → KHÔNG cần sửa/deploy lại Render.
+
+    [QUAN TRỌNG — tiết kiệm bandwidth Render] response ticker/24hr vẫn
+    nặng ~100-150KB. Futures gần như không đổi theo ngày, nên KHÔNG gọi
+    mỗi lần chạy (mỗi 30 phút = ~430MB/tháng nếu dùng exchangeInfo, vẫn
+    đáng kể dù nhẹ hơn) — cache kết quả trong R2, chỉi gọi lại Render nếu
+    cache cũ hơn 24h. Giảm xuống còn ~1 lần/ngày, không đáng kể.
     """
+    cached = _load_json_dict(r2, FUTURES_SYMBOLS_CACHE_KEY)
+    now = time.time()
+    if cached and isinstance(cached, dict) and cached.get("symbols"):
+        age = now - cached.get("ts", 0)
+        if age < FUTURES_SYMBOLS_CACHE_MAX_AGE_SEC:
+            print(f"  [futures] dùng cache R2 (mới {age/3600:.1f}h trước, {len(cached['symbols'])} symbol) — không gọi Render")
+            return set(cached["symbols"])
+
+    if not fa.PROXY_WORKER_URL:
+        print("  [warn] fetch_futures_symbols: PROXY_WORKER_URL rỗng, không gọi được Render — coi như chưa biết")
+        return set(cached["symbols"]) if cached and cached.get("symbols") else set()
+
+    parsed = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
+    url = f"{parsed.scheme}://{parsed.netloc}/api/futures-tickers"
     try:
-        res = requests.get(FUTURES_EXCHANGE_INFO_URL, timeout=15,
-                            headers={"User-Agent": "Mozilla/5.0"})
+        res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         if res.status_code != 200:
-            print(f"  [warn] fetch_futures_symbols: HTTP {res.status_code} (nhiều khả năng bị chặn geo — is_futures_listed sẽ không được cập nhật lần này)")
-            return set()
+            print(f"  [warn] fetch_futures_symbols (qua Render): HTTP {res.status_code}")
+            return set(cached["symbols"]) if cached and cached.get("symbols") else set()
         data = res.json()
-        out = set()
-        for s in data.get("symbols", []):
-            if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING":
-                out.add(f"{(s.get('baseAsset') or '').upper()}USDT")
+        if not isinstance(data, list):
+            print("  [warn] fetch_futures_symbols: response không phải list")
+            return set(cached["symbols"]) if cached and cached.get("symbols") else set()
+        out = {t["symbol"].upper() for t in data if isinstance(t, dict) and t.get("symbol", "").upper().endswith("USDT")}
+        if out:
+            _upload_json_dict(r2, FUTURES_SYMBOLS_CACHE_KEY, {"ts": now, "symbols": sorted(out)})
         return out
     except Exception as ex:
-        print(f"  [warn] fetch_futures_symbols lỗi (bỏ qua, coi như chưa biết): {ex}")
-        return set()
+        print(f"  [warn] fetch_futures_symbols (qua Render) lỗi: {ex}")
+        return set(cached["symbols"]) if cached and cached.get("symbols") else set()
 
 
 ALPHA_TOKEN_LIST_URL = "https://www.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list"
@@ -1108,7 +1147,7 @@ def main():
     global _ALPHA_STATUS_MAP
     _ALPHA_STATUS_MAP = status_map
     print("⏳ Đối chiếu danh sách hợp đồng Futures (USDT-M) từ Binance...")
-    futures_symbols = fetch_futures_symbols()
+    futures_symbols = fetch_futures_symbols(r2)
     marked_spot, marked_dead = apply_alpha_status(all_events, status_map, futures_symbols)
     print(f"   Đối chiếu {len(status_map)} token Alpha + {len(futures_symbols)} symbol Futures — "
           f"tự phát hiện {marked_spot} token đã graduate lên spot, "
