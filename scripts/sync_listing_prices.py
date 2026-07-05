@@ -348,10 +348,23 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                 target_date_str_real = target_date_str
             day_start, day_end = target_ms, target_ms + 86400000 - 1
 
-            k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start, end_ms=day_end, limit=24)
+            # [SỬA] Dùng nến 1 PHÚT thay vì 1 giờ để tính VWAP — nến 1h gộp
+            # cả giờ thành 1 open/high/low/close, nên công thức
+            # (high+low+close)/3 coi 1 cú "wick" chỉ tồn tại vài giây (vd
+            # thanh khoản mỏng, 1-2 lệnh nhỏ đẩy giá vọt lên rồi rơi ngay)
+            # có trọng số ngang với volume CẢ GIỜ — kéo lệch VWAP nghiêm
+            # trọng dù về bản chất chỉ 1 lượng volume rất nhỏ giao dịch ở
+            # mức giá đó. Đã xác minh thực tế qua LINEA: nến 1h có
+            # high=$2.007 (gấp ~87 lần vùng giá xung quanh $0.023-0.036)
+            # kéo VWAP lên $0.336 dù giá thật đa số giao dịch quanh $0.03.
+            # Xuống nến 1 phút, cú wick đó (nếu chỉ tồn tại vài giây/phút)
+            # sẽ bị cô lập vào đúng 1-2 nến phút có volume nhỏ tương ứng,
+            # không còn "mượn" volume của cả giờ nữa — VWAP phản ánh đúng
+            # vùng giá NHIỀU NGƯỜI THỰC SỰ MUA BÁN ĐƯỢC nhất.
+            k_intraday = fetch_alpha_trade_klines_official(alpha_id, "1m", start_ms=day_start, end_ms=day_end, limit=1440)
 
             actual_target_date_str = target_date_str_real
-            if not k_hourly and not alpha_listing_time_ms:
+            if not k_intraday and not alpha_listing_time_ms:
                 # Chỉ dò mò khi KHÔNG có listingTime thật để dựa vào —
                 # nhiều token thực tế chỉ có giao dịch vài ngày SAU ngày
                 # công bố. Dò tiến 1d trong 14 ngày kế tiếp để tìm ngày
@@ -364,13 +377,13 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                     first_ms = int(float(k_daily_probe[0][0]))
                     actual_target_date_str = datetime.utcfromtimestamp(first_ms / 1000).strftime('%Y-%m-%d')
                     day_start2, day_end2 = first_ms, first_ms + 86400000 - 1
-                    k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start2, end_ms=day_end2, limit=24)
+                    k_intraday = fetch_alpha_trade_klines_official(alpha_id, "1m", start_ms=day_start2, end_ms=day_end2, limit=1440)
                     day_start, day_end = day_start2, day_end2  # [SỬA] thiếu cập nhật day_end trước đây
 
-            if k_hourly:
-                open_price  = fa.safe_float(k_hourly[0][1])
-                close_price = fa.safe_float(k_hourly[-1][4])
-                vwap = _compute_vwap(k_hourly, start_ms=day_start, end_ms=day_end)
+            if k_intraday:
+                open_price  = fa.safe_float(k_intraday[0][1])
+                close_price = fa.safe_float(k_intraday[-1][4])
+                vwap = _compute_vwap(k_intraday, start_ms=day_start, end_ms=day_end)
                 ref_price = vwap if vwap is not None else close_price
 
                 # Nến ngày để tính max_since — kể từ event tới hiện tại
@@ -459,13 +472,19 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         open_price  = fa.safe_float(day_match[1])
         close_price = fa.safe_float(day_match[4])
 
-        # 2) Nến 1h trong đúng ngày đó — để tính VWAP chính xác hơn
+        # 2) Nến 5 PHÚT trong đúng ngày đó — để tính VWAP chính xác hơn.
+        # [SỬA] Trước đây dùng nến 1 GIỜ — 1 cú "wick" chỉ tồn tại vài
+        # giây/phút (thanh khoản mỏng) có thể kéo lệch cả giờ dù volume
+        # thật ở mức giá đó rất nhỏ (đã xác minh qua LINEA). Xuống 5 phút
+        # giúp cô lập wick vào đúng khung nhỏ của nó, không "mượn" volume
+        # của cả giờ — vẫn nằm trong giới hạn limit=1000 của API này
+        # (1000 nến 5' ≈ 3.47 ngày, đủ phủ 24h mục tiêu + đệm 1 ngày).
         vwap = None
         try:
             day_start_ms = int(day_match[0])
             day_end_ms   = day_start_ms + 86400000 - 1
             hour_start_ms = day_start_ms - 86400000  # đệm 1 ngày trước cho chắc
-            hourly_url = f"{base}&interval=1h&limit=1000&startTime={hour_start_ms}"
+            hourly_url = f"{base}&interval=5m&limit=1000&startTime={hour_start_ms}"
             res_hourly = fa.fetch_smart(hourly_url, retries=1)
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
