@@ -49,6 +49,11 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 # đi bất cứ lúc nào nếu Binance list lại / bạn xác nhận sai.
 MANUAL_CONFIRMED_DEAD = {"MIRROR", "CYPR", "RDAC"}
 
+# [MỚI] Token bạn TỰ XÁC NHẬN giá đang lưu bị sai (do bug đã sửa) — thêm
+# symbol vào đây để xoá giá cũ, code sẽ tự tính lại đúng ở lần chạy kế
+# tiếp. Xoá khỏi danh sách này sau khi đã xác nhận giá mới đúng.
+MANUAL_RESET_PRICES = {"SLX"}
+
 # [SỬA] fetch_listing_price chạy đa luồng (ThreadPoolExecutor) — lý do fail
 # phải lưu theo TỪNG THREAD riêng (threading.local), KHÔNG được gắn lên
 # function object dùng chung, nếu không các luồng sẽ ghi đè lẫn nhau và
@@ -140,21 +145,43 @@ def _find_day_candles_1d(k_infos, target_date_str):
     return None
 
 
-def _compute_vwap(hourly_candles, target_date_str):
+def _compute_vwap(hourly_candles, target_date_str=None, start_ms=None, end_ms=None):
     """
     VWAP = Σ(typical_price × volume) / Σ(volume), chỉ tính trong đúng 24h
     của ngày niêm yết. typical_price = (high+low+close)/3 — phản ánh đúng
     vùng giá mà phần lớn volume diễn ra, không bị lệch về giá mở cửa thấp
     như cách dùng open đơn thuần.
+
+    [SỬA] BUG THẬT: trước đây lọc nến bằng cách so KHỚP CHUỖI NGÀY LỊCH
+    (vd "2026-05-25") — nhưng cửa sổ 24h thực tế của mình neo theo đúng
+    giờ listingTime (vd 12:00 UTC ngày 25/5 → 12:00 UTC ngày 26/5), KHÔNG
+    canh theo nửa đêm UTC. Kết quả: nến thuộc nửa SAU của cửa sổ (00:00–
+    12:00 UTC ngày 26/5) bị so sánh với target_date_str="2026-05-25" →
+    không khớp → bị loại khỏi VWAP dù vẫn nằm trong đúng 24h listing thật.
+    Với SLX (event listingTime=25/5 12:00 UTC), lỗi này khiến VWAP chỉ
+    tính trên nửa đầu ngày, gây sai lệch nghiêm trọng.
+
+    Giờ lọc bằng KHOẢNG MILI-GIÂY TƯỜNG MINH [start_ms, end_ms] — luôn
+    khớp đúng cửa sổ 24h thực tế đã fetch, bất kể có canh nửa đêm UTC hay
+    không. Giữ tương thích ngược: nếu không truyền start_ms/end_ms, vẫn
+    dùng target_date_str như cũ (cho code cũ chưa cập nhật call site).
     """
     num, den = 0.0, 0.0
     for k in hourly_candles:
         try:
-            day = datetime.utcfromtimestamp(int(k[0]) / 1000).strftime('%Y-%m-%d')
+            ot = int(k[0])
         except Exception:
             continue
-        if day != target_date_str:
-            continue
+        if start_ms is not None and end_ms is not None:
+            if ot < start_ms or ot > end_ms:
+                continue
+        elif target_date_str is not None:
+            try:
+                day = datetime.utcfromtimestamp(ot / 1000).strftime('%Y-%m-%d')
+            except Exception:
+                continue
+            if day != target_date_str:
+                continue
         high, low, close, vol = fa.safe_float(k[2]), fa.safe_float(k[3]), fa.safe_float(k[4]), fa.safe_float(k[5])
         if vol <= 0:
             continue
@@ -338,12 +365,12 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                     actual_target_date_str = datetime.utcfromtimestamp(first_ms / 1000).strftime('%Y-%m-%d')
                     day_start2, day_end2 = first_ms, first_ms + 86400000 - 1
                     k_hourly = fetch_alpha_trade_klines_official(alpha_id, "1h", start_ms=day_start2, end_ms=day_end2, limit=24)
-                    day_start = day_start2  # dùng mốc này cho max_since bên dưới
+                    day_start, day_end = day_start2, day_end2  # [SỬA] thiếu cập nhật day_end trước đây
 
             if k_hourly:
                 open_price  = fa.safe_float(k_hourly[0][1])
                 close_price = fa.safe_float(k_hourly[-1][4])
-                vwap = _compute_vwap(k_hourly, actual_target_date_str)
+                vwap = _compute_vwap(k_hourly, start_ms=day_start, end_ms=day_end)
                 ref_price = vwap if vwap is not None else close_price
 
                 # Nến ngày để tính max_since — kể từ event tới hiện tại
@@ -435,12 +462,17 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         # 2) Nến 1h trong đúng ngày đó — để tính VWAP chính xác hơn
         vwap = None
         try:
-            hour_start_ms = int(day_match[0]) - 86400000  # đệm 1 ngày trước cho chắc
+            day_start_ms = int(day_match[0])
+            day_end_ms   = day_start_ms + 86400000 - 1
+            hour_start_ms = day_start_ms - 86400000  # đệm 1 ngày trước cho chắc
             hourly_url = f"{base}&interval=1h&limit=1000&startTime={hour_start_ms}"
             res_hourly = fa.fetch_smart(hourly_url, retries=1)
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
-                vwap = _compute_vwap(k_hourly, actual_date)
+                # [SỬA] Dùng khoảng ms tường minh thay vì so chuỗi ngày —
+                # nhất quán với fix ở fetch_alpha_trade_klines_official,
+                # tránh lặp lại cùng loại lỗi nếu ngày không canh nửa đêm.
+                vwap = _compute_vwap(k_hourly, start_ms=day_start_ms, end_ms=day_end_ms)
         except Exception:
             pass
 
@@ -1069,6 +1101,39 @@ def fetch_alpha_token_status_map():
         return {}
 
 
+def invalidate_manual_reset_prices(events):
+    """
+    [MỚI, AN TOÀN HƠN] Ban đầu định tự động phát hiện giá cũ bị tính sai
+    bằng cách so sánh listing_price.date với listingTime thật — nhưng
+    heuristic đó SAI: rất nhiều token lấy giá qua nhánh DEX/aggregator
+    nội bộ (không phải API Alpha chính thức) có "date" là ngày pool DEX
+    bắt đầu giao dịch, ĐƯƠNG NHIÊN khác listingTime của Alpha — không
+    phải bug. Nếu tự động xoá theo cách đó sẽ xoá nhầm phần lớn dữ liệu
+    ĐÃ ĐÚNG trong hàng trăm token đã xử lý thành công trước đó.
+
+    → Thay bằng danh sách RESET THỦ CÔNG — bạn tự xác nhận token nào giá
+    sai (như SLX, phát hiện giá ~$0.0015 trong khi thực tế ~$0.15-0.22
+    do bug ranh giới ngày khi tính VWAP, đã sửa ở _compute_vwap) thì
+    thêm symbol vào đây, chạy 1 lần để xoá giá cũ, code sẽ tự tính lại
+    bằng logic đã sửa ở lần chạy kế tiếp — rồi có thể xoá khỏi danh sách.
+    """
+    invalidated = 0
+    for e in events:
+        sym = (e.get("symbol") or e.get("token") or "").upper()
+        if sym not in MANUAL_RESET_PRICES:
+            continue
+        if e.get("listing_price"):
+            e["listing_price"] = None
+            e["ath_since_listing_price"] = None
+            e["ath_since_listing_date"] = None
+            invalidated += 1
+        if e.get("spot_listing_price"):
+            e["spot_listing_price"] = None
+            e["spot_ath_price"] = None
+            e["spot_ath_date"] = None
+    return invalidated
+
+
 def apply_alpha_status(events, status_map, futures_symbols=None):
     """
     Mutates events in-place dựa trên status_map (từ fetch_alpha_token_status_map)
@@ -1153,6 +1218,10 @@ def main():
     print(f"   Đối chiếu {len(status_map)} token Alpha + {len(futures_symbols)} symbol Futures — "
           f"tự phát hiện {marked_spot} token đã graduate lên spot, "
           f"đánh dấu {marked_dead} token đã chết hẳn (fullyDelisted, chưa từng lên CEX — sẽ không retry nữa)")
+
+    reset_count = invalidate_manual_reset_prices(all_events)
+    if reset_count:
+        print(f"   [reset] Đã xoá giá cũ của {reset_count} event trong MANUAL_RESET_PRICES — sẽ tính lại ngay bên dưới")
 
     filled = enrich_events(all_events)
     print(f"\n✅ Backfilled {filled} new listing prices")
