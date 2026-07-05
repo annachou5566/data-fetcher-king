@@ -399,9 +399,9 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                     "max_since": max_since,
                 }
             if alpha_listing_time_ms:
-                official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} tại đúng listingTime thật ({target_date_str_real}) — token có thể chưa từng thật sự khớp lệnh dù đã lên lịch listing"
+                official_note = f"API chính thức KHÔNG có nến 1 phút nào cho alphaId={alpha_id} tại đúng listingTime thật ({target_date_str_real}) — token có thể chưa từng thật sự khớp lệnh dù đã lên lịch listing"
             else:
-                official_note = f"API chính thức KHÔNG có nến 1h nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng, không có listingTime thật để dùng)"
+                official_note = f"API chính thức KHÔNG có nến 1 phút nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng, không có listingTime thật để dùng)"
         except Exception as ex:
             official_note = f"API chính thức lỗi: {ex}"
             if DEBUG: print(f"[debug] {official_note}", end=" ")
