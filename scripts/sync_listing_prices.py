@@ -823,14 +823,33 @@ def _get_alpha_info(symbol, contract_address=None):
     return st["alphaId"], st.get("listingTime")
 
 
-def _process_one(e, idx, total):
-    """Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None)."""
+def _process_one(e, idx, total, is_first_occurrence=True):
+    """
+    Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None).
+
+    is_first_occurrence: [MỚI] token có thể có NHIỀU event cùng symbol
+    (nhiều đợt airdrop/claim khác nhau — "P1", "P2",...). listingTime lấy
+    từ Binance CHỈ có 1 giá trị DUY NHẤT cho mỗi symbol (mốc list Alpha
+    LẦN ĐẦU) — nếu áp dụng y hệt giá trị đó cho MỌI event cùng symbol, các
+    đợt airdrop SAU (P2, P3...) sẽ bị tính giá SAI ngày (dùng nhầm ngày
+    list lần đầu, có thể cách xa hàng tuần/tháng so với ngày claim thật
+    của đợt đó) — kéo theo "đỉnh giá" bị tính từ SAI mốc thời gian, ra số
+    vô nghĩa (đã xác minh thực tế qua ACU/WMTX round 2: đỉnh hiển thị hoá
+    ra là ATH từ lần list ĐẦU TIÊN, không phải từ ngày airdrop lần 2).
+
+    Chỉ event XƯA NHẤT của mỗi symbol mới được tin dùng listingTime chung
+    này (vì nó khớp với lần list đầu); các event SAU dùng đúng ngày riêng
+    của chính nó (date_str) — để fetch_listing_price tự dò/tính theo ngày
+    đó, không bị ghi đè bởi listingTime của lần list đầu.
+    """
     contract = e.get("contract_address")
     chain_id = e.get("chain_id")
     date_str = (e.get("event_time") or e.get("date") or "")[:10]
     symbol = e.get("symbol") or e.get("token") or "?"
 
     _alpha_id, _listing_ms = _get_alpha_info(symbol, contract_address=contract)
+    if not is_first_occurrence:
+        _listing_ms = None  # không tin listingTime chung cho đợt airdrop SAU lần đầu
     result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_alpha_id, alpha_listing_time_ms=_listing_ms)
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
@@ -860,6 +879,59 @@ def _process_one(e, idx, total):
     return e, result
 
 
+def _first_occurrence_ids(events):
+    """
+    [MỚI] Trả về set id() của event là lần xuất hiện SỚM NHẤT (theo
+    event_time/date) của mỗi symbol — dùng để quyết định event nào được
+    tin dùng listingTime chung từ Binance (chỉ lần đầu), event nào (các
+    đợt airdrop sau — P2, P3...) phải dùng ngày riêng của chính nó.
+
+    Tính trên TOÀN BỘ events (không chỉ phần "todo" chưa có giá) — vì
+    lần đầu tiên của 1 symbol có thể ĐÃ được xử lý xong từ trước (không
+    còn trong todo nữa), trong khi đợt sau (P2) mới là cái đang cần xử
+    lý — vẫn cần biết nó KHÔNG PHẢI lần đầu để không áp nhầm listingTime.
+    """
+    earliest = {}
+    for e in events:
+        sym = (e.get("symbol") or e.get("token") or "").upper()
+        if not sym:
+            continue
+        d = (e.get("event_time") or e.get("date") or "")
+        if sym not in earliest or d < earliest[sym][0]:
+            earliest[sym] = (d, e)
+    return {id(v[1]) for v in earliest.values()}
+
+
+def invalidate_multi_round_listing_prices(events):
+    """
+    [MỚI] Dọn lại dữ liệu ĐÃ TÍNH SAI theo đúng bug vừa tìm ra: các đợt
+    airdrop/claim SAU lần đầu (P2, P3...) của cùng 1 symbol trước đây bị
+    tính giá bằng listingTime CHUNG của symbol đó (mốc list Alpha LẦN
+    ĐẦU), thay vì đúng ngày riêng của chính đợt đó — khiến "đỉnh giá"
+    hiển thị sai hoàn toàn về mặt ý nghĩa (ATH từ lần list đầu, không
+    phải từ ngày airdrop đang xem). Đã xác minh thực tế qua ACU/WMTX.
+
+    An toàn để tính lại: dù trước đó tính bằng đường nào, cho tính lại
+    theo logic đã sửa (dùng đúng ngày riêng của event) không gây hại gì,
+    chỉ tốn thêm request. Có cờ chống quét lại vô hạn — is_first_occurrence
+    là đặc điểm CỐ ĐỊNH theo dữ liệu hiện có, không tự đổi.
+    """
+    invalidated = 0
+    first_ids = _first_occurrence_ids(events)
+    for e in events:
+        if e.get("_multiround_checked"):
+            continue
+        e["_multiround_checked"] = True
+        if id(e) in first_ids:
+            continue  # lần đầu — không thuộc diện lỗi này
+        if e.get("listing_price"):
+            e["listing_price"] = None
+            e["ath_since_listing_price"] = None
+            e["ath_since_listing_date"] = None
+            invalidated += 1
+    return invalidated
+
+
 def enrich_events(events):
     """
     Mutates events in-place, returns count of newly-filled entries.
@@ -880,11 +952,13 @@ def enrich_events(events):
     if not todo:
         return 0
 
+    first_ids = _first_occurrence_ids(events)
+
     print(f"  Xử lý {total} token, chạy song song tối đa {MAX_CONCURRENT} luồng...")
 
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
         futures = {
-            pool.submit(_process_one, e, i + 1, total): e
+            pool.submit(_process_one, e, i + 1, total, id(e) in first_ids): e
             for i, e in enumerate(todo)
         }
         for fut in as_completed(futures):
@@ -917,8 +991,13 @@ def _process_spot_one(e, idx, total):
         print(f"  [spot {idx}/{total}] {symbol}... không tìm được ngày spot-listing (symbol lệch/chưa có cặp USDT?)", flush=True)
         return e, None, None
 
-    _alpha_id2, _listing_ms2 = _get_alpha_info(symbol, contract_address=contract)
-    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_alpha_id2, alpha_listing_time_ms=_listing_ms2)
+    # [SỬA] KHÔNG truyền alpha_listing_time_ms ở đây — spot_date đã là
+    # ngày CHÍNH XÁC tự tìm ra riêng cho việc lên spot (khác hẳn ngày
+    # list Alpha ban đầu). Nếu truyền alpha_listing_time_ms, nó sẽ ghi đè
+    # nhầm spot_date bằng ngày list Alpha không liên quan — cùng loại bug
+    # vừa sửa ở _process_one cho các đợt airdrop lần 2 trở lên.
+    _alpha_id2, _ = _get_alpha_info(symbol, contract_address=contract)
+    result = fetch_listing_price(chain_id, contract, spot_date, alpha_id=_alpha_id2, alpha_listing_time_ms=None)
     if not result:
         result = fetch_listing_price_public_spot(symbol, spot_date)
 
@@ -1283,6 +1362,11 @@ def main():
     if at_risk_count:
         print(f"   [invalidate] Phát hiện {at_risk_count} event có nguy cơ dính bug ranh giới ngày VWAP "
               f"(listingTime không canh nửa đêm UTC) — đã xoá giá cũ để tính lại bằng logic đã sửa")
+
+    multiround_count = invalidate_multi_round_listing_prices(all_events)
+    if multiround_count:
+        print(f"   [invalidate] Phát hiện {multiround_count} event là đợt airdrop SAU lần đầu (P2, P3...) "
+              f"bị tính nhầm bằng listingTime của lần list đầu — đã xoá giá cũ để tính lại đúng ngày riêng")
 
     reset_count = invalidate_manual_reset_prices(all_events)
     if reset_count:
