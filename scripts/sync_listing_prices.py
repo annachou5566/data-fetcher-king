@@ -1101,21 +1101,62 @@ def fetch_alpha_token_status_map():
         return {}
 
 
+def invalidate_at_risk_listing_prices(events, status_map):
+    """
+    [MỚI] Kiểm tra AN TOÀN hơn nhiều so với heuristic bị bỏ trước đó (so
+    listing_price.date với listingTime — dễ nhầm với token qua nhánh DEX
+    có "date" khác biệt hợp lệ).
+
+    Cách này KHÔNG nhìn vào "date" cũ đã lưu — mà hỏi thẳng: "nếu tính
+    lại NGAY BÂY GIỜ qua API Alpha chính thức, token này có ở diện dễ
+    dính bug ranh giới ngày (đã sửa ở _compute_vwap) hay không?" Bug đó
+    CHỈ xảy ra khi cửa sổ 24h không canh nửa đêm UTC — tức listingTime
+    thật có giờ khác 00:00:00. Đã xác minh: BTW (08:00 UTC), SLX (12:00
+    UTC) — cả 2 mốc thực tế gặp đều KHÔNG canh nửa đêm, nên đây nhiều khả
+    năng là trường hợp PHỔ BIẾN, không phải ngoại lệ.
+
+    An toàn vì: dù event đó trước đây được tính qua nhánh KHÁC (DEX/
+    aggregator nội bộ, không phải API chính thức) — cho tính lại cũng
+    KHÔNG gây hại gì, chỉ tốn thêm 1 lượt gọi API, kết quả cuối cùng vẫn
+    đúng hoặc đúng hơn. Khác hẳn heuristic cũ (so ngày) vốn có thể XOÁ
+    NHẦM dữ liệu ĐÃ ĐÚNG.
+    """
+    invalidated = 0
+    if not status_map:
+        return 0
+    for e in events:
+        if e.get("_vwap_daybound_checked"):
+            continue  # [SỬA] đã quét 1 lần rồi — nếu không đánh dấu, token
+                      # có listingTime không canh nửa đêm (đặc điểm CỐ ĐỊNH,
+                      # không tự hết) sẽ bị xoá-tính lại VÔ HẠN mỗi 30 phút
+        e["_vwap_daybound_checked"] = True   # đánh dấu NGAY, dù có invalidate hay không
+        if not e.get("listing_price"):
+            continue
+        sym = (e.get("symbol") or e.get("token") or "").upper()
+        contract = e.get("contract_address")
+        alpha_id, listing_ms = _get_alpha_info(sym, contract_address=contract)
+        if not alpha_id or not listing_ms:
+            continue  # không có alphaId đáng tin cho symbol này -> không thuộc diện rủi ro này
+        try:
+            dt = datetime.utcfromtimestamp(int(listing_ms) / 1000)
+        except Exception:
+            continue
+        if dt.hour == 0 and dt.minute == 0:
+            continue  # canh đúng nửa đêm UTC -> không dính bug ranh giới ngày
+        e["listing_price"] = None
+        e["ath_since_listing_price"] = None
+        e["ath_since_listing_date"] = None
+        invalidated += 1
+    return invalidated
+
+
 def invalidate_manual_reset_prices(events):
     """
-    [MỚI, AN TOÀN HƠN] Ban đầu định tự động phát hiện giá cũ bị tính sai
-    bằng cách so sánh listing_price.date với listingTime thật — nhưng
-    heuristic đó SAI: rất nhiều token lấy giá qua nhánh DEX/aggregator
-    nội bộ (không phải API Alpha chính thức) có "date" là ngày pool DEX
-    bắt đầu giao dịch, ĐƯƠNG NHIÊN khác listingTime của Alpha — không
-    phải bug. Nếu tự động xoá theo cách đó sẽ xoá nhầm phần lớn dữ liệu
-    ĐÃ ĐÚNG trong hàng trăm token đã xử lý thành công trước đó.
-
-    → Thay bằng danh sách RESET THỦ CÔNG — bạn tự xác nhận token nào giá
-    sai (như SLX, phát hiện giá ~$0.0015 trong khi thực tế ~$0.15-0.22
-    do bug ranh giới ngày khi tính VWAP, đã sửa ở _compute_vwap) thì
-    thêm symbol vào đây, chạy 1 lần để xoá giá cũ, code sẽ tự tính lại
-    bằng logic đã sửa ở lần chạy kế tiếp — rồi có thể xoá khỏi danh sách.
+    [AN TOÀN, THỦ CÔNG] Bổ sung cho invalidate_at_risk_listing_prices ở
+    trên — dùng khi bạn tự phát hiện 1 token giá sai nhưng không thuộc
+    diện tự động phát hiện được (vd không có alphaId hiện tại để kiểm
+    tra). Thêm symbol vào MANUAL_RESET_PRICES, chạy 1 lần để xoá giá cũ,
+    code tự tính lại ở lần chạy kế tiếp — rồi xoá khỏi danh sách.
     """
     invalidated = 0
     for e in events:
@@ -1218,6 +1259,11 @@ def main():
     print(f"   Đối chiếu {len(status_map)} token Alpha + {len(futures_symbols)} symbol Futures — "
           f"tự phát hiện {marked_spot} token đã graduate lên spot, "
           f"đánh dấu {marked_dead} token đã chết hẳn (fullyDelisted, chưa từng lên CEX — sẽ không retry nữa)")
+
+    at_risk_count = invalidate_at_risk_listing_prices(all_events, status_map)
+    if at_risk_count:
+        print(f"   [invalidate] Phát hiện {at_risk_count} event có nguy cơ dính bug ranh giới ngày VWAP "
+              f"(listingTime không canh nửa đêm UTC) — đã xoá giá cũ để tính lại bằng logic đã sửa")
 
     reset_count = invalidate_manual_reset_prices(all_events)
     if reset_count:
