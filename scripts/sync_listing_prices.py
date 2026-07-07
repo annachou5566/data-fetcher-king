@@ -1378,15 +1378,28 @@ def main():
     filled_spot = enrich_spot_listing_prices(all_events)
     print(f"✅ Backfilled {filled_spot} giá lúc spot-listing (ngày lấy trực tiếp từ klines Binance)")
 
-    # Re-split theo status rồi ghi lại cả 4 file
-    upcoming = [e for e in all_events if e.get("status") == "upcoming"]
-    live     = [e for e in all_events if e.get("status") == "live"]
-    history  = [e for e in all_events if e.get("status") in ("ended", None) or e.get("status") not in ("upcoming", "live")]
+    # [SỬA — GIAI ĐOẠN 0 tái cấu trúc kiến trúc, ĐÃ SỬA LẠI LẦN 2]
+    # Lần sửa trước tôi bỏ luôn cả history.json — SAI, vì vừa xác nhận
+    # qua code route /api/alpha-events (Cloudflare Function): tab=history
+    # đọc DUY NHẤT history.json (không liên quan gì all.json) — nếu
+    # ngừng ghi, TOÀN BỘ dữ liệu giá VWAP/đỉnh sẽ biến mất khỏi tab
+    # History trên frontend. Sửa lại đúng phạm vi:
+    #   - upcoming.json / live.json: NGỪNG ghi — route /api/alpha-events
+    #     xác nhận tab=active đọc live+upcoming+pending.json TRỰC TIẾP từ
+    #     wa-listener (Telegram real-time listener), không qua all.json.
+    #     Script này chạy mỗi 30 phút, trước đây re-derive 2 file này từ
+    #     all.json (LUÔN RỖNG vì all.json không chứa event upcoming/live)
+    #     — ghi đè mất dữ liệu THẬT của wa-listener. Đã xác nhận qua mọi
+    #     log: "upcoming.json updated (0 events, 0KB)" — luôn luôn.
+    #   - history.json + all.json: TIẾP TỤC ghi như cũ — đây đúng là nơi
+    #     cần field giá đã enrich (listing_price, spot_listing_price,
+    #     ath_*,...), và không có bằng chứng có hệ thống khác cùng ghi
+    #     đè 2 file này (khác hẳn upcoming/live — có bằng chứng rõ ràng
+    #     wa-listener ghi liên tục).
+    history = [e for e in all_events if e.get("status") in ("ended", None) or e.get("status") not in ("upcoming", "live")]
 
-    upload_json(r2, "alpha-events/all.json",      all_events)
-    upload_json(r2, "alpha-events/upcoming.json", upcoming)
-    upload_json(r2, "alpha-events/live.json",     live)
-    upload_json(r2, "alpha-events/history.json",  history)
+    upload_json(r2, "alpha-events/all.json",     all_events)
+    upload_json(r2, "alpha-events/history.json", history)
 
     print("🏁 DONE")
 
