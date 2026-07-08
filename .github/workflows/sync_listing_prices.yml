@@ -38,6 +38,7 @@ jobs:
 
     - name: Backfill listing prices
       env:
+        FORCE_FULL_RESET: 'true'
         MAX_CONCURRENT: '6'
         BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
         PROXY_WORKER_URL:            ${{ secrets.PROXY_WORKER_URL }}
