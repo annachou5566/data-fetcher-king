@@ -193,23 +193,42 @@ def _compute_vwap(hourly_candles, target_date_str=None, start_ms=None, end_ms=No
 
 def _max_price_since(k_infos, since_date_str, ref_price=None):
     """
-    Giá CAO NHẤT (theo nến high) kể từ since_date_str (ngày của event —
-    listing hoặc airdrop) đến hiện tại. Dùng để trả lời câu hỏi "nếu bán
-    đúng đỉnh thì lời bao nhiêu", đối chiếu với việc bán ngay lúc claim
-    (vwap ngày event) hoặc hold tới hiện tại (giá now).
+    Giá cao nhất kể từ since_date_str (ngày event — listing hoặc airdrop)
+    đến hiện tại MÀ NGƯỜI DÙNG THỰC SỰ CÓ THỂ CHỐT LỜI ĐƯỢC. Dùng để trả
+    lời câu hỏi "nếu bán đúng đỉnh thì lời bao nhiêu", đối chiếu với việc
+    bán ngay lúc claim (vwap 5 phút đầu) hoặc hold tới hiện tại (giá now).
+
+    [SỬA] TRƯỚC ĐÂY dùng "high" của nến ngày — đây CHÍNH LÀ "cái râu nến
+    dài thòn" mà không ai chốt lời thực sự được: "high" trên Binance chỉ
+    cần 1 LỆNH DUY NHẤT (có thể do market maker cố tình bơm/xả giá trong
+    tích tắc, thanh khoản gần như bằng 0) chạm mức đó là được ghi nhận,
+    dù 99.99% volume cả ngày giao dịch ở vùng giá thấp hơn nhiều — không
+    ai (trừ đúng người khớp lệnh đó) có cơ hội bán ở mức giá này.
+
+    → Đổi sang dùng "close" (giá ĐÓNG CỬA) của mỗi ngày — đây là mức giá
+    ĐÃ THỰC SỰ ỔN ĐỊNH/KHỚP LỆNH THẬT tại 1 thời điểm cụ thể (cuối ngày
+    UTC), phản ánh đúng "vùng giá mà thị trường đã đồng thuận", không thể
+    bị 1 lệnh đơn lẻ thao túng như "high". Lấy giá đóng cửa CAO NHẤT trong
+    số tất cả các ngày kể từ lúc listing — đây là mức "chốt lời thực tế"
+    cao nhất mà 1 người bán bình thường (không phải chính người tạo ra
+    wick) có thể đạt được, nếu theo dõi giá đóng cửa mỗi ngày.
+
+    (Đánh đổi: có thể bỏ lỡ 1 đỉnh THẬT xảy ra giữa ngày rồi tụt trước khi
+    đóng cửa — nhưng đây là đánh đổi ĐÚNG HƯỚNG theo yêu cầu: thà báo thấp
+    hơn giá thật có thể đạt, còn hơn báo 1 con số không ai chốt lời được.)
 
     Tái sử dụng LUÔN mảng nến 1d đã fetch sẵn cho fetch_listing_price
-    (limit=1000 ngày, thường đã phủ từ lúc token mới list tới hiện tại)
+    (limit=1500 ngày, thường đã phủ từ lúc token mới list tới hiện tại)
     — không tốn thêm request nào.
 
     SANITY CHECK: API klines nội bộ đôi khi trả về 1 nến bị lỗi decimal/
-    trùng địa chỉ (vd TAIKO ngày 2026-01-06 trả high = 4.9e19, trong khi
-    giá thật ~$0.6). Nếu KHÔNG lọc, 1 nến rác này khiến "peak return" của
+    trùng địa chỉ (vd TAIKO ngày 2026-01-06 trả close ở mức phi lý so với
+    ngày trước). Nếu KHÔNG lọc, 1 nến rác này khiến "peak return" của
     riêng token đó là số vô nghĩa (hàng tỷ %), và vì "Avg peak" ở frontend
     là trung bình cộng thuần trên toàn bộ token, 1 outlier đủ để kéo sập
     cả con số trung bình của toàn chart.
 
-    Quy tắc: 1 nến high chỉ được chấp nhận là đỉnh mới nếu nó không vượt
+    Quy tắc: 1 nến close chỉ được chấp nhận là đỉnh mới nếu nó không vượt
     quá MAX_JUMP_MULT (mặc định 50x) so với close của nến liền trước (hoặc
     ref_price = giá lúc event, nếu chưa có nến nào trước đó). Nến bất
     thường sẽ bị bỏ qua và log ra, không âm thầm nuốt.
@@ -233,27 +252,23 @@ def _max_price_since(k_infos, since_date_str, ref_price=None):
     relevant.sort(key=lambda x: x[0])
 
     best_price, best_date = None, None
-    prev_close = ref_price  # điểm neo đầu tiên: giá lúc event (vwap/close)
+    prev_close = ref_price  # điểm neo đầu tiên: giá lúc event (vwap 5 phút)
 
     for k_dt, k in relevant:
-        high = fa.safe_float(k[2])
         close = fa.safe_float(k[4])
-        if high <= 0:
+        if close <= 0:
             continue
 
-        if prev_close and prev_close > 0 and high > prev_close * MAX_JUMP_MULT:
+        if prev_close and prev_close > 0 and close > prev_close * MAX_JUMP_MULT:
             if DEBUG:
-                print(f"[debug] bỏ qua nến bất thường {k_dt.date()}: high={high} vs prev_close={prev_close} (>{MAX_JUMP_MULT}x)", end=" ")
-            if close > 0:
-                prev_close = close
-            continue
+                print(f"[debug] bỏ qua nến bất thường {k_dt.date()}: close={close} vs prev_close={prev_close} (>{MAX_JUMP_MULT}x)", end=" ")
+            continue  # KHÔNG cập nhật prev_close bằng giá trị bất thường này — neo lại giá trị cũ để tiếp tục so sánh nến sau
 
-        if best_price is None or high > best_price:
-            best_price = high
+        if best_price is None or close > best_price:
+            best_price = close
             best_date = k_dt.strftime('%Y-%m-%d')
 
-        if close > 0:
-            prev_close = close
+        prev_close = close
 
     return {"price": best_price, "date": best_date} if best_price is not None else None
 
@@ -305,19 +320,57 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
         return None
 
 
+CLAIM_WINDOW_MINUTES = 5
+"""
+[MỚI] Độ dài cửa sổ tính "giá lúc claim" — CHỈ tính VWAP trong N phút đầu
+tiên có giao dịch thật, KHÔNG PHẢI cả ngày (24h) như trước đây.
+
+LÝ DO: "giá lúc claim" về bản chất là giá bạn nhận được khi CLAIM VÀ HÀNH
+ĐỘNG NGAY (bán/giữ) — chỉ có ý nghĩa trong vài phút đầu khi thị trường vừa
+mở, mọi người đổ xô claim cùng lúc. Sau khoảng đó, biến động giá phản ánh
+hành vi HOLD (giữ tiếp), không còn liên quan gì tới "giá lúc claim" nữa.
+Tính VWAP trên cả 24h sẽ TRỘN LẪN 2 khái niệm khác nhau (giá claim + biến
+động cả ngày do hold), khiến con số không còn đại diện đúng cho "giá lúc
+claim" — có thể sai lệch nếu ngày đó có biến động mạnh muộn hơn (như case
+LINEA/SLX từng gặp, dù nguyên nhân khác nhưng cùng bản chất: khung thời
+gian tính toán không khớp với khái niệm muốn đo).
+
+max_since (đỉnh giá) KHÔNG bị ảnh hưởng bởi thay đổi này — vẫn quét từ
+đúng lúc listing tới HIỆN TẠI như cũ, vì "đỉnh" đúng nghĩa là so sánh với
+toàn bộ lịch sử kể từ đó, không giới hạn 10 phút.
+
+Đổi số phút ở đây nếu muốn (5-10 phút là hợp lý theo yêu cầu thực tế).
+"""
+
+
 def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alpha_listing_time_ms=None):
     """
     Trả về {vwap, open, close, date, max_since} của ngày event (listing
     hoặc airdrop), hoặc None nếu không tìm được dữ liệu nào / token chưa
     có klines nội bộ.
 
-    vwap: giá đại diện chính — tính từ nến 1h trong đúng 24h ngày event,
-          phản ánh đúng vùng giá có nhiều volume nhất (không lệch thấp
-          như open đơn thuần, không cần volume-profile phức tạp).
-    open / close: giữ lại để tham khảo / fallback khi vwap không tính được
-                  (ví dụ thiếu dữ liệu 1h, hoặc volume = 0 cả ngày).
-    max_since: {price, date} — giá cao nhất từ ngày event đến hiện tại
-               (để so sánh "bán lúc claim" vs "hold" vs "bán đúng đỉnh").
+    vwap: giá đại diện cho "lúc claim" — [SỬA] tính VWAP CHỈ trong
+          CLAIM_WINDOW_MINUTES phút đầu tiên có giao dịch thật (mặc định
+          5 phút), KHÔNG PHẢI cả ngày 24h như bản trước. Xem docstring
+          của CLAIM_WINDOW_MINUTES ở trên để biết lý do — tóm tắt: VWAP
+          24h trộn lẫn "giá lúc claim" với biến động do HOLD cả ngày,
+          không còn đúng ý nghĩa "giá lúc claim" nữa.
+    open / close: giá mở/đóng của khung CLAIM_WINDOW_MINUTES đó — giữ lại
+                  để tham khảo / fallback khi vwap không tính được (vd
+                  volume = 0 suốt cả khung).
+    max_since: {price, date} — [SỬA] giá ĐÓNG CỬA (close) cao nhất trong
+               số tất cả các ngày kể từ lúc listing đến HIỆN TẠI — KHÔNG
+               dùng "high" (giá cao nhất trong ngày) nữa, vì "high" chỉ
+               cần 1 lệnh chớp nhoáng chạm mức đó là được ghi nhận (kiểu
+               "râu nến" do market maker bơm/xả, thanh khoản gần như bằng
+               0 tại đó) — không ai chốt lời thực sự được. "close" là mức
+               giá ĐÃ THỰC SỰ ỔN ĐỊNH tại 1 thời điểm cụ thể, đại diện
+               đúng cho "nếu theo dõi giá mỗi ngày và bán ở ngày tốt nhất,
+               tối đa lời được bao nhiêu" — con số THỰC TẾ CHỐT LỜI ĐƯỢC,
+               không phải con số lý thuyết không ai chạm tới. Không bị
+               giới hạn bởi CLAIM_WINDOW_MINUTES — đây vẫn là "đỉnh trong
+               suốt lịch sử nắm giữ", để so sánh "bán lúc claim" vs "hold"
+               vs "bán đúng đỉnh".
 
     alpha_id: nếu có (từ fetch_alpha_token_status_map), ƯU TIÊN dùng API
     Alpha klines CHÍNH THỨC trước — hỗ trợ startTime thật, không giới hạn
@@ -361,6 +414,11 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             # sẽ bị cô lập vào đúng 1-2 nến phút có volume nhỏ tương ứng,
             # không còn "mượn" volume của cả giờ nữa — VWAP phản ánh đúng
             # vùng giá NHIỀU NGƯỜI THỰC SỰ MUA BÁN ĐƯỢC nhất.
+            #
+            # Vẫn fetch NGUYÊN NGÀY (không chỉ 10 phút) vì cần dữ liệu này
+            # để: (a) tìm chính xác PHÚT ĐẦU TIÊN có giao dịch thật (có
+            # thể trễ vài phút so với listingTime do độ trễ hệ thống), và
+            # (b) fallback dò ngày nếu chưa có listingTime (nhánh bên dưới).
             k_intraday = fetch_alpha_trade_klines_official(alpha_id, "1m", start_ms=day_start, end_ms=day_end, limit=1440)
 
             actual_target_date_str = target_date_str_real
@@ -381,12 +439,32 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                     day_start, day_end = day_start2, day_end2  # [SỬA] thiếu cập nhật day_end trước đây
 
             if k_intraday:
-                open_price  = fa.safe_float(k_intraday[0][1])
-                close_price = fa.safe_float(k_intraday[-1][4])
-                vwap = _compute_vwap(k_intraday, start_ms=day_start, end_ms=day_end)
+                # [MỚI] Tìm PHÚT ĐẦU TIÊN thật sự có giao dịch (volume>0)
+                # trong ngày — không giả định listingTime/day_start chính
+                # xác tới từng phút (có thể trễ vài phút do độ trễ hệ
+                # thống matching engine). Từ đó lấy đúng CLAIM_WINDOW_MINUTES
+                # phút kế tiếp để tính "giá lúc claim".
+                first_trade_ms = None
+                for k in k_intraday:
+                    try:
+                        if fa.safe_float(k[5]) > 0:  # volume > 0
+                            first_trade_ms = int(k[0])
+                            break
+                    except Exception:
+                        continue
+                if first_trade_ms is None:
+                    first_trade_ms = day_start  # không có nến nào có volume — dùng mốc gốc, vwap sẽ ra None ở bước sau
+
+                claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
+                claim_candles = [k for k in k_intraday if first_trade_ms <= int(k[0]) <= claim_end_ms]
+
+                open_price  = fa.safe_float(claim_candles[0][1]) if claim_candles else fa.safe_float(k_intraday[0][1])
+                close_price = fa.safe_float(claim_candles[-1][4]) if claim_candles else fa.safe_float(k_intraday[-1][4])
+                vwap = _compute_vwap(k_intraday, start_ms=first_trade_ms, end_ms=claim_end_ms)
                 ref_price = vwap if vwap is not None else close_price
 
-                # Nến ngày để tính max_since — kể từ event tới hiện tại
+                # Nến ngày để tính max_since — kể từ ĐÚNG LÚC LISTING (không
+                # phải chỉ CLAIM_WINDOW_MINUTES) tới hiện tại, KHÔNG đổi.
                 k_daily = fetch_alpha_trade_klines_official(alpha_id, "1d", start_ms=day_start, limit=1500)
                 max_since = _max_price_since(k_daily, actual_target_date_str, ref_price=ref_price) if k_daily else None
 
@@ -479,6 +557,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         # giúp cô lập wick vào đúng khung nhỏ của nó, không "mượn" volume
         # của cả giờ — vẫn nằm trong giới hạn limit=1000 của API này
         # (1000 nến 5' ≈ 3.47 ngày, đủ phủ 24h mục tiêu + đệm 1 ngày).
+        #
+        # [SỬA THÊM] "giá lúc claim" chỉ nên tính trong CLAIM_WINDOW_MINUTES
+        # phút đầu tiên có giao dịch thật — không phải cả 24h (xem docstring
+        # CLAIM_WINDOW_MINUTES ở đầu file để biết lý do đầy đủ).
         vwap = None
         try:
             day_start_ms = int(day_match[0])
@@ -488,10 +570,22 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             res_hourly = fa.fetch_smart(hourly_url, retries=1)
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
+                first_trade_ms = None
+                for k in k_hourly:
+                    try:
+                        ot = int(k[0])
+                        if day_start_ms <= ot <= day_end_ms and fa.safe_float(k[5]) > 0:
+                            first_trade_ms = ot
+                            break
+                    except Exception:
+                        continue
+                if first_trade_ms is None:
+                    first_trade_ms = day_start_ms
+                claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
                 # [SỬA] Dùng khoảng ms tường minh thay vì so chuỗi ngày —
                 # nhất quán với fix ở fetch_alpha_trade_klines_official,
                 # tránh lặp lại cùng loại lỗi nếu ngày không canh nửa đêm.
-                vwap = _compute_vwap(k_hourly, start_ms=day_start_ms, end_ms=day_end_ms)
+                vwap = _compute_vwap(k_hourly, start_ms=first_trade_ms, end_ms=claim_end_ms)
         except Exception:
             pass
 
@@ -1367,6 +1461,27 @@ def main():
     if multiround_count:
         print(f"   [invalidate] Phát hiện {multiround_count} event là đợt airdrop SAU lần đầu (P2, P3...) "
               f"bị tính nhầm bằng listingTime của lần list đầu — đã xoá giá cũ để tính lại đúng ngày riêng")
+
+    # [MỚI] Reset TOÀN BỘ 1 lần — dùng khi đổi Ý NGHĨA công thức (vd đổi
+    # VWAP 24h -> VWAP 5 phút đầu, đổi peak từ "high" -> "close") khiến
+    # TOÀN BỘ dữ liệu cũ không còn đúng ý nghĩa mới, dù không phải "bug".
+    # Bật bằng biến môi trường FORCE_FULL_RESET=true CHO ĐÚNG 1 LẦN CHẠY,
+    # rồi TẮT NGAY (xoá biến hoặc set về false) — nếu để quên bật, mỗi lần
+    # chạy sau sẽ xoá sạch giá vừa tính lại, tính đi tính lại vô nghĩa.
+    if os.getenv("FORCE_FULL_RESET", "false").lower() == "true":
+        full_reset_count = 0
+        for e in all_events:
+            if e.get("listing_price") or e.get("spot_listing_price"):
+                e["listing_price"] = None
+                e["spot_listing_price"] = None
+                e["ath_since_listing_price"] = None
+                e["ath_since_listing_date"] = None
+                e["spot_ath_price"] = None
+                e["spot_ath_date"] = None
+                full_reset_count += 1
+        print(f"   [FORCE_FULL_RESET] Đã xoá giá của TOÀN BỘ {full_reset_count} event — sẽ tính lại hết theo "
+              f"công thức mới (VWAP {CLAIM_WINDOW_MINUTES} phút đầu + đỉnh theo giá đóng cửa). "
+              f"NHỚ TẮT biến FORCE_FULL_RESET sau lần chạy này!")
 
     reset_count = invalidate_manual_reset_prices(all_events)
     if reset_count:
