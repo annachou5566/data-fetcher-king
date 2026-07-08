@@ -4,8 +4,13 @@ on:
   schedule:
     # ── Price only (giờ giao dịch US: 14:30–21:00 UTC, Mon–Fri)
     - cron: '*/30 14-20 * * 1-5'   # mỗi 30 phút trong giờ giao dịch
-    # ── Full data (sau market close: 22:00 UTC, Mon–Fri)
-    - cron: '0 22 * * 1-5'         # 1 lần/ngày lấy NAV + holdings từ issuer
+    # ── Full data — chạy 2 LẦN/ngày vì Farside cập nhật dữ liệu DẦN DẦN trong
+    # ngày: các quỹ nhỏ (BITB, ARKB, MSBT...) thường có số ngay sau khi đóng cửa,
+    # nhưng 2 quỹ lớn nhất (IBIT, FBTC) hay công bố TRỄ hơn nhiều giờ. Nếu chỉ
+    # chạy 1 lần lúc 22:00 UTC (~5h sáng VN) sẽ hụt mất IBIT/FBTC của ngày đó,
+    # khiến Flow bị thiếu (vd chỉ ra +$46.6M thay vì +$265.7M thực tế).
+    - cron: '0 22 * * 1-5'         # Lần 1: ngay sau market close (~5h sáng VN)
+    - cron: '0 11 * * 1-5'         # Lần 2: bổ sung IBIT/FBTC công bố trễ (~18h chiều VN)
   workflow_dispatch:
     inputs:
       run_mode:
@@ -50,8 +55,12 @@ jobs:
           # workflow_dispatch override
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "mode=${{ github.event.inputs.run_mode || 'full' }}" >> $GITHUB_OUTPUT
-          # 22:00 UTC → full run
-          elif [ "$(date -u +%H)" = "22" ]; then
+          # So khớp ĐÚNG chuỗi cron đã lên lịch (github.event.schedule), KHÔNG so
+          # giờ hệ thống lúc thực thi (date -u +%H) — vì GitHub Actions runner có
+          # thể bị delay qua khỏi mốc giờ (vd chạy lúc 22:07 thay vì 22:00), khi đó
+          # so "%H = 22" có thể sai lệch nếu delay đủ lớn để nhảy sang giờ khác.
+          # github.event.schedule luôn giữ đúng chuỗi cron gốc bất kể chạy trễ bao lâu.
+          elif [ "${{ github.event.schedule }}" = "0 22 * * 1-5" ] || [ "${{ github.event.schedule }}" = "0 11 * * 1-5" ]; then
             echo "mode=full" >> $GITHUB_OUTPUT
           else
             echo "mode=price" >> $GITHUB_OUTPUT
