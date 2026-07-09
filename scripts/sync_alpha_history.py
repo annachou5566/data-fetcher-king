@@ -2,13 +2,21 @@
 sync_alpha_history.py
 ─────────────────────
 Xử lý file airdrops JSON, enrich với giá từ Binance Alpha API,
-rồi upload 4 file JSON lên R2.
+rồi upload lên R2.
+
+⚠️ QUAN TRỌNG — phân chia quyền sở hữu file trên R2 (tránh xung đột):
+  - Script này (lịch sử)  → CHỈ ghi: alpha-events/history.json, alpha-events/all.json
+  - storage.py (realtime) → CHỈ ghi: alpha-events/pending.json, upcoming.json,
+                                       live.json, blindbox.json
+  Trước đây script này từng ghi ĐÈ cả live.json/upcoming.json bằng dữ liệu
+  rỗng/cũ mỗi lần chạy, xoá mất dữ liệu airdrop đang pending/upcoming thật
+  của hệ thống realtime. Đã bỏ hẳn 2 dòng upload đó.
 
 Chạy một lần để seed dữ liệu lịch sử:
   python scripts/sync_alpha_history.py --input data/airdrops.json
 
 Env vars cần có:
-  R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
+  R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_ACCESS_KEY_ID, R2_BUCKET_NAME
 """
 
 import argparse
@@ -180,16 +188,21 @@ def main():
     upcoming = [e for e in events if e["status"] == "upcoming"]
 
     print(f"[data] ended={len(ended)}  live={len(live_ev)}  upcoming={len(upcoming)}")
+    if live_ev or upcoming:
+        print("[data] Lưu ý: các mục 'live'/'upcoming' trong file airdrops.json "
+              "chỉ dùng để tính toán thống kê nội bộ (không upload) — dữ liệu "
+              "live/upcoming/pending THẬT của hệ thống do storage.py (realtime "
+              "pipeline) quản lý riêng, script này không được phép ghi đè.")
 
-    # Upload
+    # Upload — CHỈ history.json và all.json. KHÔNG đụng live.json/upcoming.json
+    # (thuộc quyền quản lý của storage.py / hệ thống realtime).
     bucket = os.environ["R2_BUCKET_NAME"]
     r2     = get_r2()
-    upload(r2, bucket, "alpha-events/history.json",  ended)
-    upload(r2, bucket, "alpha-events/live.json",     live_ev)
-    upload(r2, bucket, "alpha-events/upcoming.json", upcoming)
+    upload(r2, bucket, "alpha-events/history.json", ended)
     upload(r2, bucket, "alpha-events/all.json",      events)
 
-    print("[done] All files uploaded ✓")
+    print("[done] history.json + all.json uploaded ✓ "
+          "(live.json/upcoming.json/pending.json KHÔNG bị đụng tới)")
 
 
 if __name__ == "__main__":
