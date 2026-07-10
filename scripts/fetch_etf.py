@@ -6,7 +6,7 @@ scripts/fetch_etf.py  v15
 - AUM: iShares live cho IBIT/ETHA, static holdings cho BTC ETF còn lại
 """
 
-import json, os, re, time
+import json, os, re, time, csv, io
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -63,10 +63,19 @@ FARSIDE_KEYWORDS = {
 }
 
 ETF_REGISTRY = [
-    {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares"},
+    # self_computed=True: Flow = Δholdings × price, tính TỰ, KHÔNG cần Farside cho
+    # ticker đó. Chỉ đánh dấu cho các nguồn đã XÁC NHẬN THẬT (không đoán mò):
+    #   - "ishares": đã tích hợp sẵn API chính thức của iShares (IBIT, ETHA)
+    #   - "ark_csv": file CSV holdings công khai của ARK, pattern URL xác nhận
+    #     qua 2 nguồn độc lập (assets.ark-funds.com/fund-documents/funds-etf-csv/
+    #     ARK_{TÊN_QUỸ}_ETF_{TICKER}_HOLDINGS.csv)
+    # Các ticker CHƯA có self_computed vẫn dùng Farside như cũ — đây là migration
+    # TỪNG BƯỚC, không phải xoá Farside 1 lần, để không bao giờ bị mất dữ liệu quỹ
+    # nào giữa chừng nếu 1 nguồn tự tính bị lỗi/thay đổi định dạng.
+    {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares","self_computed":True},
     {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
-    {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq"},
+    {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN_ETF"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq"},
     {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq"},
     {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq"},
@@ -75,7 +84,7 @@ ETF_REGISTRY = [
     {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
     {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
-    {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares"},
+    {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares","self_computed":True},
     {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
     {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
     {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq"},
@@ -396,7 +405,68 @@ def fetch_ishares(session,ticker,product_id,crypto_price=None):
         return None
     except Exception as e: print(f"    data: {e}"); return None
 
-# ── Pipeline ──────────────────────────────────────────────────────
+def fetch_ark_holdings(session, fund_name, ticker):
+    """Fetch holdings từ CSV public của ARK. Trả về (holdings_coin_qty, as_of_date) hoặc None.
+    URL pattern xác nhận qua search: assets.ark-funds.com/fund-documents/funds-etf-csv/
+    ARK_{TÊN_QUỸ}_ETF_{TICKER}_HOLDINGS.csv — file này ARK cập nhật public mỗi ngày
+    giao dịch, không cần key/auth gì cả.
+    """
+    url = f"https://assets.ark-funds.com/fund-documents/funds-etf-csv/ARK_{fund_name}_ETF_{ticker}_HOLDINGS.csv"
+    try:
+        r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+        if r.status_code != 200:
+            print(f"    ARK CSV HTTP {r.status_code}: {url}")
+            return None
+        text = r.content.decode("utf-8-sig", errors="ignore")  # ARK CSV có BOM
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+        if not rows:
+            return None
+        # Quỹ Bitcoin/Ethereum trust của ARK chỉ nắm 1 tài sản duy nhất → chỉ có
+        # đúng 1 dòng holding thật (bỏ qua dòng "cash"/tổng nếu CSV có thêm).
+        # Thử nhiều tên cột khác nhau vì ARK có thể đổi format theo thời gian.
+        as_of = None
+        for row in rows:
+            name = (row.get("company") or row.get("Company") or row.get("fund") or "").lower()
+            if "cash" in name or "total" in name:
+                continue
+            for key in ["shares", "Shares", "shares_held", "Shares Held"]:
+                if key in row and row[key]:
+                    qty = parse_num(row[key])
+                    if qty and qty > 0:
+                        as_of = row.get("date") or row.get("Date")
+                        return (qty, as_of)
+        return None
+    except Exception as e:
+        print(f"    ARK CSV error ({ticker}): {e}")
+        return None
+
+
+def compute_self_flow(holdings_today, holdings_prev, price_today):
+    """Flow tự tính = Δholdings × giá — CHÍNH XÁC cùng phương pháp Farside/mọi bên
+    tracker khác dùng (Shares Outstanding/Holdings đổi × NAV hoặc giá tài sản),
+    chỉ khác là mình tính trực tiếp từ dữ liệu holdings gốc của issuer, không qua
+    trung gian nào. Trả về None nếu thiếu bất kỳ input nào (không đoán/không giả)."""
+    if holdings_today is None or holdings_prev is None or price_today is None:
+        return None
+    if holdings_prev <= 0:
+        return None  # tránh trường hợp dữ liệu holdings cũ bị lỗi/rỗng
+    return (holdings_today - holdings_prev) * price_today
+
+
+HOLDINGS_HISTORY_KEY = "etf-holdings-history.json"
+
+def load_holdings_history(r2):
+    """{ "TICKER": {"date": "YYYY-MM-DD", "holdings": 123.45}, ... } — lưu holdings
+    của LẦN CHẠY FULL GẦN NHẤT cho mỗi ticker tự tính, dùng làm mốc "hôm qua" để
+    tính Δholdings ở lần chạy full tiếp theo."""
+    data = r2_get_json(r2, HOLDINGS_HISTORY_KEY)
+    return data if isinstance(data, dict) else {}
+
+def save_holdings_history(r2, history):
+    r2_put_json(r2, HOLDINGS_HISTORY_KEY, history, "max-age=3600")
+
+
 def run(r2):
     now_utc=datetime.now(timezone.utc)
     today_str=now_utc.strftime("%Y-%m-%d")
@@ -404,6 +474,7 @@ def run(r2):
 
     prev_etfs={e["ticker"]:e for e in (r2_get_json(r2,"etf-flows.json") or {}).get("etfs",[])}
     crypto_prices=load_crypto_prices()
+    holdings_history = load_holdings_history(r2)  # {"TICKER": {"date":..., "holdings":...}} của lần full trước
 
     print("\n📈 [1/4] Nasdaq prices...")
     nasdaq=fetch_nasdaq_all(session)
@@ -424,8 +495,9 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] iShares (IBIT + ETHA)...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
+    holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
         for etf_ticker,pid in ISHARES_IDS.items():
             u=next((e["underlying"] for e in ETF_REGISTRY if e["ticker"]==etf_ticker),"")
@@ -434,11 +506,28 @@ def run(r2):
                 nav=nasdaq.get(etf_ticker,{}).get("price")
                 aum=raw.get("aum") or (raw["holdings"]*crypto_prices[u] if raw.get("holdings") and u in crypto_prices else None)
                 issuer[etf_ticker]={**raw,"nav":nav,"aum":aum}
+                if raw.get("holdings"): holdings_today[etf_ticker]=raw["holdings"]
                 print(f"  ✓ {etf_ticker}: AUM=${(aum or 0)/1e9:.2f}B  holdings={raw.get('holdings',0):.0f}")
             time.sleep(0.5)
 
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("ark_fund_name"):
+                t=etf["ticker"]
+                res=fetch_ark_holdings(session, etf["ark_fund_name"], t)
+                if res:
+                    qty, as_of = res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (ARK CSV): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ ARK CSV — fallback Farside cho ticker này")
+                time.sleep(0.3)
+
     print("\n🔧 [4/4] Building output...")
     etfs=[]; totals={}
+    self_computed_count=0; farside_count=0; cached_count=0
     for etf in ETF_REGISTRY:
         t=etf["ticker"]; u=etf["underlying"]
         mkt=nasdaq.get(t) or {}; iss=issuer.get(t) or {}; prev=prev_etfs.get(t) or {}
@@ -457,13 +546,26 @@ def run(r2):
 
         premium={"usd":price-nav,"pct":(price-nav)/nav*100} if price and nav and nav>0 else None
 
-        # Flow từ Farside hôm nay
-        flow_usd=daily_flows.get(t)
+        # ── Flow: ƯU TIÊN tự tính (Δholdings × giá coin) nếu có đủ dữ liệu, sau đó
+        # mới fallback Farside, cuối cùng mới fallback cache cũ. Đây là migration
+        # TỪNG BƯỚC khỏi Farside — ticker nào tự tính được thì KHÔNG còn phụ thuộc
+        # Farside nữa, ticker nào chưa có nguồn xác nhận thì vẫn dùng Farside như cũ.
         flow=None
-        if flow_usd is not None:
-            flow={"daily_usd":flow_usd,"is_inflow":flow_usd>0,"source":"farside","date":now_utc.strftime("%Y-%m-%d")}
-        elif prev.get("flow"):
-            flow=prev["flow"]
+        if etf.get("self_computed") and RUN_MODE=="full":
+            holdings_today_val = holdings_today.get(t)
+            holdings_prev_val = (holdings_history.get(t) or {}).get("holdings")
+            self_flow_usd = compute_self_flow(holdings_today_val, holdings_prev_val, crypto_prices.get(u))
+            if self_flow_usd is not None:
+                flow={"daily_usd":self_flow_usd,"is_inflow":self_flow_usd>0,"source":"self_computed","date":today_str}
+                self_computed_count+=1
+        if flow is None:
+            flow_usd=daily_flows.get(t)
+            if flow_usd is not None:
+                flow={"daily_usd":flow_usd,"is_inflow":flow_usd>0,"source":"farside","date":today_str}
+                farside_count+=1
+            elif prev.get("flow"):
+                flow=prev["flow"]
+                cached_count+=1
 
         etfs.append({"ticker":t,"name":etf["name"],"issuer":etf["issuer"],"underlying":u,"fee":etf["fee"],
             "market":{"price":price,"change":mkt.get("change"),"change_pct":mkt.get("change_pct"),"volume":mkt.get("volume")} if mkt else None,
@@ -477,7 +579,16 @@ def run(r2):
     out={"etfs":etfs,"totals":totals,"run_mode":RUN_MODE,"fetched_at":now_utc.isoformat()}
     r2_put_json(r2,"etf-flows.json",out,"max-age=120")
     if RUN_MODE=="full": r2_put_json(r2,f"etf-history/{today_str}.json",out,"max-age=86400")
+
+    # Lưu holdings hôm nay làm mốc "hôm qua" cho lần full chạy kế tiếp
+    if RUN_MODE=="full" and holdings_today:
+        for t,qty in holdings_today.items():
+            holdings_history[t]={"date":today_str,"holdings":qty}
+        save_holdings_history(r2, holdings_history)
+
     print("✅ Done")
+    if RUN_MODE=="full":
+        print(f"   Flow source: {self_computed_count} self-computed · {farside_count} farside · {cached_count} cached")
     for u,t in totals.items():
         s="+" if t["flow"]>=0 else ""
         print(f"   {u}: AUM=${t['aum']/1e9:.2f}B  Flow={s}${t['flow']/1e6:.1f}M  ({t['count']} ETFs)")
