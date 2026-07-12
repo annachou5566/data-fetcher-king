@@ -14,6 +14,10 @@ on:
         description: 'Migrate ở chế độ dry-run (chỉ xem trước, không ghi R2)'
         type: boolean
         default: false
+      run_vcb:
+        description: 'Chạy VCB thủ công để test (mặc định KHÔNG chạy khi trigger P2P qua workflow_dispatch, ví dụ từ cron-job.org)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,7 +30,6 @@ jobs:
       github.event.schedule == '*/10 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # ✅ Concurrency riêng cho P2P — không bị VCB block
     concurrency:
       group: job-p2p-snapshot
       cancel-in-progress: false
@@ -49,10 +52,6 @@ jobs:
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: python scripts/fetch_p2p.py
 
-  # ✅ Chỉ chạy khi bấm "Run workflow" thủ công và tick "run_migration".
-  #    Không bao giờ chạy theo lịch cron — đây là job MỘT LẦN để đưa lịch sử
-  #    p2p-data.json cũ sang kiến trúc partition theo ngày mới. An toàn chạy
-  #    lại nhiều lần (idempotent, tự dedupe) nếu lần trước bị gián đoạn.
   p2p-migrate-history:
     if: >
       github.event_name == 'workflow_dispatch' &&
@@ -86,13 +85,18 @@ jobs:
           python scripts/migrate_p2p_history.py
         fi
 
+  # ⚠️ ĐÃ SỬA: thêm điều kiện "inputs.run_vcb == true" cho nhánh workflow_dispatch.
+  # Trước đây bất kỳ lần workflow_dispatch nào (kể cả do cron-job.org tự động gọi
+  # mỗi 10 phút cho P2P) cũng vô tình làm job này chạy theo — sai với thiết kế
+  # ban đầu là "chỉ chạy 1 lần/ngày lúc 08:35". Giờ chỉ chạy khi:
+  #   - Đúng lịch cron 08:35 hàng ngày, HOẶC
+  #   - Bạn tự tay bấm "Run workflow" và tick "run_vcb"
   vcb-daily:
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_vcb == true) ||
       github.event.schedule == '35 1 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # ✅ Concurrency riêng cho VCB — không ảnh hưởng P2P
     concurrency:
       group: job-vcb-daily
       cancel-in-progress: false
