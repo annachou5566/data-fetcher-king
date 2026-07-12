@@ -331,7 +331,12 @@ def fetch_binance_liquidity(session, asset, trade_type):
 
             try:
                 surplus = float(first_present(item, ["surplusAmount", "tradableAmount", "tradableQuantity"]) or 0)
-                max_single = float(first_present(item, ["maxSingleTransAmount", "maxTransAmount"]) or 0)
+                # ⚠️ maxSingleTransAmount Binance trả về ĐƠN VỊ FIAT (VND), không phải
+                # đơn vị asset (USDT/USDC) như surplusAmount — phải quy đổi về cùng
+                # đơn vị (asset) bằng giá của chính ad đó trước khi so sánh/cap.
+                max_single_fiat = float(first_present(item, ["maxSingleTransAmount", "maxTransAmount"]) or 0)
+                price = float(item.get("price") or 0)
+                max_single = (max_single_fiat / price) if price > 0 else 0
                 adv = item.get("advertiser", {}) or {}
                 # Thử nhiều tên định danh merchant, ưu tiên ID số (userNo) nếu có,
                 # fallback về nickName nếu endpoint này không trả userNo.
@@ -344,7 +349,8 @@ def fetch_binance_liquidity(session, asset, trade_type):
                 continue
 
             if ad_count_raw == 1:
-                print(f"  🔍 DEBUG giá trị đã parse (ad đầu tiên): surplus={surplus} max_single={max_single} "
+                print(f"  🔍 DEBUG giá trị đã parse (ad đầu tiên): surplus={surplus} "
+                      f"max_single_fiat={max_single_fiat} price={price} max_single(quy đổi USDT)={max_single} "
                       f"user_no={user_no!r} month_order_count={month_order_count} finish_rate={finish_rate}")
 
             if not user_no:
