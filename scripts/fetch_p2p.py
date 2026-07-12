@@ -302,21 +302,30 @@ def fetch_binance_liquidity(session, asset, trade_type):
         for item in items:
             ad_count_raw += 1
 
-            # In log debug 1 lần duy nhất để xác nhận đúng field name thật
+            # In log debug 1 lần duy nhất để xác nhận đúng field name + giá trị thật
             if not debug_printed:
                 print(f"  🔍 DEBUG [BNC {asset}/{trade_type}] mẫu keys 1 ad: {list(item.keys())}")
                 adv = item.get("advertiser", {})
                 print(f"  🔍 DEBUG advertiser keys: {list(adv.keys()) if isinstance(adv, dict) else 'KHÔNG có advertiser dict'}")
+                print(f"  🔍 DEBUG giá trị thật: tradableAmount={item.get('tradableAmount')!r} "
+                      f"maxTransAmount={item.get('maxTransAmount')!r} "
+                      f"minTransAmount={item.get('minTransAmount')!r} "
+                      f"nickName={adv.get('nickName')!r} "
+                      f"monthOrderCount={adv.get('monthOrderCount')!r} "
+                      f"monthFinishRate={adv.get('monthFinishRate')!r} "
+                      f"positiveRate={adv.get('positiveRate')!r}")
                 debug_printed = True
 
             try:
-                surplus = float(item.get("surplusAmount", 0) or 0)
-                max_single = float(item.get("maxSingleTransAmount", 0) or 0)
+                surplus = float(item.get("tradableAmount", 0) or 0)
+                max_single = float(item.get("maxTransAmount", 0) or 0)
                 adv = item.get("advertiser", {}) or {}
-                user_no = adv.get("userNo")
+                # Binance không trả userNo dạng số — dùng nickName làm định danh
+                # merchant thay thế (đủ ổn định để dedupe trong phạm vi 1 sàn).
+                user_no = adv.get("nickName")
                 month_order_count = int(adv.get("monthOrderCount", 0) or 0)
-                # monthFinishRate Binance trả dạng 0-1 (VD 0.98) — nếu là dạng % (98) thì tự chia 100
-                raw_finish_rate = adv.get("monthFinishRate", 0) or 0
+                # monthFinishRate: chưa chắc 0-1 hay 0-100 — tự nhận diện qua giá trị
+                raw_finish_rate = float(adv.get("monthFinishRate", 0) or 0)
                 finish_rate = raw_finish_rate / 100 if raw_finish_rate > 1 else raw_finish_rate
             except Exception as e:
                 print(f"  ⚠️  Parse ad lỗi, bỏ qua ad này: {e}")
