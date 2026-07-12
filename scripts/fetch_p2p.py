@@ -316,13 +316,6 @@ def fetch_binance_liquidity(session, asset, trade_type):
         for item in items:
             ad_count_raw += 1
 
-            # In log debug 1 lần duy nhất để xác nhận đúng field name + giá trị thật
-            if not debug_printed:
-                print(f"  🔍 DEBUG [BNC {asset}/{trade_type}] mẫu keys 1 ad (đã gộp adv+advertiser): {list(item.keys())}")
-                adv = item.get("advertiser", {})
-                print(f"  🔍 DEBUG advertiser keys: {list(adv.keys()) if isinstance(adv, dict) else 'KHÔNG có advertiser dict'}")
-                debug_printed = True
-
             def first_present(d, keys):
                 for k in keys:
                     if d.get(k) not in (None, ""):
@@ -331,15 +324,12 @@ def fetch_binance_liquidity(session, asset, trade_type):
 
             try:
                 surplus = float(first_present(item, ["surplusAmount", "tradableAmount", "tradableQuantity"]) or 0)
-                # ⚠️ maxSingleTransAmount Binance trả về ĐƠN VỊ FIAT (VND), không phải
-                # đơn vị asset (USDT/USDC) như surplusAmount — phải quy đổi về cùng
-                # đơn vị (asset) bằng giá của chính ad đó trước khi so sánh/cap.
+                # maxSingleTransAmount là ĐƠN VỊ FIAT (VND) — quy đổi về asset (USDT/USDC)
+                # bằng giá của chính ad đó để so sánh cùng đơn vị với surplus.
                 max_single_fiat = float(first_present(item, ["maxSingleTransAmount", "maxTransAmount"]) or 0)
                 price = float(item.get("price") or 0)
                 max_single = (max_single_fiat / price) if price > 0 else 0
                 adv = item.get("advertiser", {}) or {}
-                # Thử nhiều tên định danh merchant, ưu tiên ID số (userNo) nếu có,
-                # fallback về nickName nếu endpoint này không trả userNo.
                 user_no = first_present(adv, ["userNo", "advNo", "nickName"])
                 month_order_count = int(first_present(adv, ["monthOrderCount"]) or 0)
                 raw_finish_rate = float(first_present(adv, ["monthFinishRate"]) or 0)
@@ -347,11 +337,6 @@ def fetch_binance_liquidity(session, asset, trade_type):
             except Exception as e:
                 print(f"  ⚠️  Parse ad lỗi, bỏ qua ad này: {e}")
                 continue
-
-            if ad_count_raw == 1:
-                print(f"  🔍 DEBUG giá trị đã parse (ad đầu tiên): surplus={surplus} "
-                      f"max_single_fiat={max_single_fiat} price={price} max_single(quy đổi USDT)={max_single} "
-                      f"user_no={user_no!r} month_order_count={month_order_count} finish_rate={finish_rate}")
 
             if not user_no:
                 continue  # không xác định được merchant, bỏ qua để không tính sai dedupe
