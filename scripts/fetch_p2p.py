@@ -33,6 +33,7 @@ R2_MANIFEST_KEY = "p2p-snapshots/_manifest.json"
 SCHEMA_VERSION  = 1
 
 BNC_URL     = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list"
+BNC_LIQUIDITY_URL = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 BNC_ASSETS  = ["USDT", "USDC"]
 OKX_URL     = "https://www.okx.com/v3/c2c/tradingOrders/books"
 BBT_URL     = "https://api2.bybit.com/fiat/otc/item/online"
@@ -252,18 +253,31 @@ def save_snapshot_daily(r2, bucket, snap):
 # ══════════════════════════════════════════════════════════════════
 
 def fetch_binance_ads_page(session, asset, trade_type, page):
-    """Lấy 1 trang ads Binance. Trả về (items, total, ok)."""
+    """Lấy 1 trang ads Binance từ endpoint ĐẦY ĐỦ (adv/search).
+    Trả về (items_chuẩn_hóa, total, ok) — mỗi item đã gộp sẵn field
+    từ 'adv' + 'advertiser' cho đồng nhất với phần code xử lý phía sau.
+    """
     try:
-        res = session.get(BNC_URL, params={
-            "fiat": FIAT, "asset": asset, "tradeType": trade_type,
-            "page": page, "rows": PAGE_SIZE,
+        res = session.post(BNC_LIQUIDITY_URL, json={
+            "page": page, "rows": PAGE_SIZE, "payTypes": [],
+            "asset": asset, "tradeType": trade_type, "fiat": FIAT,
         }, timeout=15)
         if res.status_code != 200:
+            print(f"  ⚠️  BNC liquidity HTTP {res.status_code}: {res.text[:150]}")
             return [], 0, False
         body = res.json()
-        data = body.get("data", {})
-        items = data.get("items", []) if isinstance(data, dict) else []
-        total = body.get("total", len(items))
+        raw_items = body.get("data", []) or []
+        total = body.get("total", len(raw_items))
+
+        items = []
+        for entry in raw_items:
+            adv = entry.get("adv", {}) or {}
+            advertiser = entry.get("advertiser", {}) or {}
+            # Gộp phẳng lại để phần xử lý phía dưới dùng chung logic
+            merged = dict(adv)
+            merged["advertiser"] = advertiser
+            items.append(merged)
+
         return items, total, True
     except Exception as e:
         print(f"  ⚠️  BNC liquidity page={page} lỗi: {e}")
@@ -304,32 +318,34 @@ def fetch_binance_liquidity(session, asset, trade_type):
 
             # In log debug 1 lần duy nhất để xác nhận đúng field name + giá trị thật
             if not debug_printed:
-                print(f"  🔍 DEBUG [BNC {asset}/{trade_type}] mẫu keys 1 ad: {list(item.keys())}")
+                print(f"  🔍 DEBUG [BNC {asset}/{trade_type}] mẫu keys 1 ad (đã gộp adv+advertiser): {list(item.keys())}")
                 adv = item.get("advertiser", {})
                 print(f"  🔍 DEBUG advertiser keys: {list(adv.keys()) if isinstance(adv, dict) else 'KHÔNG có advertiser dict'}")
-                print(f"  🔍 DEBUG giá trị thật: tradableAmount={item.get('tradableAmount')!r} "
-                      f"maxTransAmount={item.get('maxTransAmount')!r} "
-                      f"minTransAmount={item.get('minTransAmount')!r} "
-                      f"nickName={adv.get('nickName')!r} "
-                      f"monthOrderCount={adv.get('monthOrderCount')!r} "
-                      f"monthFinishRate={adv.get('monthFinishRate')!r} "
-                      f"positiveRate={adv.get('positiveRate')!r}")
                 debug_printed = True
 
+            def first_present(d, keys):
+                for k in keys:
+                    if d.get(k) not in (None, ""):
+                        return d.get(k)
+                return None
+
             try:
-                surplus = float(item.get("tradableAmount", 0) or 0)
-                max_single = float(item.get("maxTransAmount", 0) or 0)
+                surplus = float(first_present(item, ["surplusAmount", "tradableAmount", "tradableQuantity"]) or 0)
+                max_single = float(first_present(item, ["maxSingleTransAmount", "maxTransAmount"]) or 0)
                 adv = item.get("advertiser", {}) or {}
-                # Binance không trả userNo dạng số — dùng nickName làm định danh
-                # merchant thay thế (đủ ổn định để dedupe trong phạm vi 1 sàn).
-                user_no = adv.get("nickName")
-                month_order_count = int(adv.get("monthOrderCount", 0) or 0)
-                # monthFinishRate: chưa chắc 0-1 hay 0-100 — tự nhận diện qua giá trị
-                raw_finish_rate = float(adv.get("monthFinishRate", 0) or 0)
+                # Thử nhiều tên định danh merchant, ưu tiên ID số (userNo) nếu có,
+                # fallback về nickName nếu endpoint này không trả userNo.
+                user_no = first_present(adv, ["userNo", "advNo", "nickName"])
+                month_order_count = int(first_present(adv, ["monthOrderCount"]) or 0)
+                raw_finish_rate = float(first_present(adv, ["monthFinishRate"]) or 0)
                 finish_rate = raw_finish_rate / 100 if raw_finish_rate > 1 else raw_finish_rate
             except Exception as e:
                 print(f"  ⚠️  Parse ad lỗi, bỏ qua ad này: {e}")
                 continue
+
+            if ad_count_raw == 1:
+                print(f"  🔍 DEBUG giá trị đã parse (ad đầu tiên): surplus={surplus} max_single={max_single} "
+                      f"user_no={user_no!r} month_order_count={month_order_count} finish_rate={finish_rate}")
 
             if not user_no:
                 continue  # không xác định được merchant, bỏ qua để không tính sai dedupe
