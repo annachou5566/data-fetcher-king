@@ -352,12 +352,18 @@ def fetch_binance_liquidity(session, asset, trade_type):
                 merchants[user_no] = {"amount": amount, "trust": trust}
 
         total_seen += len(items)
+        if page == 1:
+            print(f"  🔍 DEBUG phân trang: total_reported(từ API)={total_reported}  "
+                  f"items_trang_1={len(items)}  page_size={PAGE_SIZE}")
         if total_seen >= total_reported or page >= MAX_PAGE_SAFETY:
             if page >= MAX_PAGE_SAFETY and total_seen < total_reported:
                 is_partial = True
             break
         page += 1
         time.sleep(0.2)  # nhẹ nhàng, tránh rate-limit
+
+    print(f"  🔍 DEBUG kết quả phân trang: đã fetch {page} trang, tổng {ad_count_raw} ads thô, "
+          f"{len(merchants)} merchant duy nhất sau dedupe")
 
     liquidity_verified = sum(m["amount"] for m in merchants.values() if m["trust"] == "VERIFIED")
     liquidity_unverified = sum(m["amount"] for m in merchants.values() if m["trust"] == "UNVERIFIED")
