@@ -18,6 +18,14 @@ on:
         description: 'Chạy VCB thủ công để test (mặc định KHÔNG chạy khi trigger P2P qua workflow_dispatch, ví dụ từ cron-job.org)'
         type: boolean
         default: false
+      run_cleanup_liquidity:
+        description: 'Dọn dẹp Liquidity Index cũ tính sai do cap lỏng (1 lần, an toàn chạy lại nhiều lần)'
+        type: boolean
+        default: false
+      cleanup_dry_run:
+        description: 'Cleanup Liquidity ở chế độ dry-run (chỉ xem trước, không ghi R2)'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -85,12 +93,43 @@ jobs:
           python scripts/migrate_p2p_history.py
         fi
 
-  # ⚠️ ĐÃ SỬA: thêm điều kiện "inputs.run_vcb == true" cho nhánh workflow_dispatch.
-  # Trước đây bất kỳ lần workflow_dispatch nào (kể cả do cron-job.org tự động gọi
-  # mỗi 10 phút cho P2P) cũng vô tình làm job này chạy theo — sai với thiết kế
-  # ban đầu là "chỉ chạy 1 lần/ngày lúc 08:35". Giờ chỉ chạy khi:
-  #   - Đúng lịch cron 08:35 hàng ngày, HOẶC
-  #   - Bạn tự tay bấm "Run workflow" và tick "run_vcb"
+  # ⚠️ MỚI: dọn dẹp Liquidity Index cũ (tính sai do cap SELL-side lỏng,
+  # đã sửa trong fetch_p2p.py). Chỉ chạy khi bạn tự tay tick "run_cleanup_liquidity"
+  # — không bao giờ chạy theo lịch cron, không bao giờ chạy do cron-job.org
+  # tự động trigger workflow_dispatch định kỳ.
+  p2p-cleanup-liquidity:
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_cleanup_liquidity == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: job-p2p-cleanup-liquidity
+      cancel-in-progress: false
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-p2p-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-p2p-
+    - run: pip install -r requirements.txt
+    - name: Run — Cleanup Old Liquidity
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: |
+        if [ "${{ inputs.cleanup_dry_run }}" = "true" ]; then
+          python scripts/cleanup_old_liquidity.py --dry-run
+        else
+          python scripts/cleanup_old_liquidity.py
+        fi
+
   vcb-daily:
     if: >
       (github.event_name == 'workflow_dispatch' && inputs.run_vcb == true) ||
