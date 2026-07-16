@@ -20,8 +20,11 @@ import os, json, sys, boto3
 from datetime import datetime, timezone
 
 # ⚠️ CHỈNH ĐÚNG mốc thời gian bạn deploy bản fetch_p2p.py đã sửa cap —
-# lấy từ timestamp lần chạy ĐẦU TIÊN có log "verified=2,322,738" (bản mới).
-CUTOFF_TS = int(datetime(2026, 7, 16, 3, 50, 0, tzinfo=timezone.utc).timestamp())
+# Lần 1 (03:50:00) còn sót 1 record "kẹt giữa" (03:50→03:53, có thể do code
+# fix chưa kịp lan tới đúng lúc 1 lần chạy tự động dùng code cũ) — đẩy trễ
+# hơn, qua khỏi cả 2 lần chạy đã XÁC NHẬN TỐT (03:53:26 và 04:07:06) để chắc
+# chắn không còn sót gì.
+CUTOFF_TS = int(datetime(2026, 7, 16, 3, 54, 0, tzinfo=timezone.utc).timestamp())
 
 R2_DAILY_PREFIX = "p2p-snapshots/"
 
