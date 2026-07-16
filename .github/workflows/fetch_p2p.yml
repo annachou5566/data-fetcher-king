@@ -63,7 +63,7 @@ jobs:
   p2p-migrate-history:
     if: >
       github.event_name == 'workflow_dispatch' &&
-      inputs.run_migration == true
+      github.event.inputs.run_migration == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -87,7 +87,7 @@ jobs:
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: |
-        if [ "${{ inputs.migration_dry_run }}" = "true" ]; then
+        if [ "${{ github.event.inputs.migration_dry_run }}" = "true" ]; then
           python scripts/migrate_p2p_history.py --dry-run
         else
           python scripts/migrate_p2p_history.py
@@ -100,7 +100,7 @@ jobs:
   p2p-cleanup-liquidity:
     if: >
       github.event_name == 'workflow_dispatch' &&
-      inputs.run_cleanup_liquidity == true
+      github.event.inputs.run_cleanup_liquidity == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -124,7 +124,7 @@ jobs:
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: |
-        if [ "${{ inputs.cleanup_dry_run }}" = "true" ]; then
+        if [ "${{ github.event.inputs.cleanup_dry_run }}" = "true" ]; then
           python scripts/cleanup_old_liquidity.py --dry-run
         else
           python scripts/cleanup_old_liquidity.py
@@ -132,7 +132,7 @@ jobs:
 
   vcb-daily:
     if: >
-      (github.event_name == 'workflow_dispatch' && inputs.run_vcb == true) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_vcb == 'true') ||
       github.event.schedule == '35 1 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 30
