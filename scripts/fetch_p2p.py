@@ -42,6 +42,14 @@ BBT_URL     = "https://api2.bybit.com/fiat/otc/item/online"
 VERIFIED_MIN_ORDER_COUNT = 10
 VERIFIED_MIN_FINISH_RATE = 0.85
 SELL_CAP_MULTIPLIER      = 3
+# Trần tuyệt đối, ĐỘC LẬP với maxSingleTransAmount merchant tự khai — theo
+# đúng phương pháp P2P.army đang dùng (họ dùng flat 10,000 USDT/ad). Lý do
+# cần thêm lớp này: cap ×3 một mình không đủ chặt, vì maxSingleTransAmount
+# bản thân nó CŨNG là số tự khai, không có gì đảm bảo trung thực — merchant
+# khai giới hạn lệnh "khủng" (vd 1.5 tỷ VND) thì cap ×3 vẫn cho phép 1 ad
+# đóng góp hàng trăm nghìn đô vào tổng, gần như vô hiệu hoá mục đích chống
+# ảo ban đầu. Lấy MIN của cả 2 cách → chặt hơn cách nào thì áp dụng cách đó.
+SELL_CAP_FLAT_USDT       = 10_000
 PAGE_SIZE                = 20
 MAX_PAGE_SAFETY          = 50
 
@@ -300,7 +308,6 @@ def fetch_binance_liquidity(session, asset, trade_type):
     total_reported = None
     is_partial = False
     ad_count_raw = 0
-    debug_printed = False
 
     while True:
         items, total, ok = fetch_binance_ads_page(session, asset, trade_type, page)
@@ -341,9 +348,15 @@ def fetch_binance_liquidity(session, asset, trade_type):
             if not user_no:
                 continue  # không xác định được merchant, bỏ qua để không tính sai dedupe
 
-            # Áp cap cho SELL-side (merchant mua, tiền không đảm bảo thật)
-            if trade_type == "SELL" and max_single > 0:
-                amount = min(surplus, max_single * SELL_CAP_MULTIPLIER)
+            # Áp cap cho SELL-side (merchant mua, tiền không đảm bảo thật).
+            # Lấy MIN của: (1) surplus tự khai, (2) cap theo maxSingleTransAmount
+            # ×3, (3) trần tuyệt đối SELL_CAP_FLAT_USDT — cách nào chặt hơn thì
+            # thắng, không phụ thuộc hoàn toàn vào số merchant tự báo cáo.
+            if trade_type == "SELL":
+                candidates = [surplus, SELL_CAP_FLAT_USDT]
+                if max_single > 0:
+                    candidates.append(max_single * SELL_CAP_MULTIPLIER)
+                amount = min(candidates)
             else:
                 amount = surplus
 
@@ -359,18 +372,12 @@ def fetch_binance_liquidity(session, asset, trade_type):
                 merchants[user_no] = {"amount": amount, "trust": trust}
 
         total_seen += len(items)
-        if page == 1:
-            print(f"  🔍 DEBUG phân trang: total_reported(từ API)={total_reported}  "
-                  f"items_trang_1={len(items)}  page_size={PAGE_SIZE}")
         if total_seen >= total_reported or page >= MAX_PAGE_SAFETY:
             if page >= MAX_PAGE_SAFETY and total_seen < total_reported:
                 is_partial = True
             break
         page += 1
         time.sleep(0.2)  # nhẹ nhàng, tránh rate-limit
-
-    print(f"  🔍 DEBUG kết quả phân trang: đã fetch {page} trang, tổng {ad_count_raw} ads thô, "
-          f"{len(merchants)} merchant duy nhất sau dedupe")
 
     liquidity_verified = sum(m["amount"] for m in merchants.values() if m["trust"] == "VERIFIED")
     liquidity_unverified = sum(m["amount"] for m in merchants.values() if m["trust"] == "UNVERIFIED")
