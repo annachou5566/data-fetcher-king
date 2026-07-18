@@ -77,7 +77,7 @@ ETF_REGISTRY = [
     {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
     {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq"},
-    {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq"},
+    {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"bitcoin-etf-hodl","vaneck_asset_word":"Bitcoin"},
     {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq"},
     {"ticker":"BRRR","name":"Valkyrie Bitcoin Fund","issuer":"Valkyrie","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq"},
@@ -88,13 +88,13 @@ ETF_REGISTRY = [
     {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
     {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
     {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq"},
-    {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq"},
+    {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"ethereum-etf-ethv","vaneck_asset_word":"Ether"},
     {"ticker":"CETH","name":"21Shares Core Ethereum ETF","issuer":"21Shares","underlying":"ETH","fee":0.21,"src":"nasdaq"},
     {"ticker":"EZET","name":"Franklin Ethereum ETF","issuer":"Franklin","underlying":"ETH","fee":0.19,"src":"nasdaq"},
     {"ticker":"QETH","name":"Invesco Galaxy Ethereum ETF","issuer":"Invesco","underlying":"ETH","fee":0.25,"src":"nasdaq"},
     # Solana ETFs — xác nhận issuer/fee qua search 07/2026
     {"ticker":"BSOL","name":"Bitwise Solana Staking ETF","issuer":"Bitwise","underlying":"SOL","fee":0.20,"src":"nasdaq"},
-    {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq"},
+    {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq","self_computed":True,"vaneck_slug":"solana-etf-vsol","vaneck_asset_word":"Solana"},
     {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq"},
     {"ticker":"TSOL","name":"21Shares Solana ETF","issuer":"21Shares","underlying":"SOL","fee":0.21,"src":"nasdaq"},
     {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq"},
@@ -442,6 +442,38 @@ def fetch_ark_holdings(session, fund_name, ticker):
         return None
 
 
+def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
+    """VanEck's fund pages RENDER TĨNH (không phải React SPA như ARK/Grayscale) —
+    đã xác nhận trực tiếp bằng cách fetch thật trang HODL và ETHV: bảng "ETF
+    Statistics" có sẵn dòng "{Asset} in Trust" ngay trong HTML thô, không cần
+    chạy JavaScript. Parse bằng regex trên TEXT (không giả định tag/class cụ thể)
+    để bền hơn khi VanEck đổi UI/CSS.
+    Lưu ý: asset_word đúng theo cách VanEck ghi trên trang — "Bitcoin" (HODL đã
+    verify), "Ether" (ETHV đã verify, KHÔNG PHẢI "Ethereum"), "Solana" (VSOL —
+    suy theo pattern, CHƯA fetch trực tiếp để xác nhận 100%, sẽ tự trả None và
+    fallback Farside nếu regex không khớp, không có rủi ro âm thầm sai số).
+    """
+    url = f"https://www.vaneck.com/us/en/investments/{url_slug}/"
+    try:
+        r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+        if r.status_code != 200:
+            print(f"    VanEck HTTP {r.status_code}: {url}")
+            return None
+        text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+        m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,10}}([\d,]+\.?\d*)", text, re.IGNORECASE)
+        if not m:
+            print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker} (có thể VanEck đổi wording)")
+            return None
+        qty = float(m.group(1).replace(",", ""))
+        date_m = re.search(r"ETF Statistics as of (\d{2}/\d{2}/\d{4})", text)
+        as_of = date_m.group(1) if date_m else None
+        return (qty, as_of)
+    except Exception as e:
+        print(f"    VanEck error ({ticker}): {e}")
+        return None
+
+
+
 def compute_self_flow(holdings_today, holdings_prev, price_today):
     """Flow tự tính = Δholdings × giá — CHÍNH XÁC cùng phương pháp Farside/mọi bên
     tracker khác dùng (Shares Outstanding/Holdings đổi × NAV hoặc giá tài sản),
@@ -495,7 +527,7 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] Issuer holdings (iShares + ARK) — nguồn TỰ TÍNH flow, không qua Farside...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
     holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
@@ -523,6 +555,21 @@ def run(r2):
                     print(f"  ✓ {t} (ARK CSV): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ ARK CSV — fallback Farside cho ticker này")
+                time.sleep(0.3)
+
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("vaneck_slug"):
+                t=etf["ticker"]
+                res=fetch_vaneck_holdings(session, etf["vaneck_slug"], etf["vaneck_asset_word"], t)
+                if res:
+                    qty, as_of = res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ VanEck — fallback Farside cho ticker này")
                 time.sleep(0.3)
 
     print("\n🔧 [4/4] Building output...")
