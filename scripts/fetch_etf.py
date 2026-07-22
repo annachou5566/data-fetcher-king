@@ -103,6 +103,12 @@ ETF_REGISTRY = [
     {"ticker":"BHYP","name":"Bitwise Hyperliquid ETF","issuer":"Bitwise","underlying":"HYP","fee":0.34,"src":"nasdaq"},
     {"ticker":"THYP","name":"21Shares Hyperliquid ETF","issuer":"21Shares","underlying":"HYP","fee":0.30,"src":"nasdaq"},
     {"ticker":"HYPG","name":"Grayscale Hyperliquid Staking ETF","issuer":"Grayscale","underlying":"HYP","fee":0.29,"src":"nasdaq"},
+    # BNB ETF — mới thêm, hiện chỉ có VanEck (VBNB). self_computed đã VERIFY THẬT
+    # bằng cách fetch trực tiếp trang https://www.vaneck.com/us/en/investments/
+    # bnb-etf-vbnb/ — có đúng bảng "ETF Statistics" với dòng "BNB in Trust:
+    # 3,886.175", fee 0.39% xác nhận qua nhiều nguồn. Fund còn rất nhỏ (mới ra
+    # mắt 07/05/2026, AUM ~$2.27M) nhưng dữ liệu hợp lệ để track.
+    {"ticker":"VBNB","name":"VanEck BNB ETF","issuer":"VanEck","underlying":"BNB","fee":0.39,"src":"nasdaq","self_computed":True,"vaneck_slug":"bnb-etf-vbnb","vaneck_asset_word":"BNB"},
 ]
 ETF_TICKERS = [e["ticker"] for e in ETF_REGISTRY]
 
@@ -136,14 +142,17 @@ def r2_put_json(r2,key,data,cc="max-age=120"):
 def load_crypto_prices():
     prices={}
     try:
-        r=requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd",
+        r=requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,hyperliquid,binancecoin&vs_currencies=usd",
             headers={"User-Agent":FAKE_UA},timeout=10)
         if r.status_code==200:
             d=r.json()
-            if "bitcoin"  in d: prices["BTC"]=float(d["bitcoin"]["usd"])
-            if "ethereum" in d: prices["ETH"]=float(d["ethereum"]["usd"])
+            if "bitcoin"     in d: prices["BTC"]=float(d["bitcoin"]["usd"])
+            if "ethereum"    in d: prices["ETH"]=float(d["ethereum"]["usd"])
+            if "solana"      in d: prices["SOL"]=float(d["solana"]["usd"])
+            if "hyperliquid" in d: prices["HYP"]=float(d["hyperliquid"]["usd"])
+            if "binancecoin" in d: prices["BNB"]=float(d["binancecoin"]["usd"])
     except Exception as e: print(f"  [Crypto] {e}")
-    print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}")
+    print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}  SOL=${prices.get('SOL')}  HYP=${prices.get('HYP')}  BNB=${prices.get('BNB')}")
     return prices
 
 def fetch_nasdaq_all(session):
@@ -459,10 +468,23 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
         if r.status_code != 200:
             print(f"    VanEck HTTP {r.status_code}: {url}")
             return None
-        text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
-        m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,10}}([\d,]+\.?\d*)", text, re.IGNORECASE)
+        # Chuẩn hoá khoảng trắng: HTML có thể dùng &nbsp;(\xa0) thay vì space
+        # thường giữa các từ/số — get_text(" ") không tự gộp \xa0 thành space
+        # thường, khiến regex \s+ (chỉ khớp space/tab/newline chuẩn) bị trượt.
+        raw_text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+        text = raw_text.replace("\xa0", " ")
+        text = re.sub(r"\s+", " ", text)
+        m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,15}}?([\d,]+\.?\d*)", text, re.IGNORECASE)
         if not m:
-            print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker} (có thể VanEck đổi wording)")
+            # Log chẩn đoán: lần sau sẽ biết CHÍNH XÁC là do IP bị chặn (trang
+            # trả về khác hẳn, vd trang chặn bot/consent) hay chỉ là VanEck đổi
+            # chữ. Không in toàn bộ trang (dài), chỉ đủ ngữ cảnh để chẩn đoán.
+            has_marker = "ETF Statistics" in text
+            has_word = asset_word.lower() in text.lower()
+            snippet = text[:200]
+            print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker}")
+            print(f"      → độ dài trang: {len(text)} ký tự | có 'ETF Statistics': {has_marker} | có '{asset_word}': {has_word}")
+            print(f"      → 200 ký tự đầu: {snippet!r}")
             return None
         qty = float(m.group(1).replace(",", ""))
         date_m = re.search(r"ETF Statistics as of (\d{2}/\d{2}/\d{4})", text)
