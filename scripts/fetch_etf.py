@@ -173,21 +173,26 @@ def load_crypto_prices():
     print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}  SOL=${prices.get('SOL')}  HYP=${prices.get('HYP')}  BNB=${prices.get('BNB')}")
     return prices
 
-def fetch_nasdaq_summary_net_assets(session, ticker):
-    """Lấy 'Net Assets' (AUM) trực tiếp từ Nasdaq summary API. Dùng làm fallback
-    AUM cho các ETF chưa có nguồn holdings riêng (SOL/HYP/BNB hiện chỉ có Farside
-    cho Flow, KHÔNG có iShares/ARK/VanEck-verified nào cho holdings) — khác với
-    BTC (có static on-chain snapshot) và IBIT/ETHA (có iShares live). Nasdaq hiển
-    thị Net Assets cho MỌI ETF list trên sàn, không cần biết holdings on-chain.
-    summaryData trả về dạng {key: {"label": "...", "value": "..."}} — tìm theo
-    label thay vì đoán tên key, để không vỡ nếu Nasdaq đổi tên field.
+def parse_aum_from_label(label, val):
+    """parse_money() ra số thô, nhưng Nasdaq ghi rõ trong TÊN label đơn vị thật:
+    'Assets Under Management (,000)' nghĩa là giá trị đang tính bằng NGHÌN USD
+    (đã xác nhận qua log thật 25/07 — field không phải 'Net Assets' như đoán ban
+    đầu). Phải nhân 1000 mới ra đúng USD, nếu không AUM sẽ hụt 1000 lần."""
+    parsed = parse_money(val)
+    if parsed is None: return None
+    if label and "(,000)" in label.replace(" ", ""):
+        parsed *= 1000
+    return parsed
 
-    Lần chạy trước (24/07): không có DÒNG NÀO in ra cho cả 10 ticker SOL/HYP/BNB
-    — nghĩa là request 200 OK nhưng match "net assets" trượt trong im lặng (code
-    cũ chỉ print khi TÌM THẤY). Thêm log chẩn đoán đầy đủ để lần chạy tới biết
-    CHÍNH XÁC: request có thành công không, summaryData có bao nhiêu field, và
-    tên field thật là gì (có thể Nasdaq dùng nhãn khác như 'Net Asset Value',
-    'Fund Assets', hoặc field nằm ở chỗ khác/rỗng với ETF mới ra mắt)."""
+def fetch_nasdaq_summary_net_assets(session, ticker):
+    """Lấy AUM trực tiếp từ Nasdaq summary API. Dùng làm fallback AUM cho các ETF
+    chưa có nguồn holdings riêng (SOL/HYP/BNB hiện chỉ có Farside cho Flow, KHÔNG
+    có iShares/ARK/VanEck-verified nào cho holdings) — khác với BTC (có static
+    on-chain snapshot) và IBIT/ETHA (có iShares live).
+
+    XÁC NHẬN THẬT qua log 25/07: field không tên 'Net Assets' như đoán ban đầu,
+    mà là 'Assets Under Management (,000)' — đơn vị NGHÌN USD, không phải USD
+    thô hay có suffix K/M/B như info fields khác."""
     url=f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=etf&limit=25"
     try:
         r=session.get(url,headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}",
@@ -200,14 +205,16 @@ def fetch_nasdaq_summary_net_assets(session, ticker):
         if not summary:
             print(f"    summary {ticker}: summaryData rỗng | top-level keys của data: {list(data.keys())[:15]}")
             return None
-        labels={str((item or {}).get("label","")): (item or {}).get("value") for item in summary.values()}
-        for label,val in labels.items():
-            if "net assets" in label.lower():
-                parsed=parse_money(val)
-                if parsed: return parsed
-                print(f"    summary {ticker}: thấy label '{label}'='{val}' nhưng parse_money() ra None")
-                return None
-        print(f"    summary {ticker}: không có label chứa 'net assets' | các label có sẵn: {list(labels.keys())}")
+        label,val=find_by_label(summary,"assets under management")
+        if not label:
+            label,val=find_by_label(summary,"net assets")
+        if not label:
+            print(f"    summary {ticker}: không có label AUM | các label có sẵn: {list({str((it or {}).get('label','')) for it in summary.values()})}")
+            return None
+        parsed=parse_aum_from_label(label,val)
+        if parsed is None:
+            print(f"    summary {ticker}: thấy label '{label}'='{val}' nhưng parse ra None")
+        return parsed
     except Exception as e:
         print(f"    summary ✗ {ticker}: {e}")
     return None
@@ -239,20 +246,20 @@ def fetch_nasdaq_all(session):
                 "change_pct":parse_num((p.get("percentageChange") or "").replace("%","")),
                 "volume":parse_num((p.get("volume") or "").replace(",",""))}
             print(f"  {ticker}: ${price}")
-            # SOL/HYP/BNB: không có nguồn holdings on-chain nào → cần Net Assets
-            # để AUM không bị $0. Thử MIỄN PHÍ trước: keyStats trong response info
-            # đã fetch sẵn (không tốn request thêm) — nếu Nasdaq có nhét field
-            # "Net Assets"/"Assets" ở đây thì khỏi cần gọi summary API riêng.
+            # SOL/HYP/BNB: không có nguồn holdings on-chain nào → cần AUM để không
+            # bị $0. Thử MIỄN PHÍ trước: keyStats trong response info đã fetch sẵn
+            # (không tốn request thêm) — field thật tên "Assets Under Management
+            # (,000)" (xác nhận qua log 25/07, đơn vị NGHÌN USD).
             if underlying_map.get(ticker) in ("SOL","HYP","BNB"):
                 keystats=d.get("keyStats") or {}
-                label,val=find_by_label(keystats,"assets")
-                net_assets=parse_money(val) if val else None
+                label,val=find_by_label(keystats,"assets under management")
+                net_assets=parse_aum_from_label(label,val) if label else None
                 if net_assets:
                     results[ticker]["net_assets"]=net_assets
                     print(f"    ↳ Net Assets (keyStats.'{label}'): ${net_assets/1e6:.2f}M")
                 else:
                     if keystats:
-                        print(f"    (keyStats {ticker}, không có field 'assets') labels: {[str((it or {}).get('label','')) for it in keystats.values()][:15]}")
+                        print(f"    (keyStats {ticker}, không có 'assets under management') labels: {[str((it or {}).get('label','')) for it in keystats.values()][:15]}")
                     net_assets=fetch_nasdaq_summary_net_assets(session,ticker)
                     if net_assets:
                         results[ticker]["net_assets"]=net_assets
