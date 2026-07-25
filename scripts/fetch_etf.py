@@ -547,47 +547,72 @@ def fetch_ark_holdings(session, fund_name, ticker):
 
 
 def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
-    """VanEck's fund pages RENDER TĨNH (không phải React SPA như ARK/Grayscale) —
-    đã xác nhận trực tiếp bằng cách fetch thật trang HODL và ETHV: bảng "ETF
-    Statistics" có sẵn dòng "{Asset} in Trust" ngay trong HTML thô, không cần
-    chạy JavaScript. Parse bằng regex trên TEXT (không giả định tag/class cụ thể)
-    để bền hơn khi VanEck đổi UI/CSS.
-    Lưu ý: asset_word đúng theo cách VanEck ghi trên trang — "Bitcoin" (HODL đã
-    verify), "Ether" (ETHV đã verify, KHÔNG PHẢI "Ethereum"), "Solana" (VSOL —
-    suy theo pattern, CHƯA fetch trực tiếp để xác nhận 100%, sẽ tự trả None và
-    fallback Farside nếu regex không khớp, không có rủi ro âm thầm sai số).
-    """
+    """VanEck's fund pages RENDER BẰNG JAVASCRIPT (đã xác nhận THẬT qua log
+    24-25/07: fetch trực tiếp chỉ ra ~8-9K ký tự, KHÔNG có 'ETF Statistics' —
+    y hệt ARK/Grayscale SPA. Nhận định "static" ban đầu là SAI, do tool dùng để
+    verify thủ công lúc đó tự chạy JS như trình duyệt thật nên bị đánh lừa.
+
+    Giải pháp: đi qua r.jina.ai — dịch vụ proxy công khai, MIỄN PHÍ, không cần
+    API key (https://r.jina.ai/<url>), tự render trang bằng browser thật ở phía
+    họ rồi trả về text đã "hydrate" xong. Trang VanEck vốn công khai, không có
+    auth/paywall gì — đây không phải né chặn gì cả, chỉ là mượn 1 browser thật
+    để lấy đúng nội dung mà curl/requests không tự chạy JS được.
+
+    Có 2 lớp fallback để không bao giờ mất dữ liệu nếu r.jina.ai lỗi:
+    1) r.jina.ai (chính, render JS thật)
+    2) fetch trực tiếp như cũ (gần như luôn ra shell rỗng, nhưng thử cho chắc,
+       phòng khi VanEck đổi lại sang static hoặc r.jina.ai đang down)
+    3) nếu cả 2 đều fail → trả None → hàm gọi tự fallback sang Farside.
+
+    asset_word đúng theo cách VanEck ghi trên trang: "Bitcoin" (HODL), "Ether"
+    (ETHV — KHÔNG PHẢI "Ethereum"), "Solana" (VSOL), "BNB" (VBNB)."""
     url = f"https://www.vaneck.com/us/en/investments/{url_slug}/"
+    text = None
+
+    # 1) r.jina.ai — render JS thật
     try:
-        r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
-        if r.status_code != 200:
-            print(f"    VanEck HTTP {r.status_code}: {url}")
-            return None
-        # Chuẩn hoá khoảng trắng: HTML có thể dùng &nbsp;(\xa0) thay vì space
-        # thường giữa các từ/số — get_text(" ") không tự gộp \xa0 thành space
-        # thường, khiến regex \s+ (chỉ khớp space/tab/newline chuẩn) bị trượt.
-        raw_text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
-        text = raw_text.replace("\xa0", " ")
-        text = re.sub(r"\s+", " ", text)
-        m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,15}}?([\d,]+\.?\d*)", text, re.IGNORECASE)
-        if not m:
-            # Log chẩn đoán: lần sau sẽ biết CHÍNH XÁC là do IP bị chặn (trang
-            # trả về khác hẳn, vd trang chặn bot/consent) hay chỉ là VanEck đổi
-            # chữ. Không in toàn bộ trang (dài), chỉ đủ ngữ cảnh để chẩn đoán.
-            has_marker = "ETF Statistics" in text
-            has_word = asset_word.lower() in text.lower()
-            snippet = text[:200]
-            print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker}")
-            print(f"      → độ dài trang: {len(text)} ký tự | có 'ETF Statistics': {has_marker} | có '{asset_word}': {has_word}")
-            print(f"      → 200 ký tự đầu: {snippet!r}")
-            return None
-        qty = float(m.group(1).replace(",", ""))
-        date_m = re.search(r"ETF Statistics as of (\d{2}/\d{2}/\d{4})", text)
-        as_of = date_m.group(1) if date_m else None
-        return (qty, as_of)
+        rj = session.get(f"https://r.jina.ai/{url}",
+            headers={"X-Return-Format":"text","Accept":"text/plain"}, timeout=25)
+        if rj.status_code == 200 and len(rj.text) > 1000:
+            text = rj.text
+        else:
+            print(f"    VanEck (r.jina.ai) {ticker}: HTTP {rj.status_code}, độ dài {len(rj.text)}")
     except Exception as e:
-        print(f"    VanEck error ({ticker}): {e}")
+        print(f"    VanEck (r.jina.ai) lỗi ({ticker}): {e}")
+
+    # 2) Fallback: fetch trực tiếp như cũ (rẻ, không hại gì khi thử thêm)
+    if not text:
+        try:
+            r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+            if r.status_code == 200:
+                text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+        except Exception as e:
+            print(f"    VanEck direct lỗi ({ticker}): {e}")
+
+    if not text:
+        print(f"    VanEck: cả r.jina.ai lẫn fetch trực tiếp đều thất bại cho {ticker}")
         return None
+
+    # Chuẩn hoá: \xa0 (nbsp) → space thường; dọn ký tự markdown (*_#|) mà
+    # r.jina.ai có thể chèn vào (in đậm/heading/bảng) — nếu không dọn, regex
+    # "\D{0,20}?" có thể vẫn khớp qua vì \D chấp nhận mọi ký tự không phải số,
+    # nhưng dọn cho sạch để log snippet dễ đọc hơn khi debug.
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"[*_#|]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,20}}?([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if not m:
+        has_marker = "ETF Statistics" in text
+        has_word = asset_word.lower() in text.lower()
+        snippet = text[:200]
+        print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker}")
+        print(f"      → độ dài text: {len(text)} ký tự | có 'ETF Statistics': {has_marker} | có '{asset_word}': {has_word}")
+        print(f"      → 200 ký tự đầu: {snippet!r}")
+        return None
+    qty = float(m.group(1).replace(",", ""))
+    date_m = re.search(r"ETF Statistics as of (\d{2}/\d{2}/\d{4})", text)
+    as_of = date_m.group(1) if date_m else None
+    return (qty, as_of)
 
 
 
@@ -687,7 +712,7 @@ def run(r2):
                     print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ VanEck — fallback Farside cho ticker này")
-                time.sleep(0.3)
+                time.sleep(3.0)  # r.jina.ai free tier giới hạn ~20 req/phút
 
     print("\n🔧 [4/4] Building output...")
     etfs=[]; totals={}
@@ -764,7 +789,8 @@ def run(r2):
         print(f"   Flow source: {self_computed_count} self-computed · {farside_count} farside · {cached_count} cached")
     for u,t in totals.items():
         s="+" if t["flow"]>=0 else ""
-        print(f"   {u}: AUM=${t['aum']/1e9:.2f}B  Flow={s}${t['flow']/1e6:.1f}M  ({t['count']} ETFs)")
+        aum_str=f"${t['aum']/1e9:.2f}B" if t["aum"]>=1e9 else f"${t['aum']/1e6:.2f}M"
+        print(f"   {u}: AUM={aum_str}  Flow={s}${t['flow']/1e6:.1f}M  ({t['count']} ETFs)")
 
 if __name__=="__main__":
     import time as _t; t0=_t.time()
