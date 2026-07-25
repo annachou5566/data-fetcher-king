@@ -1,9 +1,11 @@
 """
-scripts/fetch_etf.py  v15
+scripts/fetch_etf.py  v16
 - Lấy TOÀN BỘ lịch sử từ Farside (tất cả ngày từ ngày ra mắt)
 - Lưu vào R2: etf-flows.json (daily latest) + etf-farside-history.json (full history)
 - Thêm HYP (Hyperliquid) từ farside.co.uk/hyp/
-- AUM: iShares live cho IBIT/ETHA, static holdings cho BTC ETF còn lại
+- AUM: iShares live (IBIT/ETHA) → ARK CSV (ARKB) → VanEck page (nếu parse được)
+  → static on-chain holdings (BTC ETF còn lại) → Nasdaq "Net Assets" summary API
+  (SOL/HYP/BNB — chưa có nguồn holdings riêng, trước đây AUM=$0.00B) → cache cũ.
 """
 
 import json, os, re, time, csv, io
@@ -119,6 +121,22 @@ def parse_num(v):
     try: return float(s)
     except: return None
 
+def parse_money(v):
+    """'$123.4M' -> 123400000.0, '(1.2B)' -> -1200000000.0, 'N/A' -> None."""
+    if v is None: return None
+    s = str(v).strip()
+    if not s or s in ("N/A","--","null","None"): return None
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.strip("()").replace("$","").replace(",","").strip()
+    mult = 1.0
+    if s and s[-1].upper() in ("K","M","B","T"):
+        mult = {"K":1e3,"M":1e6,"B":1e9,"T":1e12}[s[-1].upper()]
+        s = s[:-1]
+    try:
+        val = float(s) * mult
+        return -val if neg else val
+    except: return None
+
 def get_session():
     s = cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","desktop":True})
     s.headers.update({"User-Agent":FAKE_UA,"Accept":"application/json,*/*","Accept-Language":"en-US,en;q=0.9"})
@@ -155,8 +173,31 @@ def load_crypto_prices():
     print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}  SOL=${prices.get('SOL')}  HYP=${prices.get('HYP')}  BNB=${prices.get('BNB')}")
     return prices
 
+def fetch_nasdaq_summary_net_assets(session, ticker):
+    """Lấy 'Net Assets' (AUM) trực tiếp từ Nasdaq summary API. Dùng làm fallback
+    AUM cho các ETF chưa có nguồn holdings riêng (SOL/HYP/BNB hiện chỉ có Farside
+    cho Flow, KHÔNG có iShares/ARK/VanEck-verified nào cho holdings) — khác với
+    BTC (có static on-chain snapshot) và IBIT/ETHA (có iShares live). Nasdaq hiển
+    thị Net Assets cho MỌI ETF list trên sàn, không cần biết holdings on-chain.
+    summaryData trả về dạng {key: {"label": "...", "value": "..."}} — tìm theo
+    label thay vì đoán tên key, để không vỡ nếu Nasdaq đổi tên field."""
+    try:
+        r=session.get(f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=etf&limit=25",
+            headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}",
+                     "Accept":"application/json,*/*"},timeout=12)
+        if r.status_code!=200: return None
+        summary=(r.json().get("data") or {}).get("summaryData") or {}
+        for item in summary.values():
+            label=str((item or {}).get("label","")).lower()
+            if "net assets" in label:
+                return parse_money(item.get("value"))
+    except Exception as e:
+        print(f"    summary ✗ {ticker}: {e}")
+    return None
+
 def fetch_nasdaq_all(session):
     results={}
+    underlying_map={e["ticker"]:e["underlying"] for e in ETF_REGISTRY}
     for ticker in ETF_TICKERS:
         try:
             r=session.get(f"https://api.nasdaq.com/api/quote/{ticker}/info?assetclass=etf",
@@ -169,6 +210,13 @@ def fetch_nasdaq_all(session):
                 "change_pct":parse_num((p.get("percentageChange") or "").replace("%","")),
                 "volume":parse_num((p.get("volume") or "").replace(",",""))}
             print(f"  {ticker}: ${price}")
+            # SOL/HYP/BNB: không có nguồn holdings on-chain nào → lấy thẳng
+            # Net Assets từ Nasdaq summary API để AUM không bị $0.
+            if underlying_map.get(ticker) in ("SOL","HYP","BNB"):
+                net_assets=fetch_nasdaq_summary_net_assets(session,ticker)
+                if net_assets:
+                    results[ticker]["net_assets"]=net_assets
+                    print(f"    ↳ Net Assets: ${net_assets/1e6:.2f}M")
         except Exception as e: print(f"  ✗ {ticker}: {e}")
         time.sleep(0.3)
     return results
@@ -610,6 +658,15 @@ def run(r2):
         if not aum and u=="BTC" and t in STATIC_BTC_HOLDINGS:
             holdings=holdings or STATIC_BTC_HOLDINGS[t]
             aum=STATIC_BTC_HOLDINGS[t]*crypto_prices.get("BTC",0)
+        # Fallback AUM: Nasdaq "Net Assets" (SOL/HYP/BNB — chưa có nguồn holdings
+        # riêng nào như BTC/ETH, nên trước đây aum luôn None → hiện $0.00B).
+        # Suy ngược holdings từ AUM/giá coin để premium & hiển thị holdings cũng có.
+        if not aum:
+            na=mkt.get("net_assets")
+            if na:
+                aum=na
+                if not holdings and u in crypto_prices and crypto_prices[u]:
+                    holdings=aum/crypto_prices[u]
         # Fallback AUM: cache
         if not aum: aum=(prev.get("fund") or {}).get("aum")
 
