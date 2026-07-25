@@ -180,20 +180,49 @@ def fetch_nasdaq_summary_net_assets(session, ticker):
     BTC (có static on-chain snapshot) và IBIT/ETHA (có iShares live). Nasdaq hiển
     thị Net Assets cho MỌI ETF list trên sàn, không cần biết holdings on-chain.
     summaryData trả về dạng {key: {"label": "...", "value": "..."}} — tìm theo
-    label thay vì đoán tên key, để không vỡ nếu Nasdaq đổi tên field."""
+    label thay vì đoán tên key, để không vỡ nếu Nasdaq đổi tên field.
+
+    Lần chạy trước (24/07): không có DÒNG NÀO in ra cho cả 10 ticker SOL/HYP/BNB
+    — nghĩa là request 200 OK nhưng match "net assets" trượt trong im lặng (code
+    cũ chỉ print khi TÌM THẤY). Thêm log chẩn đoán đầy đủ để lần chạy tới biết
+    CHÍNH XÁC: request có thành công không, summaryData có bao nhiêu field, và
+    tên field thật là gì (có thể Nasdaq dùng nhãn khác như 'Net Asset Value',
+    'Fund Assets', hoặc field nằm ở chỗ khác/rỗng với ETF mới ra mắt)."""
+    url=f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=etf&limit=25"
     try:
-        r=session.get(f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=etf&limit=25",
-            headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}",
+        r=session.get(url,headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}",
                      "Accept":"application/json,*/*"},timeout=12)
-        if r.status_code!=200: return None
-        summary=(r.json().get("data") or {}).get("summaryData") or {}
-        for item in summary.values():
-            label=str((item or {}).get("label","")).lower()
-            if "net assets" in label:
-                return parse_money(item.get("value"))
+        if r.status_code!=200:
+            print(f"    summary {ticker}: HTTP {r.status_code}")
+            return None
+        data=r.json().get("data") or {}
+        summary=data.get("summaryData") or {}
+        if not summary:
+            print(f"    summary {ticker}: summaryData rỗng | top-level keys của data: {list(data.keys())[:15]}")
+            return None
+        labels={str((item or {}).get("label","")): (item or {}).get("value") for item in summary.values()}
+        for label,val in labels.items():
+            if "net assets" in label.lower():
+                parsed=parse_money(val)
+                if parsed: return parsed
+                print(f"    summary {ticker}: thấy label '{label}'='{val}' nhưng parse_money() ra None")
+                return None
+        print(f"    summary {ticker}: không có label chứa 'net assets' | các label có sẵn: {list(labels.keys())}")
     except Exception as e:
         print(f"    summary ✗ {ticker}: {e}")
     return None
+
+def find_by_label(d, keyword):
+    """Tìm (label, value) theo label chứa keyword (không phân biệt hoa/thường)
+    trong dict dạng {key: {"label":..., "value":...}}. Dùng chung cho info.keyStats
+    và summary.summaryData vì Nasdaq trả 2 endpoint theo cùng 1 shape này."""
+    if not isinstance(d, dict): return None, None
+    for item in d.values():
+        if not isinstance(item, dict): continue
+        label = str(item.get("label",""))
+        if keyword.lower() in label.lower():
+            return label, item.get("value")
+    return None, None
 
 def fetch_nasdaq_all(session):
     results={}
@@ -210,13 +239,24 @@ def fetch_nasdaq_all(session):
                 "change_pct":parse_num((p.get("percentageChange") or "").replace("%","")),
                 "volume":parse_num((p.get("volume") or "").replace(",",""))}
             print(f"  {ticker}: ${price}")
-            # SOL/HYP/BNB: không có nguồn holdings on-chain nào → lấy thẳng
-            # Net Assets từ Nasdaq summary API để AUM không bị $0.
+            # SOL/HYP/BNB: không có nguồn holdings on-chain nào → cần Net Assets
+            # để AUM không bị $0. Thử MIỄN PHÍ trước: keyStats trong response info
+            # đã fetch sẵn (không tốn request thêm) — nếu Nasdaq có nhét field
+            # "Net Assets"/"Assets" ở đây thì khỏi cần gọi summary API riêng.
             if underlying_map.get(ticker) in ("SOL","HYP","BNB"):
-                net_assets=fetch_nasdaq_summary_net_assets(session,ticker)
+                keystats=d.get("keyStats") or {}
+                label,val=find_by_label(keystats,"assets")
+                net_assets=parse_money(val) if val else None
                 if net_assets:
                     results[ticker]["net_assets"]=net_assets
-                    print(f"    ↳ Net Assets: ${net_assets/1e6:.2f}M")
+                    print(f"    ↳ Net Assets (keyStats.'{label}'): ${net_assets/1e6:.2f}M")
+                else:
+                    if keystats:
+                        print(f"    (keyStats {ticker}, không có field 'assets') labels: {[str((it or {}).get('label','')) for it in keystats.values()][:15]}")
+                    net_assets=fetch_nasdaq_summary_net_assets(session,ticker)
+                    if net_assets:
+                        results[ticker]["net_assets"]=net_assets
+                        print(f"    ↳ Net Assets (summary API): ${net_assets/1e6:.2f}M")
         except Exception as e: print(f"  ✗ {ticker}: {e}")
         time.sleep(0.3)
     return results
