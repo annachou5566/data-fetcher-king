@@ -1,660 +1,865 @@
-import json
-import os
-import time
-import threading
-import random
-import urllib.parse
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
-import requests
-import cloudscraper
-import boto3
+"""
+scripts/fetch_etf.py  v16
+- Lấy TOÀN BỘ lịch sử từ Farside (tất cả ngày từ ngày ra mắt)
+- Lưu vào R2: etf-flows.json (daily latest) + etf-farside-history.json (full history)
+- Thêm HYP (Hyperliquid) từ farside.co.uk/hyp/
+- AUM: iShares live (IBIT/ETHA) → ARK CSV (ARKB) → VanEck page (nếu parse được)
+  → static on-chain holdings (BTC ETF còn lại) → Nasdaq "Net Assets" summary API
+  (SOL/HYP/BNB — chưa có nguồn holdings riêng, trước đây AUM=$0.00B) → cache cũ.
+"""
+
+import json, os, re, time, csv, io
+from datetime import datetime, timezone
+from urllib.parse import quote
+
+import boto3, cloudscraper, requests
 from botocore.config import Config
+try:
+    from bs4 import BeautifulSoup
+    HAS_BS4 = True
+except ImportError:
+    HAS_BS4 = False
 
-# ─────────────────────────────────────────────
-# 1. CẤU HÌNH
-# ─────────────────────────────────────────────
-load_dotenv()
-
-# RUN_MODE: "market_data" | "tails_update" | "full"
-RUN_MODE = os.getenv("RUN_MODE", "full")
-
-# MAX_WORKERS  : số thread xử lý token song song (nên > MAX_CONCURRENT để thread luôn sẵn sàng)
-# MAX_CONCURRENT: số HTTP request đồng thời tới Binance (đây là van an toàn thực sự)
-MAX_WORKERS    = int(os.getenv("MAX_WORKERS", "6"))
-MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "4"))  # ← valve an toàn chống ban
-
+RUN_MODE             = os.getenv("RUN_MODE", "full")
 R2_ACCESS_KEY_ID     = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_ENDPOINT_URL      = os.getenv("R2_ENDPOINT_URL")
 R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME")
+ETHA_PRODUCT_ID_ENV  = os.getenv("ETHA_PRODUCT_ID", "")
 
-PROXY_WORKER_URL = os.getenv("PROXY_WORKER_URL")
-API_AGG_TICKER   = os.getenv("BINANCE_INTERNAL_AGG_API")
-API_AGG_KLINES   = os.getenv("BINANCE_INTERNAL_KLINES_API")
-API_PUBLIC_SPOT  = "https://api.binance.com/api/v3/exchangeInfo"
+FAKE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+           "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36")
 
-# [BẢO MẬT] Render backend (alpha-realtime.onrender.com) yêu cầu header
-# x-api-key khớp với API_SECRET_KEY trên Render, nếu không sẽ trả 401
-# cho MỌI request (trừ "/" và "/health"). GitHub Actions cần secret này.
-RENDER_API_KEY = os.getenv("RENDER_API_KEY")
-
-ACTIVE_SPOT_SYMBOLS = set()
-OLD_DATA_MAP        = {}
-
-# ─────────────────────────────────────────────
-# 2. THREAD-SAFE INFRASTRUCTURE
-# ─────────────────────────────────────────────
-
-# Semaphore: giới hạn số HTTP request đồng thời tới Binance
-# Dù MAX_WORKERS=6, chỉ tối đa MAX_CONCURRENT=4 request được gọi Binance cùng lúc
-_request_semaphore = None  # khởi tạo trong fetch_data() sau khi đọc env
-
-# Thread-local session: mỗi thread có cloudscraper riêng, tránh race condition
-_thread_local = threading.local()
-
-def get_session():
-    """Lấy cloudscraper session của thread hiện tại. Tạo mới nếu chưa có."""
-    if not hasattr(_thread_local, 'session'):
-        s = cloudscraper.create_scraper(
-            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-        )
-        s.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/121.0.0.0 Safari/537.36",
-            "Referer": "https://www.binance.com/en/alpha",
-            "Origin":  "https://www.binance.com",
-            "Accept":  "application/json",
-        })
-        # [BẢO MẬT] Gắn x-api-key cho MỌI request của session này, để
-        # mọi lệnh gọi qua PROXY_WORKER_URL (Render) đều qua được middleware
-        # bảo mật, kể cả các hàm tự viết riêng như _binance_public_klines()
-        # trong sync_listing_prices.py — vì chúng đều tái sử dụng session này.
-        if RENDER_API_KEY:
-            s.headers.update({"x-api-key": RENDER_API_KEY})
-        _thread_local.session = s
-    return _thread_local.session
-
-# ─────────────────────────────────────────────
-# 3. R2 CLIENT
-# ─────────────────────────────────────────────
-def get_r2_client():
-    if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
-        print("⚠️ Thiếu R2 Credentials! Kiểm tra GitHub Secrets.")
-        return None
-    return boto3.client(
-        's3',
-        endpoint_url=R2_ENDPOINT_URL,
-        aws_access_key_id=R2_ACCESS_KEY_ID,
-        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-        config=Config(signature_version='s3v4')
-    )
-
-# ─────────────────────────────────────────────
-# 4. KEY MAP + MINIFY (giữ nguyên từ bản gốc)
-# ─────────────────────────────────────────────
-KEY_MAP = {
-    "id": "i", "symbol": "s", "name": "n", "icon": "ic",
-    "chain": "cn", "chain_icon": "ci", "contract": "ct",
-    "status": "st", "price": "p", "change_24h": "c",
-    "market_cap": "mc", "fdv": "f", "liquidity": "l", "volume": "v",
-    "holders": "h",
-    "rolling_24h": "r24", "daily_total": "dt",
-    "daily_limit": "dl", "daily_onchain": "do",
-    "chart": "ch", "listing_time": "lt", "tx_count": "tx",
-    "offline": "off", "listingCex": "cex",
-    "onlineTge": "tge",
-    "onlineAirdrop": "air",
-    "mul_point": "mp"
+ISHARES_IDS = {
+    "IBIT": "333011",
+    "ETHA": ETHA_PRODUCT_ID_ENV or "337614",
 }
 
-def minify_token_data(token):
-    minified = {}
-    minified[KEY_MAP["id"]]       = token.get("id")
-    minified[KEY_MAP["symbol"]]   = token.get("symbol")
-    minified[KEY_MAP["name"]]     = token.get("name")
-    minified[KEY_MAP["icon"]]     = token.get("icon")
-    minified[KEY_MAP["chain"]]    = token.get("chain")
-    minified[KEY_MAP["chain_icon"]] = token.get("chain_icon")
-    minified[KEY_MAP["contract"]] = token.get("contract")
+# BTC holdings per ETF (on-chain snapshot từ etf_holdings.json)
+# Dùng để tính AUM khi không có live data
+# AUM = holdings × BTC_price hiện tại → tự động update theo giá
+STATIC_BTC_HOLDINGS = {
+    "FBTC": 204870.57,   # Fidelity
+    "GBTC": 203601.41,   # Grayscale
+    "ARKB": 157218.40,   # ARK/21Shares
+    "BITB": 141486.62,   # Bitwise
+    "HODL":  22924.98,   # VanEck
+    "EZBC":  17942.63,   # Franklin
+    "BTCW":  15745.38,   # WisdomTree
+    "BTCO":  14510.33,   # Invesco
+    "BRRR":   6939.32,   # Valkyrie
+}
 
-    minified[KEY_MAP["status"]]     = token.get("status")
-    minified[KEY_MAP["price"]]      = token.get("price")
-    minified[KEY_MAP["change_24h"]] = token.get("change_24h")
-    minified[KEY_MAP["mul_point"]]  = token.get("mul_point")
+# Farside URLs — dùng full history URL
+FARSIDE_URLS = {
+    "BTC": "https://farside.co.uk/bitcoin-etf-flow-all-data/",
+    "ETH": "https://farside.co.uk/ethereum-etf-flow-all-data/",
+    "SOL": "https://farside.co.uk/sol/",
+    "HYP": "https://farside.co.uk/hyp/",
+}
+FARSIDE_KEYWORDS = {
+    "BTC": ["IBIT","FBTC"],
+    "ETH": ["ETHA","FETH"],
+    "SOL": ["BSOL","VSOL","FSOL"],
+    "HYP": ["HYP","GHYP","FHYP"],
+}
 
-    minified[KEY_MAP["market_cap"]] = int(token.get("market_cap", 0))
-    minified[KEY_MAP["fdv"]]        = int(token.get("fdv", 0))
-    minified[KEY_MAP["holders"]]    = int(token.get("holders", 0))
-    minified[KEY_MAP["liquidity"]]  = int(token.get("liquidity", 0))
-    minified[KEY_MAP["tx_count"]]   = int(token.get("tx_count", 0))
+ETF_REGISTRY = [
+    # self_computed=True: Flow = Δholdings × price, tính TỰ, KHÔNG cần Farside cho
+    # ticker đó. Chỉ đánh dấu cho các nguồn đã XÁC NHẬN THẬT (không đoán mò):
+    #   - "ishares": đã tích hợp sẵn API chính thức của iShares (IBIT, ETHA)
+    #   - "ark_csv": file CSV holdings công khai của ARK, pattern URL xác nhận
+    #     qua 2 nguồn độc lập (assets.ark-funds.com/fund-documents/funds-etf-csv/
+    #     ARK_{TÊN_QUỸ}_ETF_{TICKER}_HOLDINGS.csv)
+    # Các ticker CHƯA có self_computed vẫn dùng Farside như cũ — đây là migration
+    # TỪNG BƯỚC, không phải xoá Farside 1 lần, để không bao giờ bị mất dữ liệu quỹ
+    # nào giữa chừng nếu 1 nguồn tự tính bị lỗi/thay đổi định dạng.
+    {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares","self_computed":True},
+    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
+    {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
+    {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bitbetf.com"},
+    {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"bitcoin-etf-hodl","vaneck_asset_word":"Bitcoin"},
+    {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq"},
+    {"ticker":"BRRR","name":"Valkyrie Bitcoin Fund","issuer":"Valkyrie","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
+    {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
+    {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares","self_computed":True},
+    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
+    {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
+    {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"ethwetf.com"},
+    {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"ethereum-etf-ethv","vaneck_asset_word":"Ether"},
+    {"ticker":"CETH","name":"21Shares Core Ethereum ETF","issuer":"21Shares","underlying":"ETH","fee":0.21,"src":"nasdaq"},
+    {"ticker":"EZET","name":"Franklin Ethereum ETF","issuer":"Franklin","underlying":"ETH","fee":0.19,"src":"nasdaq"},
+    {"ticker":"QETH","name":"Invesco Galaxy Ethereum ETF","issuer":"Invesco","underlying":"ETH","fee":0.25,"src":"nasdaq"},
+    # Solana ETFs — xác nhận issuer/fee qua search 07/2026
+    {"ticker":"BSOL","name":"Bitwise Solana Staking ETF","issuer":"Bitwise","underlying":"SOL","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bsoletf.com"},
+    {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq","self_computed":True,"vaneck_slug":"solana-etf-vsol","vaneck_asset_word":"Solana"},
+    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq"},
+    {"ticker":"TSOL","name":"21Shares Solana ETF","issuer":"21Shares","underlying":"SOL","fee":0.21,"src":"nasdaq"},
+    {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq"},
+    {"ticker":"GSOL","name":"Grayscale Solana Trust ETF","issuer":"Grayscale","underlying":"SOL","fee":0.19,"src":"nasdaq"},
+    # Hyperliquid ETFs — xác nhận issuer/fee qua search 07/2026
+    {"ticker":"BHYP","name":"Bitwise Hyperliquid ETF","issuer":"Bitwise","underlying":"HYP","fee":0.34,"src":"nasdaq","self_computed":True,"bitwise_domain":"bhypetf.com"},
+    {"ticker":"THYP","name":"21Shares Hyperliquid ETF","issuer":"21Shares","underlying":"HYP","fee":0.30,"src":"nasdaq"},
+    {"ticker":"HYPG","name":"Grayscale Hyperliquid Staking ETF","issuer":"Grayscale","underlying":"HYP","fee":0.29,"src":"nasdaq"},
+    # BNB ETF — mới thêm, hiện chỉ có VanEck (VBNB). self_computed đã VERIFY THẬT
+    # bằng cách fetch trực tiếp trang https://www.vaneck.com/us/en/investments/
+    # bnb-etf-vbnb/ — có đúng bảng "ETF Statistics" với dòng "BNB in Trust:
+    # 3,886.175", fee 0.39% xác nhận qua nhiều nguồn. Fund còn rất nhỏ (mới ra
+    # mắt 07/05/2026, AUM ~$2.27M) nhưng dữ liệu hợp lệ để track.
+    {"ticker":"VBNB","name":"VanEck BNB ETF","issuer":"VanEck","underlying":"BNB","fee":0.39,"src":"nasdaq","self_computed":True,"vaneck_slug":"bnb-etf-vbnb","vaneck_asset_word":"BNB"},
+]
+ETF_TICKERS = [e["ticker"] for e in ETF_REGISTRY]
 
-    minified[KEY_MAP["listing_time"]]   = token.get("listing_time")
-    minified[KEY_MAP["offline"]]        = 1 if token.get("offline")       else 0
-    minified[KEY_MAP["listingCex"]]     = 1 if token.get("listingCex")    else 0
-    minified[KEY_MAP["onlineTge"]]      = 1 if token.get("onlineTge")     else 0
-    minified[KEY_MAP["onlineAirdrop"]]  = 1 if token.get("onlineAirdrop") else 0
+def parse_num(v):
+    if v is None or str(v).strip() in ("","N/A","--","null","None"): return None
+    if isinstance(v,(int,float)): return float(v)
+    s = re.sub(r"[$,%\s]","",str(v))
+    try: return float(s)
+    except: return None
 
-    vol = token.get("volume", {})
-    minified[KEY_MAP["volume"]] = {
-        KEY_MAP["rolling_24h"]:  int(vol.get("rolling_24h", 0)),
-        KEY_MAP["daily_total"]:  int(vol.get("daily_total", 0)),
-        KEY_MAP["daily_limit"]:  int(vol.get("daily_limit", 0)),
-        KEY_MAP["daily_onchain"]:int(vol.get("daily_onchain", 0)),
-    }
-    minified[KEY_MAP["chart"]] = token.get("chart", [])
-    return minified
+def parse_money(v):
+    """'$123.4M' -> 123400000.0, '(1.2B)' -> -1200000000.0, 'N/A' -> None."""
+    if v is None: return None
+    s = str(v).strip()
+    if not s or s in ("N/A","--","null","None"): return None
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.strip("()").replace("$","").replace(",","").strip()
+    mult = 1.0
+    if s and s[-1].upper() in ("K","M","B","T"):
+        mult = {"K":1e3,"M":1e6,"B":1e9,"T":1e12}[s[-1].upper()]
+        s = s[:-1]
+    try:
+        val = float(s) * mult
+        return -val if neg else val
+    except: return None
 
-# ─────────────────────────────────────────────
-# 5. FETCH SMART — có Semaphore + Jitter + 429 Backoff
-# ─────────────────────────────────────────────
-# [SỬA] Cờ cấp module: khi Binance trả 418 (auto-ban IP) cho Render, dừng
-# ngay lệnh gọi PROXY (không phải toàn bộ fetch_smart — vẫn còn nhánh gọi
-# thẳng Binance không qua proxy) cho phần còn lại của lần chạy này, để
-# không kéo dài thời gian ban. Binance ban theo IP, nên nếu script
-# sync_listing_prices.py chạy song song và cũng dính 418, IP Render đó
-# coi như đang bị ban chung — cờ này giúp fetch_alpha.py không góp phần
-# kéo dài ban đó thêm.
-_proxy_banned = False
+def get_session():
+    s = cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","desktop":True})
+    s.headers.update({"User-Agent":FAKE_UA,"Accept":"application/json,*/*","Accept-Language":"en-US,en;q=0.9"})
+    return s
 
+def get_r2():
+    return boto3.client("s3",endpoint_url=R2_ENDPOINT_URL,
+        aws_access_key_id=R2_ACCESS_KEY_ID,aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        config=Config(signature_version="s3v4"))
 
-def fetch_smart(target_url, retries=3):
-    """
-    Gọi Binance internal API qua proxy.
-    - Semaphore giới hạn đồng thời tối đa MAX_CONCURRENT requests
-    - Jitter 0.3–0.8s trước mỗi request → trông giống human traffic
-    - 429/503 → sleep 30s rồi retry (tránh bị ban IP proxy)
-    - 418 → Binance đã ban IP Render rồi, dừng gọi proxy hẳn (không retry)
-    """
-    global _proxy_banned
+def r2_get_json(r2,key):
+    try:
+        resp=r2.get_object(Bucket=R2_BUCKET_NAME,Key=key)
+        return json.loads(resp["Body"].read().decode("utf-8"))
+    except: return None
 
-    if not target_url or "None" in target_url:
-        return None
+def r2_put_json(r2,key,data,cc="max-age=120"):
+    body=json.dumps(data,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    r2.put_object(Bucket=R2_BUCKET_NAME,Key=key,Body=body,ContentType="application/json",CacheControl=cc)
 
-    is_render = "onrender.com" in (PROXY_WORKER_URL or "")
-    session   = get_session()
+def load_crypto_prices():
+    prices={}
+    try:
+        r=requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,hyperliquid,binancecoin&vs_currencies=usd",
+            headers={"User-Agent":FAKE_UA},timeout=10)
+        if r.status_code==200:
+            d=r.json()
+            if "bitcoin"     in d: prices["BTC"]=float(d["bitcoin"]["usd"])
+            if "ethereum"    in d: prices["ETH"]=float(d["ethereum"]["usd"])
+            if "solana"      in d: prices["SOL"]=float(d["solana"]["usd"])
+            if "hyperliquid" in d: prices["HYP"]=float(d["hyperliquid"]["usd"])
+            if "binancecoin" in d: prices["BNB"]=float(d["binancecoin"]["usd"])
+    except Exception as e: print(f"  [Crypto] {e}")
+    print(f"  [Crypto] BTC=${prices.get('BTC')}  ETH=${prices.get('ETH')}  SOL=${prices.get('SOL')}  HYP=${prices.get('HYP')}  BNB=${prices.get('BNB')}")
+    return prices
 
-    for attempt in range(retries):
-        # Acquire semaphore: nếu đã có 4 threads đang gọi API, thread này đợi
-        with _request_semaphore:
-            # Jitter: thêm delay ngẫu nhiên 0.3–0.8s để tránh burst đồng loạt
-            time.sleep(random.uniform(0.3, 0.8))
+def parse_aum_from_label(label, val):
+    """parse_money() ra số thô, nhưng Nasdaq ghi rõ trong TÊN label đơn vị thật:
+    'Assets Under Management (,000)' nghĩa là giá trị đang tính bằng NGHÌN USD
+    (đã xác nhận qua log thật 25/07 — field không phải 'Net Assets' như đoán ban
+    đầu). Phải nhân 1000 mới ra đúng USD, nếu không AUM sẽ hụt 1000 lần."""
+    parsed = parse_money(val)
+    if parsed is None: return None
+    if label and "(,000)" in label.replace(" ", ""):
+        parsed *= 1000
+    return parsed
 
-            # --- Thử qua Proxy trước (bỏ qua nếu đã biết đang bị ban) ---
-            if PROXY_WORKER_URL and not _proxy_banned:
-                try:
-                    encoded    = urllib.parse.quote(target_url, safe='')
-                    proxy_url  = f"{PROXY_WORKER_URL}?url={encoded}"
-                    timeout    = 60 if (is_render and attempt == 0) else 30
-                    res        = session.get(proxy_url, timeout=timeout)
+def fetch_nasdaq_summary_net_assets(session, ticker):
+    """Lấy AUM trực tiếp từ Nasdaq summary API. Dùng làm fallback AUM cho các ETF
+    chưa có nguồn holdings riêng (SOL/HYP/BNB hiện chỉ có Farside cho Flow, KHÔNG
+    có iShares/ARK/VanEck-verified nào cho holdings) — khác với BTC (có static
+    on-chain snapshot) và IBIT/ETHA (có iShares live).
 
-                    if res.status_code == 200:
-                        data = res.json()
-                        if isinstance(data, dict):
-                            if "symbols" in data:            return data
-                            if data.get("code") == "000000": return data
-
-                    elif res.status_code == 418:
-                        print(f"\n⚠️ HTTP 418 — Binance đã BAN IP Render, dừng gọi proxy cho phần còn lại của lần chạy này", flush=True)
-                        _proxy_banned = True
-
-                    elif res.status_code in (429, 503):
-                        # Rate-limit hoặc overload: dừng toàn bộ 30s
-                        print(f"\n⚠️ HTTP {res.status_code} — đang nghỉ 30s để tránh ban...", flush=True)
-                        time.sleep(30)
-                        continue  # retry ngay sau khi hết 30s
-
-                    elif res.status_code == 502:
-                        time.sleep(2)  # proxy tạm lỗi, thử lại nhanh
-
-                except Exception:
-                    pass
-
-            # --- Fallback: gọi thẳng Binance không qua proxy ---
-            try:
-                res = session.get(target_url, timeout=15)
-                if res.status_code == 200:
-                    data = res.json()
-                    if "symbols" in data:            return data
-                    if data.get("code") == "000000": return data
-
-                elif res.status_code in (429, 503):
-                    print(f"\n⚠️ Direct HTTP {res.status_code} — đang nghỉ 30s...", flush=True)
-                    time.sleep(30)
-                    continue
-
-            except Exception:
-                pass
-
-        # Delay nhỏ giữa các lần retry (ngoài semaphore để không block slot)
-        if attempt < retries - 1:
-            time.sleep(1)
-
+    XÁC NHẬN THẬT qua log 25/07: field không tên 'Net Assets' như đoán ban đầu,
+    mà là 'Assets Under Management (,000)' — đơn vị NGHÌN USD, không phải USD
+    thô hay có suffix K/M/B như info fields khác."""
+    url=f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=etf&limit=25"
+    try:
+        r=session.get(url,headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}",
+                     "Accept":"application/json,*/*"},timeout=12)
+        if r.status_code!=200:
+            print(f"    summary {ticker}: HTTP {r.status_code}")
+            return None
+        data=r.json().get("data") or {}
+        summary=data.get("summaryData") or {}
+        if not summary:
+            print(f"    summary {ticker}: summaryData rỗng | top-level keys của data: {list(data.keys())[:15]}")
+            return None
+        label,val=find_by_label(summary,"assets under management")
+        if not label:
+            label,val=find_by_label(summary,"net assets")
+        if not label:
+            print(f"    summary {ticker}: không có label AUM | các label có sẵn: {list({str((it or {}).get('label','')) for it in summary.values()})}")
+            return None
+        parsed=parse_aum_from_label(label,val)
+        if parsed is None:
+            print(f"    summary {ticker}: thấy label '{label}'='{val}' nhưng parse ra None")
+        return parsed
+    except Exception as e:
+        print(f"    summary ✗ {ticker}: {e}")
     return None
 
-# ─────────────────────────────────────────────
-# 6. HELPERS (giữ nguyên từ bản gốc)
-# ─────────────────────────────────────────────
-def safe_float(v):
-    try:   return float(v) if v else 0.0
+def find_by_label(d, keyword):
+    """Tìm (label, value) theo label chứa keyword (không phân biệt hoa/thường)
+    trong dict dạng {key: {"label":..., "value":...}}. Dùng chung cho info.keyStats
+    và summary.summaryData vì Nasdaq trả 2 endpoint theo cùng 1 shape này."""
+    if not isinstance(d, dict): return None, None
+    for item in d.values():
+        if not isinstance(item, dict): continue
+        label = str(item.get("label",""))
+        if keyword.lower() in label.lower():
+            return label, item.get("value")
+    return None, None
+
+def fetch_nasdaq_all(session):
+    results={}
+    underlying_map={e["ticker"]:e["underlying"] for e in ETF_REGISTRY}
+    for ticker in ETF_TICKERS:
+        try:
+            r=session.get(f"https://api.nasdaq.com/api/quote/{ticker}/info?assetclass=etf",
+                headers={"Referer":f"https://www.nasdaq.com/market-activity/funds-and-etfs/{ticker.lower()}"},timeout=12)
+            if r.status_code!=200: continue
+            d=r.json().get("data") or {}
+            p=d.get("primaryData") or {}
+            price=parse_num(p.get("lastSalePrice"))
+            results[ticker]={"price":price,"change":parse_num(p.get("netChange")),
+                "change_pct":parse_num((p.get("percentageChange") or "").replace("%","")),
+                "volume":parse_num((p.get("volume") or "").replace(",",""))}
+            print(f"  {ticker}: ${price}")
+            # SOL/HYP/BNB: không có nguồn holdings on-chain nào → cần AUM để không
+            # bị $0. Thử MIỄN PHÍ trước: keyStats trong response info đã fetch sẵn
+            # (không tốn request thêm) — field thật tên "Assets Under Management
+            # (,000)" (xác nhận qua log 25/07, đơn vị NGHÌN USD).
+            if underlying_map.get(ticker) in ("SOL","HYP","BNB"):
+                keystats=d.get("keyStats") or {}
+                label,val=find_by_label(keystats,"assets under management")
+                net_assets=parse_aum_from_label(label,val) if label else None
+                if net_assets:
+                    results[ticker]["net_assets"]=net_assets
+                    print(f"    ↳ Net Assets (keyStats.'{label}'): ${net_assets/1e6:.2f}M")
+                else:
+                    if keystats:
+                        print(f"    (keyStats {ticker}, không có 'assets under management') labels: {[str((it or {}).get('label','')) for it in keystats.values()][:15]}")
+                    net_assets=fetch_nasdaq_summary_net_assets(session,ticker)
+                    if net_assets:
+                        results[ticker]["net_assets"]=net_assets
+                        print(f"    ↳ Net Assets (summary API): ${net_assets/1e6:.2f}M")
+        except Exception as e: print(f"  ✗ {ticker}: {e}")
+        time.sleep(0.3)
+    return results
+
+# ── FARSIDE ───────────────────────────────────────────────────────
+def fetch_farside_html(url):
+    """Direct → AllOrigins fallback"""
+    try:
+        s=cloudscraper.create_scraper()
+        r=s.get(url,headers={"User-Agent":FAKE_UA},timeout=20)
+        if r.status_code==200 and len(r.text)>3000:
+            print(f"    Direct OK ({len(r.text)} chars)")
+            return r.text
+    except Exception as e: print(f"    Direct: {e}")
+    try:
+        proxy=f"https://api.allorigins.win/get?url={quote(url)}"
+        r=requests.get(proxy,timeout=25)
+        if r.status_code==200:
+            html=r.json().get("contents","")
+            if html and len(html)>3000:
+                print(f"    AllOrigins OK ({len(html)} chars)")
+                return html
+    except Exception as e: print(f"    AllOrigins: {e}")
+    return None
+
+def parse_val(s):
+    """Parse Farside value: '(12.5)' → -12.5, '0.0' → 0, '-' → 0"""
+    s=str(s).replace(",","").strip()
+    if not s or s=="-" or s=="": return 0.0
+    if s.startswith("(") and s.endswith(")"):
+        try: return -abs(float(s[1:-1]))
+        except: return 0.0
+    try: return float(s)
     except: return 0.0
 
-def load_old_data_from_r2(r2_client):
-    if not r2_client: return {}
-    try:
-        obj  = r2_client.get_object(Bucket=R2_BUCKET_NAME, Key='market-data.json')
-        data = json.loads(obj['Body'].read().decode('utf-8'))
-        return {(t.get('i') or t.get('id')): t for t in data.get('data', []) if t.get('i') or t.get('id')}
-    except Exception as e:
-        print(f"⚠️ Không tải được cache từ R2 (Lần đầu chạy?): {e}")
-        return {}
+def parse_farside_table_full(html, asset):
+    """
+    Parse TOÀN BỘ bảng Farside.
+    Return:
+      headers: [ticker1, ticker2, ...]
+      rows: [{"date": "26 Jun 2026", "IBIT": -444.5, "Total": -444.5, ...}, ...]
+    """
+    if not html: return None, []
 
-def get_active_spot_symbols():
-    try:
-        print("⏳ Check Spot Market...", end=" ", flush=True)
-        data = fetch_smart(API_PUBLIC_SPOT)
-        if data and "symbols" in data:
-            res = {s["baseAsset"] for s in data["symbols"] if s["status"] == "TRADING"}
-            print(f"OK ({len(res)})")
-            return res
-    except Exception:
-        pass
-    return set()
+    keywords = FARSIDE_KEYWORDS.get(asset, [])
 
-def fetch_details_optimized(chain_id, contract_addr):
-    """Giữ nguyên logic gốc — chỉ dùng thread-local session thông qua fetch_smart."""
-    if not API_AGG_KLINES: return 0, 0, 0, [], False
+    if HAS_BS4:
+        soup = BeautifulSoup(html, "html.parser")
 
-    no_lower_chains = ["CT_501", "CT_784"]
-    clean_addr = str(contract_addr)
-    if chain_id not in no_lower_chains:
-        clean_addr = clean_addr.lower()
+        # Tìm bảng chứa keyword
+        target_table = None
+        for table in soup.find_all("table"):
+            text = table.get_text().upper()
+            if any(k in text for k in keywords):
+                target_table = table
+                break
+        if not target_table:
+            print(f"    ✗ No table for {asset}")
+            return None, []
 
-    base_url      = f"{API_AGG_KLINES}?chainId={chain_id}&interval=1d&limit=30&tokenAddress={clean_addr}"
-    d_total       = 0.0
-    d_limit       = 0.0
-    chart_data    = []
-    has_limit_vol = False
+        all_rows = target_table.find_all("tr")
 
-    try:
-        res_limit = fetch_smart(f"{base_url}&dataType=limit")
-        if res_limit and res_limit.get("data") and res_limit["data"].get("klineInfos"):
-            k_infos = res_limit["data"]["klineInfos"]
-            if k_infos:
-                d_limit = safe_float(k_infos[-1][5])
-                if d_limit > 0:
-                    has_limit_vol = True
-                elif len(k_infos) > 1 and safe_float(k_infos[-2][5]) > 0:
-                    has_limit_vol = True
-    except Exception:
-        pass
+        # Tìm header row (chứa ticker names)
+        headers = []
+        header_idx = 0
+        for i, row in enumerate(all_rows):
+            cells = [c.get_text().strip() for c in row.find_all(["th","td"])]
+            cells_upper = " ".join(cells).upper()
+            if any(k in cells_upper for k in keywords):
+                headers = [c.strip() for c in cells]
+                header_idx = i
+                break
 
-    try:
-        res_agg = fetch_smart(f"{base_url}&dataType=aggregate")
-        if res_agg and res_agg.get("data") and res_agg["data"].get("klineInfos"):
-            k_infos = res_agg["data"]["klineInfos"]
-            if k_infos:
-                d_total    = safe_float(k_infos[-1][5])
-                chart_data = [{"p": safe_float(k[4]), "v": safe_float(k[5])} for k in k_infos]
-    except Exception:
-        pass
+        if not headers:
+            print(f"    ✗ No headers for {asset}")
+            return None, []
 
-    d_market = max(d_total - d_limit, 0)
-    return d_total, d_limit, d_market, chart_data, has_limit_vol
+        # Lọc bỏ empty headers ở đầu, giữ ticker names
+        # Headers format: ['', 'IBIT', 'FBTC', ..., 'Total']
+        clean_headers = headers  # giữ nguyên để dùng index
 
-# ─────────────────────────────────────────────
-# 7. PROCESS SINGLE TOKEN (logic giữ nguyên gốc, bỏ sleep)
-# ─────────────────────────────────────────────
-def process_single_token(item):
-    """Xử lý 1 token song song. Throttle nằm trong fetch_smart, không cần sleep ở đây."""
-    aid = item.get("alphaId")
-    if not aid: return None
+        print(f"    Headers ({len(headers)}): {headers[:12]}")
 
-    vol_rolling    = safe_float(item.get("volume24h"))
-    symbol         = item.get("symbol")
-    contract       = item.get("contractAddress")
-    chain_id       = item.get("chainId")
-    is_offline     = item.get("offline", False)
-    is_listing_cex = item.get("listingCex", False)
+        # Parse TẤT CẢ data rows
+        rows = []
+        for row in all_rows[header_idx+1:]:
+            cells = [c.get_text().strip() for c in row.find_all("td")]
+            if not cells: continue
 
-    status           = "ALPHA"
-    need_limit_check = False
-    force_skip_fetch = False  # True → bỏ qua API call dù vol_rolling > 0
+            first = cells[0]
+            # Bỏ qua dòng không phải ngày
+            if not re.match(r"^\d{1,2}\s+[A-Za-z]{3}", first):
+                continue
 
-    if is_offline:
-        if is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS:
-            status = "SPOT"
-        else:
-            status           = "PRE_DELISTED"
-            need_limit_check = True
+            row_obj = {"date": first}
+            for i, hdr in enumerate(clean_headers):
+                if i == 0 or i >= len(cells): continue
+                ticker = hdr.strip().upper()
+                if ticker in ("FEE", "SEED"):
+                    continue
+                # QUAN TRỌNG: cột Tổng (cuối bảng) ở một số trang (SOL, HYP...) Farside
+                # không đặt tên (header text rỗng) — TRƯỚC ĐÂY code coi "not hdr" là cột rác
+                # và bỏ qua luôn, khiến SOL/HYP mất hẳn dữ liệu tổng. Giờ gán key "TOTAL"
+                # cho mọi cột có header rỗng (trừ cột date ở index 0 đã skip riêng).
+                if not ticker:
+                    ticker = "TOTAL"
+                row_obj[ticker] = parse_val(cells[i]) if i < len(cells) else 0.0
 
-    if OLD_DATA_MAP and aid in OLD_DATA_MAP:
-        old_item      = OLD_DATA_MAP[aid]
-        cached_status = old_item.get(KEY_MAP["status"])
+            if len(row_obj) > 1:  # có ít nhất 1 cột data
+                rows.append(row_obj)
 
-        if cached_status == "DELISTED":
-            status = "DELISTED"
-            if is_offline and not is_listing_cex and symbol not in ACTIVE_SPOT_SYMBOLS:
-                # Re-verify 1 lần/ngày lúc 00:xx UTC (midnight run).
-                # Các lần còn lại: skip hoàn toàn, dùng lại cache.
-                if datetime.utcnow().hour == 0:
-                    need_limit_check = True   # midnight → check lại
-                else:
-                    need_limit_check = False  # bình thường → skip
-                    force_skip_fetch = True   # kể cả khi vol_rolling > 0
+        # Sort theo NGÀY THỰC TẾ (không tin thứ tự HTML — trước đây reverse() mù quáng
+        # đã làm rows[-1] trở thành dòng CŨ NHẤT thay vì mới nhất, khiến "flow hôm nay"
+        # bị ghi nhầm thành flow của ngày ETF ra mắt).
+        def _parse_date(d):
+            try: return datetime.strptime(d, "%d %b %Y")
+            except: return datetime.min
+        rows.sort(key=lambda r: _parse_date(r["date"]))  # cũ → mới, đảm bảo rows[-1] luôn là mới nhất
 
-        elif cached_status == "SPOT":
-            # SPOT đã xác nhận + vẫn offline/cex → không cần klines
-            if is_offline and (is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS):
-                force_skip_fetch = True
-                status = "SPOT"
-
-    should_fetch = (not force_skip_fetch) and (vol_rolling > 0 or need_limit_check)
-
-    daily_total = daily_limit = daily_onchain = 0.0
-    chart_data  = []
-
-    if should_fetch:
-        print(f"📡 {symbol}...", end=" ", flush=True)
-        try:
-            d_t, d_l, d_m, chart, has_limit = fetch_details_optimized(chain_id, contract)
-            daily_total, daily_limit, daily_onchain = d_t, d_l, d_m
-            chart_data = chart
-
-            if need_limit_check:
-                if has_limit:
-                    status = "ALPHA"
-                    print("✅ ALIVE (Revived)")
-                else:
-                    status = "DELISTED"
-                    print("❌ DEAD")
-            else:
-                if status == "DELISTED": status = "ALPHA"
-                print("OK")
-
-            if daily_total <= 0: daily_total = vol_rolling
-
-        except Exception as e:
-            print(f"⚠️ Err: {e}")
-            daily_total = vol_rolling
-            if need_limit_check: status = "DELISTED"
+        print(f"    ✓ {len(rows)} historical rows (first: {rows[0]['date'] if rows else 'N/A'} → last: {rows[-1]['date'] if rows else 'N/A'})")
+        return headers, rows
     else:
-        daily_total = vol_rolling
-        if status == "PRE_DELISTED": status = "DELISTED"
-        # Reuse chart từ cache cho cả DEAD lẫn SPOT (không fetch lại)
-        if status in ("DELISTED", "SPOT") and OLD_DATA_MAP and aid in OLD_DATA_MAP:
-            old_item = OLD_DATA_MAP[aid]
-            if old_item.get(KEY_MAP["chart"]):
-                chart_data = old_item.get(KEY_MAP["chart"])
+        print(f"    bs4 not installed")
+        return None, []
 
-    return {
-        "id": aid, "symbol": symbol, "name": item.get("name"),
-        "icon": item.get("iconUrl"), "chain": item.get("chainName", ""),
-        "chain_icon": item.get("chainIconUrl"), "contract": contract,
-        "offline": is_offline, "listingCex": is_listing_cex, "status": status,
-        "onlineTge":    item.get("onlineTge", False),
-        "onlineAirdrop": item.get("onlineAirdrop", False),
-        "mul_point":    safe_float(item.get("mulPoint")),
-        "listing_time": item.get("listingTime", 0),
-        "tx_count":     safe_float(item.get("count24h")),
-        "price":        safe_float(item.get("price")),
-        "change_24h":   safe_float(item.get("percentChange24h")),
-        "liquidity":    safe_float(item.get("liquidity")),
-        "market_cap":   safe_float(item.get("marketCap")),
-        "fdv":          safe_float(item.get("fdv")),
-        "holders":      safe_float(item.get("holders")),
-        "volume": {
-            "rolling_24h":   vol_rolling,
-            "daily_total":   daily_total,
-            "daily_limit":   daily_limit,
-            "daily_onchain": daily_onchain,
-        },
-        "chart": chart_data,
-    }
+def fetch_farside_all(session):
+    """
+    Lấy toàn bộ lịch sử từ Farside cho tất cả asset.
+    Return:
+      daily_latest: { IBIT: flow_usd_today, ... }
+      full_history: { BTC: [{date, IBIT, FBTC, ...}], ETH: [...], ... }
+    """
+    daily_latest = {}
+    full_history = {}
 
-# ─────────────────────────────────────────────
-# 8. TAILS (giữ nguyên logic gốc, thêm parallel)
-# ─────────────────────────────────────────────
-def build_suffix_sum(klines, yesterday_str):
-    arr        = [0.0] * 1440
-    minute_map = [0.0] * 1440
-    if not klines: return arr
+    for asset, url in FARSIDE_URLS.items():
+        print(f"\n  Farside {asset}: {url}")
+        html = fetch_farside_html(url)
+        if not html:
+            print(f"    ✗ Failed")
+            continue
 
-    for k in klines:
-        try:
-            dt = datetime.utcfromtimestamp(int(k[0]) / 1000.0)
-            if dt.strftime('%Y-%m-%d') == yesterday_str:
-                start_min   = dt.hour * 60 + dt.minute
-                vol_per_min = float(k[5] or 0) / 5.0
-                for i in range(5):
-                    if start_min + i < 1440:
-                        minute_map[start_min + i] += vol_per_min
-        except Exception:
-            pass
+        headers, rows = parse_farside_table_full(html, asset)
+        if not rows:
+            print(f"    ✗ No rows")
+            continue
 
-    running_sum = 0.0
-    for i in range(1439, -1, -1):
-        running_sum += minute_map[i]
-        arr[i]       = round(running_sum, 2)
-    return arr
-
-def _fetch_tail_single(t, yesterday_str):
-    """Worker function cho 1 token tails — throttle nằm trong fetch_smart."""
-    aid      = t.get("alphaId")
-    chain_id = t.get("chainId")
-    contract = t.get("contractAddress")
-
-    if not aid or not contract:
-        return aid, t.get("symbol"), None, None
-
-    clean_addr = str(contract)
-    if chain_id not in ["CT_501", "CT_784"]:
-        clean_addr = clean_addr.lower()
-
-    base_url = (
-        f"{API_AGG_KLINES}?chainId={chain_id}"
-        f"&interval=5m&limit=1000&tokenAddress={clean_addr}"
-    )
-    t_total = t_limit = None
-
-    try:
-        res_tot = fetch_smart(f"{base_url}&dataType=aggregate", retries=1)
-        if res_tot and "data" in res_tot and "klineInfos" in res_tot["data"]:
-            t_total = build_suffix_sum(res_tot["data"]["klineInfos"], yesterday_str)
-    except Exception:
-        pass
-
-    try:
-        res_lim = fetch_smart(f"{base_url}&dataType=limit", retries=1)
-        if res_lim and "data" in res_lim and "klineInfos" in res_lim["data"]:
-            t_limit = build_suffix_sum(res_lim["data"]["klineInfos"], yesterday_str)
-    except Exception:
-        pass
-
-    return aid, t.get("symbol"), t_total, t_limit
-
-def generate_and_upload_tails(r2_client, raw_tokens, results):
-    today_str     = datetime.utcnow().strftime('%Y-%m-%d')
-    yesterday_str = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
-    force_tails   = os.getenv("FORCE_TAILS", "false").lower() == "true"
-
-    try:
-        head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json')
-        if not force_tails and head['LastModified'].strftime('%Y-%m-%d') == today_str:
-            print("\n⏭️ tails_cache.json hôm nay đã có. Bỏ qua.")
-            print("   (Set FORCE_TAILS=true để chạy lại thủ công)")
-            return
-    except Exception:
-        pass
-
-    alive_aids   = {r["id"] for r in results if r.get("status") in ["ALPHA", "PRE_DELISTED"]}
-    valid_tokens = [t for t in raw_tokens if t.get("alphaId") in alive_aids]
-    total_count  = len(valid_tokens)
-
-    print(f"\n🦊 Bắt đầu cắt Đuôi 5m — {total_count} tokens alive (parallel, concurrent={MAX_CONCURRENT})")
-
-    tails_total = {}
-    tails_limit = {}
-    completed   = [0]
-    _lock       = threading.Lock()
-
-    def worker_wrapper(t):
-        aid, symbol, t_total, t_limit = _fetch_tail_single(t, yesterday_str)
-        with _lock:
-            completed[0] += 1
-            status = "OK" if (t_total is not None or t_limit is not None) else "SKIP"
-            print(f"   [{completed[0]}/{total_count}] Cắt đuôi {symbol}... {status}", flush=True)
-        return aid, t_total, t_limit
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(worker_wrapper, t) for t in valid_tokens]
-        for future in as_completed(futures):
-            try:
-                aid, t_total, t_limit = future.result()
-                if aid:
-                    if t_total is not None: tails_total[aid] = t_total
-                    if t_limit is not None: tails_limit[aid] = t_limit
-            except Exception as e:
-                print(f"⚠️ Tail worker error: {e}")
-
-    print("☁️ Đang Upload Tails lên R2...")
-    json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
-    try:
-        r2_client.put_object(
-            Bucket=R2_BUCKET_NAME,
-            Key='tails_cache.json',
-            Body=json_str.encode('utf-8'),
-            ContentType='application/json'
-        )
-        print("✅ Đã lưu tails_cache.json thành công!")
-    except Exception as e:
-        print(f"❌ Upload Tails Failed: {e}")
-
-# ─────────────────────────────────────────────
-# 9. HÀM CHÍNH
-# ─────────────────────────────────────────────
-def fetch_data():
-    global ACTIVE_SPOT_SYMBOLS, OLD_DATA_MAP, _request_semaphore
-    start = time.time()
-
-    # Khởi tạo semaphore ở đây (sau khi đọc env)
-    _request_semaphore = threading.Semaphore(MAX_CONCURRENT)
-
-    print(f"⚙️  RUN_MODE={RUN_MODE}  workers={MAX_WORKERS}  concurrent={MAX_CONCURRENT}")
-    print(f"   Rate: ~{MAX_CONCURRENT} req / 1.2s avg ≈ {MAX_CONCURRENT * 50:.0f} req/phút (an toàn)")
-    print(f"🔑 RENDER_API_KEY configured: {bool(RENDER_API_KEY)}")
-    if not RENDER_API_KEY:
-        print("⚠️  RENDER_API_KEY rỗng — mọi request qua PROXY_WORKER_URL (Render) "
-              "sẽ bị middleware bảo mật trả 401. Thêm secret RENDER_API_KEY trong "
-              "GitHub Actions và khai báo trong workflow YAML.")
-
-    r2 = get_r2_client()
-    if not r2: return
-
-    results       = []
-    target_tokens = []
-
-    # ═══════════════════════════════════════════════
-    # PHASE 1: MARKET DATA
-    # ═══════════════════════════════════════════════
-    if RUN_MODE in ("full", "market_data"):
-        OLD_DATA_MAP        = load_old_data_from_r2(r2)
-        ACTIVE_SPOT_SYMBOLS = get_active_spot_symbols()
-
-        print("⏳ Lấy danh sách token...", end=" ", flush=True)
-        try:
-            raw_res = fetch_smart(API_AGG_TICKER)
-        except Exception:
-            raw_res = None
-        if not raw_res:
-            print("FAILED")
-            return
-
-        raw_data      = raw_res.get("data", [])
-        target_tokens = sorted(raw_data, key=lambda x: safe_float(x.get("volume24h")), reverse=True)
-        print(f"Done ({len(target_tokens)})")
-
-        print(f"🚀 Processing {len(target_tokens)} tokens (parallel, {MAX_WORKERS} workers, {MAX_CONCURRENT} concurrent HTTP)...")
-
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = [executor.submit(process_single_token, t) for t in target_tokens]
-            for future in as_completed(futures):
-                try:
-                    r = future.result()
-                    if r: results.append(r)
-                except Exception as e:
-                    print(f"⚠️ Token worker error: {e}")
-
-        results.sort(key=lambda x: x["volume"]["daily_total"], reverse=True)
-
-        print(f"🔒 Minifying {len(results)} tokens...")
-        minified_results = [minify_token_data(t) for t in results]
-
-        final_output = {
-            "meta": {
-                "u": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "t": len(minified_results),
-                "c": "WaveAlpha Data"
-            },
-            "data": minified_results
+        # Lưu full history
+        full_history[asset] = {
+            "headers": headers,
+            "rows": rows,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        json_str = json.dumps(final_output, ensure_ascii=False, separators=(',', ':'))
 
-        print("☁️ Uploading to Cloudflare R2...")
+        # Lấy dòng mới nhất CÓ DỮ LIỆU THỰC (bỏ qua dòng cuối nếu Farside hiện "–" hết,
+        # vd ngày hôm nay chưa đóng cửa → parse ra {} rỗng → lấy ngày hôm trước thay thế)
+        latest = None
+        for row in reversed(rows):
+            has_data = any(v != 0 for k, v in row.items() if k not in ("date", "TOTAL"))
+            if has_data:
+                latest = row
+                break
+        if not latest:
+            latest = rows[-1]  # fallback: lấy dòng cuối dù rỗng
+
+        # BUG FIX: daily_latest tích lũy KHÔNG RESET giữa các asset → ticker của asset
+        # trước (vd BSOL) bị "thấm" vào latest dict của asset sau (HYP).
+        # Sửa: mỗi asset chỉ đóng góp đúng các ticker của nó vào daily_latest.
+        # BUG FIX (nghiêm trọng): trước đây "if val != 0" coi flow=$0.0 là "thiếu dữ liệu"
+        # và bỏ qua ticker đó khỏi daily_latest. Ở run(), khi daily_flows.get(t) trả về
+        # None, code fallback dùng flow của LẦN CHẠY TRƯỚC (prev["flow"], cache trên R2).
+        # Hậu quả: mỗi khi 1 quỹ nhỏ (BITB/BRRR/BTCW...) có ngày flow=0 THẬT (không giao
+        # dịch), giá trị cache CŨ (có thể là rác từ tận ngày ETF ra mắt, do bug reverse()
+        # trước đây) bị "hồi sinh" và đóng băng mãi — trong khi các quỹ lớn (IBIT, FBTC)
+        # hầu như ngày nào cũng flow≠0 nên không bao giờ dính, luôn cập nhật đúng.
+        # → Kết quả: bảng hiển thị 2 nhóm ticker lệch nhau nhiều tháng/năm dữ liệu.
+        # Sửa: flow=0 LÀ dữ liệu thật, phải ghi vào daily_latest luôn, không bỏ qua.
+        asset_latest = {}
+        print(f"    Latest: {latest.get('date')} → ", end="")
+        for ticker, val in latest.items():
+            if ticker in ("date", "TOTAL"): continue
+            asset_latest[ticker] = val * 1_000_000  # $M → $ (bao gồm cả giá trị 0)
+        # Merge vào daily_latest, nhưng KHÔNG overwrite ticker đã có từ asset khác
+        for k, v in asset_latest.items():
+            if k not in daily_latest:
+                daily_latest[k] = v
+        print({k: v/1e6 for k,v in asset_latest.items()})
+
+        # Convert tất cả flows sang USD (nhân 1M)
+        for row in full_history[asset]["rows"]:
+            for k in list(row.keys()):
+                if k != "date":
+                    row[k] = row[k] * 1_000_000
+
+    return daily_latest, full_history
+
+# ── iShares ───────────────────────────────────────────────────────
+VARNISH="https://www.ishares.com/varnish-api/blk-one01-product-data/product-data/api/v2/get-product-data"
+
+def _url(pid,excl,incl,as_of=None):
+    p=(f"component=holdings.all&portfolioId={pid}&appSubType=ISHARES&appType=PRODUCT_PAGE"
+       f"&locale=en_US&targetSite=us-ishares&userType=individual"
+       f"&excludeContent={'true' if excl else 'false'}"
+       f"&includeConfig={'true' if incl else 'false'}")
+    if as_of: p+=f"&asOfDate={as_of}"
+    return f"{VARNISH}?{p}"
+
+def fetch_ishares(session,ticker,product_id,crypto_price=None):
+    hdrs={"Referer":f"https://www.ishares.com/us/products/{product_id}/",
+           "Accept":"application/json,*/*","User-Agent":FAKE_UA}
+    latest_date=None
+    try:
+        r=session.get(_url(product_id,True,True),headers=hdrs,timeout=15)
+        if r.status_code!=200: return None
+        d=r.json()
+        if ticker=="ETHA" and "ethereum" not in d.get("fundName","").lower(): return None
+        comp=(d.get("componentsByNameMap") or {}).get("holdings",{})
+        cont=(comp.get("containersByNameMap") or {}).get("all",{})
+        dmap=cont.get("dataPointsByNameMap",{})
+        dates=dmap.get("dateList",{}).get("value") or []
+        if dates: latest_date=str(dates[0])
+    except Exception as e: print(f"    config: {e}"); return None
+    try:
+        r=session.get(_url(product_id,False,False,as_of=latest_date),headers=hdrs,timeout=20)
+        if r.status_code!=200: return None
+        d=r.json()
+        comp=(d.get("componentsByNameMap") or {}).get("holdings",{})
+        cont=(comp.get("containersByNameMap") or {}).get("all",{})
+        dmap=cont.get("dataPointsByNameMap",{})
+        mv=dmap.get("marketValue",{}).get("value",[])
+        aum=max((v for v in mv if isinstance(v,(int,float)) and v>0),default=None)
+        holdings=None
+        for key in ["unitsHeld","sharesHeld","quantity"]:
+            arr=dmap.get(key,{}).get("value",[])
+            if arr:
+                h=parse_num(arr[0] if isinstance(arr,list) else arr)
+                if h and 100<h<1_000_000_000: holdings=h; break
+        if not holdings and aum and crypto_price and crypto_price>0:
+            holdings=aum/crypto_price
+        ao=dmap.get("asOfDate",{}).get("value")
+        if aum or holdings:
+            return {"aum":aum,"holdings":holdings,"nav_date":str(ao) if ao else latest_date}
+        return None
+    except Exception as e: print(f"    data: {e}"); return None
+
+def fetch_ark_holdings(session, fund_name, ticker):
+    """Fetch holdings từ CSV public của ARK. Trả về (holdings_coin_qty, as_of_date) hoặc None.
+    URL pattern xác nhận qua search: assets.ark-funds.com/fund-documents/funds-etf-csv/
+    ARK_{TÊN_QUỸ}_ETF_{TICKER}_HOLDINGS.csv — file này ARK cập nhật public mỗi ngày
+    giao dịch, không cần key/auth gì cả.
+    """
+    url = f"https://assets.ark-funds.com/fund-documents/funds-etf-csv/ARK_{fund_name}_ETF_{ticker}_HOLDINGS.csv"
+    try:
+        r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+        if r.status_code != 200:
+            print(f"    ARK CSV HTTP {r.status_code}: {url}")
+            return None
+        text = r.content.decode("utf-8-sig", errors="ignore")  # ARK CSV có BOM
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+        if not rows:
+            return None
+        # Quỹ Bitcoin/Ethereum trust của ARK chỉ nắm 1 tài sản duy nhất → chỉ có
+        # đúng 1 dòng holding thật (bỏ qua dòng "cash"/tổng nếu CSV có thêm).
+        # Thử nhiều tên cột khác nhau vì ARK có thể đổi format theo thời gian.
+        as_of = None
+        for row in rows:
+            name = (row.get("company") or row.get("Company") or row.get("fund") or "").lower()
+            if "cash" in name or "total" in name:
+                continue
+            for key in ["shares", "Shares", "shares_held", "Shares Held"]:
+                if key in row and row[key]:
+                    qty = parse_num(row[key])
+                    if qty and qty > 0:
+                        as_of = row.get("date") or row.get("Date")
+                        return (qty, as_of)
+        return None
+    except Exception as e:
+        print(f"    ARK CSV error ({ticker}): {e}")
+        return None
+
+
+def fetch_bitwise_holdings(session, domain, ticker):
+    """Fetch holdings từ site riêng của từng quỹ Bitwise (BITB→bitbetf.com,
+    ETHW→ethwetf.com, BSOL→bsoletf.com, BHYP→bhypetf.com).
+
+    XÁC NHẬN THẬT qua fetch trực tiếp 07/2026 (không đoán mò): tất cả các site
+    này dùng CHUNG 1 nền tảng Next.js, và quan trọng nhất — SERVER-RENDERED
+    (SSR), khác hẳn VanEck (React SPA client-render + màn hình chặn khu vực).
+    Nội dung "Fund Holdings" nằm thẳng trong HTML trả về từ request đầu tiên,
+    curl/requests lấy được ngay, không cần JS/proxy render gì cả.
+
+    Format thấy được (giống hệt nhau qua cả 4 site, chỉ khác tên coin):
+      "Bitcoin in Trust  36,678.89" (BITB) / "ETH in Trust  106,365.71" (ETHW) /
+      "Solana in Trust  8,278,700.00" (BSOL) / "Hyperliquid in Trust  2,044,448.48"
+      (BHYP — lưu ý BHYP có 1 chỗ bị TYPO thành "Hyyperliquid in Trust", nên
+      regex KHÔNG cố định chữ đầu, chỉ bắt "<từ bất kỳ> in Trust <số>" rồi lấy
+      match đầu tiên — mỗi trust chỉ có đúng 1 dòng holding thật, không rủi ro
+      khớp nhầm).
+
+    Trang còn có sẵn "Net Assets (AUM)" ở mục Fund Details — chính xác hơn cả
+    Nasdaq (không bị làm tròn theo (,000)), lấy kèm luôn khi có.
+    """
+    url = f"https://{domain}/"
+    try:
+        r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+        if r.status_code != 200:
+            print(f"    Bitwise HTTP {r.status_code}: {url}")
+            return None
+        text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+        text = text.replace("\xa0", " ")
+        text = re.sub(r"\s+", " ", text)
+        m = re.search(r"[A-Za-z]+\s+in\s+Trust\D{0,20}?([\d,]+\.?\d*)", text)
+        if not m:
+            has_marker = "in Trust" in text
+            snippet = text[:200]
+            print(f"    Bitwise: không tìm thấy '<coin> in Trust' trên trang {ticker}")
+            print(f"      → độ dài trang: {len(text)} ký tự | có 'in Trust': {has_marker}")
+            print(f"      → 200 ký tự đầu: {snippet!r}")
+            return None
+        qty = float(m.group(1).replace(",", ""))
+        date_m = re.search(r"Data as of (\d{2}/\d{2}/\d{4})", text)
+        as_of = date_m.group(1) if date_m else None
+        aum_m = re.search(r"Net Assets \(AUM\)\s*\$?([\d,]+\.?\d*)", text)
+        aum = parse_money(aum_m.group(1)) if aum_m else None
+        return (qty, as_of, aum)
+    except Exception as e:
+        print(f"    Bitwise error ({ticker}): {e}")
+        return None
+
+
+def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
+    """VanEck's fund pages RENDER BẰNG JAVASCRIPT (đã xác nhận THẬT qua log
+    24-25/07: fetch trực tiếp chỉ ra ~8-9K ký tự, KHÔNG có 'ETF Statistics' —
+    y hệt ARK/Grayscale SPA. Nhận định "static" ban đầu là SAI, do tool dùng để
+    verify thủ công lúc đó tự chạy JS như trình duyệt thật nên bị đánh lừa.
+
+    Giải pháp: đi qua r.jina.ai — dịch vụ proxy công khai, MIỄN PHÍ, không cần
+    API key (https://r.jina.ai/<url>), tự render trang bằng browser thật ở phía
+    họ rồi trả về text đã "hydrate" xong. Trang VanEck vốn công khai, không có
+    auth/paywall gì — đây không phải né chặn gì cả, chỉ là mượn 1 browser thật
+    để lấy đúng nội dung mà curl/requests không tự chạy JS được.
+
+    Có 2 lớp fallback để không bao giờ mất dữ liệu nếu r.jina.ai lỗi:
+    1) r.jina.ai (chính, render JS thật)
+    2) fetch trực tiếp như cũ (gần như luôn ra shell rỗng, nhưng thử cho chắc,
+       phòng khi VanEck đổi lại sang static hoặc r.jina.ai đang down)
+    3) nếu cả 2 đều fail → trả None → hàm gọi tự fallback sang Farside.
+
+    asset_word đúng theo cách VanEck ghi trên trang: "Bitcoin" (HODL), "Ether"
+    (ETHV — KHÔNG PHẢI "Ethereum"), "Solana" (VSOL), "BNB" (VBNB)."""
+    url = f"https://www.vaneck.com/us/en/investments/{url_slug}/"
+    text = None
+
+    # 1) r.jina.ai — render JS thật
+    try:
+        rj = session.get(f"https://r.jina.ai/{url}",
+            headers={"X-Return-Format":"text","Accept":"text/plain"}, timeout=25)
+        if rj.status_code == 200 and len(rj.text) > 1000:
+            text = rj.text
+        else:
+            print(f"    VanEck (r.jina.ai) {ticker}: HTTP {rj.status_code}, độ dài {len(rj.text)}")
+    except Exception as e:
+        print(f"    VanEck (r.jina.ai) lỗi ({ticker}): {e}")
+
+    # 2) Fallback: fetch trực tiếp như cũ (rẻ, không hại gì khi thử thêm)
+    if not text:
         try:
-            r2.put_object(
-                Bucket=R2_BUCKET_NAME,
-                Key='market-data.json',
-                Body=json_str.encode('utf-8'),
-                ContentType='application/json',
-                CacheControl='max-age=60'
-            )
-            print("✅ Uploaded market-data.json")
-
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            r2.put_object(
-                Bucket=R2_BUCKET_NAME,
-                Key=f'history/{today_str}.json',
-                Body=json_str.encode('utf-8'),
-                ContentType='application/json'
-            )
-            print(f"✅ Uploaded history/{today_str}.json")
+            r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+            if r.status_code == 200:
+                text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
         except Exception as e:
-            print(f"❌ R2 Upload Failed: {e}")
+            print(f"    VanEck direct lỗi ({ticker}): {e}")
 
-    # ═══════════════════════════════════════════════
-    # PHASE 2: TAILS (tails_update hoặc full)
-    # ═══════════════════════════════════════════════
-    if RUN_MODE in ("full", "tails_update"):
+    if not text:
+        print(f"    VanEck: cả r.jina.ai lẫn fetch trực tiếp đều thất bại cho {ticker}")
+        return None
 
-        # Nếu chạy riêng tails_update: load danh sách token + status từ R2 cache
-        if RUN_MODE == "tails_update":
-            OLD_DATA_MAP = load_old_data_from_r2(r2)
+    # Chuẩn hoá: \xa0 (nbsp) → space thường; dọn ký tự markdown (*_#|) mà
+    # r.jina.ai có thể chèn vào (in đậm/heading/bảng) — nếu không dọn, regex
+    # "\D{0,20}?" có thể vẫn khớp qua vì \D chấp nhận mọi ký tự không phải số,
+    # nhưng dọn cho sạch để log snippet dễ đọc hơn khi debug.
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"[*_#|]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,20}}?([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if not m:
+        has_marker = "ETF Statistics" in text
+        has_word = asset_word.lower() in text.lower()
+        snippet = text[:200]
+        print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker}")
+        print(f"      → độ dài text: {len(text)} ký tự | có 'ETF Statistics': {has_marker} | có '{asset_word}': {has_word}")
+        print(f"      → 200 ký tự đầu: {snippet!r}")
+        return None
+    qty = float(m.group(1).replace(",", ""))
+    date_m = re.search(r"ETF Statistics as of (\d{2}/\d{2}/\d{4})", text)
+    as_of = date_m.group(1) if date_m else None
+    return (qty, as_of)
 
-            print("⏳ Lấy danh sách token cho tails...", end=" ", flush=True)
-            try:
-                raw_res = fetch_smart(API_AGG_TICKER)
-                if raw_res:
-                    target_tokens = raw_res.get("data", [])
-                    print(f"Done ({len(target_tokens)})")
+
+
+def compute_self_flow(holdings_today, holdings_prev, price_today):
+    """Flow tự tính = Δholdings × giá — CHÍNH XÁC cùng phương pháp Farside/mọi bên
+    tracker khác dùng (Shares Outstanding/Holdings đổi × NAV hoặc giá tài sản),
+    chỉ khác là mình tính trực tiếp từ dữ liệu holdings gốc của issuer, không qua
+    trung gian nào. Trả về None nếu thiếu bất kỳ input nào (không đoán/không giả)."""
+    if holdings_today is None or holdings_prev is None or price_today is None:
+        return None
+    if holdings_prev <= 0:
+        return None  # tránh trường hợp dữ liệu holdings cũ bị lỗi/rỗng
+    return (holdings_today - holdings_prev) * price_today
+
+
+HOLDINGS_HISTORY_KEY = "etf-holdings-history.json"
+
+def load_holdings_history(r2):
+    """{ "TICKER": {"date": "YYYY-MM-DD", "holdings": 123.45}, ... } — lưu holdings
+    của LẦN CHẠY FULL GẦN NHẤT cho mỗi ticker tự tính, dùng làm mốc "hôm qua" để
+    tính Δholdings ở lần chạy full tiếp theo."""
+    data = r2_get_json(r2, HOLDINGS_HISTORY_KEY)
+    return data if isinstance(data, dict) else {}
+
+def save_holdings_history(r2, history):
+    r2_put_json(r2, HOLDINGS_HISTORY_KEY, history, "max-age=3600")
+
+
+def run(r2):
+    now_utc=datetime.now(timezone.utc)
+    today_str=now_utc.strftime("%Y-%m-%d")
+    session=get_session()
+
+    prev_etfs={e["ticker"]:e for e in (r2_get_json(r2,"etf-flows.json") or {}).get("etfs",[])}
+    crypto_prices=load_crypto_prices()
+    holdings_history = load_holdings_history(r2)  # {"TICKER": {"date":..., "holdings":...}} của lần full trước
+
+    print("\n📈 [1/4] Nasdaq prices...")
+    nasdaq=fetch_nasdaq_all(session)
+    print(f"  → {sum(1 for v in nasdaq.values() if v.get('price'))} tickers")
+
+    daily_flows={}; full_history={}
+    if RUN_MODE=="full":
+        print("\n📊 [2/4] Farside flows (full history)...")
+        daily_flows, full_history = fetch_farside_all(session)
+        # Save full history to R2
+        if full_history:
+            r2_put_json(r2,"etf-farside-history.json",{
+                "data": full_history,
+                "updated_at": now_utc.isoformat()
+            },"max-age=3600")
+            total_rows=sum(len(v.get("rows",[])) for v in full_history.values())
+            print(f"\n  ✓ History saved: {total_rows} total rows across {len(full_history)} assets")
+    else:
+        print("⏭️  Skip Farside")
+
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise) — nguồn TỰ TÍNH flow, không qua Farside...")
+    issuer={}
+    holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
+    if RUN_MODE=="full":
+        for etf_ticker,pid in ISHARES_IDS.items():
+            u=next((e["underlying"] for e in ETF_REGISTRY if e["ticker"]==etf_ticker),"")
+            raw=fetch_ishares(session,etf_ticker,pid,crypto_prices.get(u))
+            if raw:
+                nav=nasdaq.get(etf_ticker,{}).get("price")
+                aum=raw.get("aum") or (raw["holdings"]*crypto_prices[u] if raw.get("holdings") and u in crypto_prices else None)
+                issuer[etf_ticker]={**raw,"nav":nav,"aum":aum}
+                if raw.get("holdings"): holdings_today[etf_ticker]=raw["holdings"]
+                print(f"  ✓ {etf_ticker}: AUM=${(aum or 0)/1e9:.2f}B  holdings={raw.get('holdings',0):.0f}")
+            time.sleep(0.5)
+
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("ark_fund_name"):
+                t=etf["ticker"]
+                res=fetch_ark_holdings(session, etf["ark_fund_name"], t)
+                if res:
+                    qty, as_of = res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (ARK CSV): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
                 else:
-                    print("FAILED"); return
-            except Exception as e:
-                print(f"FAILED: {e}"); return
+                    print(f"  ✗ {t}: không lấy được holdings từ ARK CSV — fallback Farside cho ticker này")
+                time.sleep(0.3)
 
-            # Dùng status từ cache (không re-fetch market data)
-            for t in target_tokens:
-                aid = t.get("alphaId")
-                if not aid: continue
-                cached_status = OLD_DATA_MAP.get(aid, {}).get(KEY_MAP["status"], "ALPHA")
-                results.append({"id": aid, "status": cached_status})
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("vaneck_slug"):
+                t=etf["ticker"]
+                res=fetch_vaneck_holdings(session, etf["vaneck_slug"], etf["vaneck_asset_word"], t)
+                if res:
+                    qty, as_of = res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ VanEck — fallback Farside cho ticker này")
+                time.sleep(3.0)  # r.jina.ai free tier giới hạn ~20 req/phút
 
-        generate_and_upload_tails(r2, target_tokens, results)
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("bitwise_domain"):
+                t=etf["ticker"]
+                res=fetch_bitwise_holdings(session, etf["bitwise_domain"], t)
+                if res:
+                    qty, as_of, site_aum = res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    # Ưu tiên AUM lấy thẳng từ site (chính xác tới đơn vị), chỉ
+                    # tính qty×giá làm dự phòng nếu site không có field AUM.
+                    aum=site_aum or (qty*crypto_prices[u] if u in crypto_prices else None)
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (Bitwise): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ Bitwise — fallback Farside cho ticker này")
+                time.sleep(0.5)
 
-    mode_label = {"full": "FULL", "market_data": "MARKET DATA", "tails_update": "TAILS"}.get(RUN_MODE, RUN_MODE)
-    print(f"🏁 DONE [{mode_label}]! Total: {time.time() - start:.1f}s")
+    print("\n🔧 [4/4] Building output...")
+    etfs=[]; totals={}
+    self_computed_count=0; farside_count=0; cached_count=0
+    for etf in ETF_REGISTRY:
+        t=etf["ticker"]; u=etf["underlying"]
+        mkt=nasdaq.get(t) or {}; iss=issuer.get(t) or {}; prev=prev_etfs.get(t) or {}
+        price=mkt.get("price")
+        nav=iss.get("nav") or (prev.get("fund") or {}).get("nav")
+        holdings=iss.get("holdings") or (prev.get("fund") or {}).get("holdings")
+        aum=iss.get("aum")
+        # Fallback AUM: live holdings × price
+        if not aum and holdings and u in crypto_prices: aum=holdings*crypto_prices[u]
+        # Fallback AUM: static on-chain × price (BTC ETFs)
+        if not aum and u=="BTC" and t in STATIC_BTC_HOLDINGS:
+            holdings=holdings or STATIC_BTC_HOLDINGS[t]
+            aum=STATIC_BTC_HOLDINGS[t]*crypto_prices.get("BTC",0)
+        # Fallback AUM: Nasdaq "Net Assets" (SOL/HYP/BNB — chưa có nguồn holdings
+        # riêng nào như BTC/ETH, nên trước đây aum luôn None → hiện $0.00B).
+        # Suy ngược holdings từ AUM/giá coin để premium & hiển thị holdings cũng có.
+        if not aum:
+            na=mkt.get("net_assets")
+            if na:
+                aum=na
+                if not holdings and u in crypto_prices and crypto_prices[u]:
+                    holdings=aum/crypto_prices[u]
+        # Fallback AUM: cache
+        if not aum: aum=(prev.get("fund") or {}).get("aum")
 
-if __name__ == "__main__":
-    fetch_data()
+        premium={"usd":price-nav,"pct":(price-nav)/nav*100} if price and nav and nav>0 else None
+
+        # ── Flow: ƯU TIÊN tự tính (Δholdings × giá coin) nếu có đủ dữ liệu, sau đó
+        # mới fallback Farside, cuối cùng mới fallback cache cũ. Đây là migration
+        # TỪNG BƯỚC khỏi Farside — ticker nào tự tính được thì KHÔNG còn phụ thuộc
+        # Farside nữa, ticker nào chưa có nguồn xác nhận thì vẫn dùng Farside như cũ.
+        flow=None
+        if etf.get("self_computed") and RUN_MODE=="full":
+            holdings_today_val = holdings_today.get(t)
+            holdings_prev_val = (holdings_history.get(t) or {}).get("holdings")
+            self_flow_usd = compute_self_flow(holdings_today_val, holdings_prev_val, crypto_prices.get(u))
+            if self_flow_usd is not None:
+                flow={"daily_usd":self_flow_usd,"is_inflow":self_flow_usd>0,"source":"self_computed","date":today_str}
+                self_computed_count+=1
+        if flow is None:
+            flow_usd=daily_flows.get(t)
+            if flow_usd is not None:
+                flow={"daily_usd":flow_usd,"is_inflow":flow_usd>0,"source":"farside","date":today_str}
+                farside_count+=1
+            elif prev.get("flow"):
+                flow=prev["flow"]
+                cached_count+=1
+
+        etfs.append({"ticker":t,"name":etf["name"],"issuer":etf["issuer"],"underlying":u,"fee":etf["fee"],
+            "market":{"price":price,"change":mkt.get("change"),"change_pct":mkt.get("change_pct"),"volume":mkt.get("volume")} if mkt else None,
+            "fund":{"nav":nav,"nav_date":iss.get("nav_date"),"shares":None,"aum":aum,"holdings":holdings,"premium":premium},
+            "flow":flow,"onchain":None})
+        totals.setdefault(u,{"aum":0.0,"flow":0.0,"count":0})
+        totals[u]["aum"]+=aum or 0
+        totals[u]["flow"]+=(flow or {}).get("daily_usd") or 0
+        totals[u]["count"]+=1
+
+    out={"etfs":etfs,"totals":totals,"run_mode":RUN_MODE,"fetched_at":now_utc.isoformat()}
+    r2_put_json(r2,"etf-flows.json",out,"max-age=120")
+    if RUN_MODE=="full": r2_put_json(r2,f"etf-history/{today_str}.json",out,"max-age=86400")
+
+    # Lưu holdings hôm nay làm mốc "hôm qua" cho lần full chạy kế tiếp
+    if RUN_MODE=="full" and holdings_today:
+        for t,qty in holdings_today.items():
+            holdings_history[t]={"date":today_str,"holdings":qty}
+        save_holdings_history(r2, holdings_history)
+
+    print("✅ Done")
+    if RUN_MODE=="full":
+        print(f"   Flow source: {self_computed_count} self-computed · {farside_count} farside · {cached_count} cached")
+    for u,t in totals.items():
+        s="+" if t["flow"]>=0 else ""
+        aum_str=f"${t['aum']/1e9:.2f}B" if t["aum"]>=1e9 else f"${t['aum']/1e6:.2f}M"
+        print(f"   {u}: AUM={aum_str}  Flow={s}${t['flow']/1e6:.1f}M  ({t['count']} ETFs)")
+
+if __name__=="__main__":
+    import time as _t; t0=_t.time()
+    print(f"⚙️  ETF Fetcher v15 — RUN_MODE={RUN_MODE}")
+    r2=get_r2(); run(r2)
+    print(f"\n🏁 Done in {_t.time()-t0:.1f}s")
