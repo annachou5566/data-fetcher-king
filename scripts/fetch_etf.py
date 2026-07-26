@@ -627,7 +627,7 @@ def fetch_21shares_aum(session, slug, ticker):
         return None
 
 
-def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector=None, screenshot_path=None):
+def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector=None, screenshot_path=None, scroll=False):
     """Render trang bằng Chromium THẬT qua Playwright — giải pháp GỐC RỄ cho các
     trang React/Next SPA (VanEck, Grayscale) mà requests/cloudscraper không lấy
     được nội dung vì cần chạy JS.
@@ -641,6 +641,11 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
     "Personalize Your Experience" của VanEck có nút kiểu "Continue"/"United
     States"/"Individual Investor" — thử bấm lần lượt, cái nào không thấy thì bỏ
     qua (không có nút đó không phải lỗi, có thể trang không hiện modal lần này).
+
+    scroll: nếu True, cuộn trang từ từ xuống hết chiều dài — nhiều trang chỉ
+    load các widget (chart, bảng holdings...) khi widget đó vào viewport
+    (lazy-load để tiết kiệm tài nguyên), nếu không cuộn thì các widget đó sẽ
+    mãi trống trơn dù trang đã "render xong" về mặt kỹ thuật.
 
     screenshot_path: nếu có, LƯU ẢNH CHỤP MÀN HÌNH đúng lúc đọc nội dung (sau khi
     đã thử bấm hết click_texts) — để biết CHÍNH XÁC Playwright đang thấy gì, thay
@@ -666,6 +671,18 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
                     page.wait_for_timeout(800)
                 except Exception:
                     pass  # không thấy nút này — bỏ qua, thử nút tiếp theo
+            if scroll:
+                try:
+                    height = page.evaluate("document.body.scrollHeight")
+                    step = 600
+                    y = 0
+                    while y < height:
+                        y += step
+                        page.evaluate(f"window.scrollTo(0, {y})")
+                        page.wait_for_timeout(400)  # đủ thời gian trigger IntersectionObserver
+                    page.evaluate("window.scrollTo(0, 0)")  # về đầu trang cho screenshot đẹp
+                except Exception as e:
+                    print(f"    Playwright: cuộn trang lỗi: {e}")
             if extra_wait_selector:
                 try:
                     page.wait_for_selector(extra_wait_selector, timeout=8000)
@@ -811,23 +828,25 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
     url = f"https://www.vaneck.com/us/en/investments/{url_slug}/"
     text = None
 
-    # 0) Playwright — render JS thật + tự bấm qua modal "Personalize Your
-    # Experience"/chọn khu vực (nguyên nhân THẬT khiến r.jina.ai cũng trượt: modal
-    # chặn trước cả khi nội dung fund load ra). Đây mới là fix gốc rễ.
+    # 0) Playwright — render JS thật, tự bấm qua modal (nếu có) + cuộn trang để
+    # trigger lazy-load. XÁC NHẬN qua ảnh chụp thật 07/2026: modal "Personalize"
+    # KHÔNG còn là vấn đề chính (Playwright đã qua được, NAV/AUM hiện đúng số
+    # thật) — vấn đề THẬT là mục "Holdings" (chứa "ETF Statistics"/"X in Trust")
+    # nằm DƯỚI màn hình đầu, chỉ load khi cuộn tới (lazy-load, giống Performance/
+    # Fees cũng trống tương tự cho tới khi cuộn qua).
     os.makedirs("debug_screenshots", exist_ok=True)
     shot_path = f"debug_screenshots/vaneck_{ticker}.png"
     pw_text = fetch_rendered_text(url,
         click_texts=["Continue","United States","Individual Investor","Accept","Agree",
                      "I Agree","Yes","Confirm","Enter","Get Started","OK","Proceed"],
-        wait_ms=3000, extra_wait_selector="text=ETF Statistics", screenshot_path=shot_path)
+        wait_ms=2000, extra_wait_selector="text=ETF Statistics", screenshot_path=shot_path, scroll=True)
     if pw_text and "ETF Statistics" not in pw_text:
-        # Playwright CHẠY được nhưng modal vẫn chưa đóng — click_texts đoán sai.
-        # In ra để biết CHÍNH XÁC chữ trên nút thật, VÀ đã lưu ảnh chụp thật lúc
+        # Vẫn chưa thấy dữ liệu Holdings dù đã cuộn — có thể cần cuộn chậm hơn/
+        # chờ lâu hơn nữa. In ra để biết CHÍNH XÁC, VÀ đã lưu ảnh chụp thật lúc
         # đó vào debug_screenshots/ — workflow .yml sẽ upload làm artifact để
         # xem trực tiếp, không cần đoán mù qua text nữa.
-        print(f"    VanEck (Playwright) {ticker}: chạy được nhưng modal chưa đóng | đã lưu ảnh {shot_path} | 300 ký tự đầu: {pw_text[:300]!r}")
-    else:
-        text = pw_text
+        print(f"    VanEck (Playwright) {ticker}: đã cuộn nhưng vẫn chưa thấy Holdings | đã lưu ảnh {shot_path} | 300 ký tự đầu: {pw_text[:300]!r}")
+    text = pw_text  # dùng luôn dù chưa chắc có Holdings — vẫn có thể có AUM
 
     # 1) r.jina.ai — render JS qua proxy (dự phòng nếu chưa cài Playwright)
     if not text:
@@ -851,7 +870,7 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
             print(f"    VanEck direct lỗi ({ticker}): {e}")
 
     if not text:
-        print(f"    VanEck: cả r.jina.ai lẫn fetch trực tiếp đều thất bại cho {ticker}")
+        print(f"    VanEck: cả Playwright/r.jina.ai lẫn fetch trực tiếp đều thất bại cho {ticker}")
         return None
 
     # Chuẩn hoá: \xa0 (nbsp) → space thường; dọn ký tự markdown (*_#|) mà
@@ -869,11 +888,20 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
         print(f"    VanEck: không tìm thấy '{asset_word} in Trust' trên trang {ticker}")
         print(f"      → độ dài text: {len(text)} ký tự | có 'ETF Statistics': {has_marker} | có '{asset_word}': {has_word}")
         print(f"      → 200 ký tự đầu: {snippet!r}")
+        # Dự phòng: không có Holdings (coin quantity) thì vẫn thử lấy AUM qua
+        # "Total Net Assets" — mục này KHÔNG bị lazy-load (nằm ngay đầu trang,
+        # xác nhận qua ảnh chụp thật 07/2026 luôn hiện số đúng dù Holdings trống).
+        aum_m = re.search(r"TOTAL NET ASSETS\D{0,20}?\$?\s*([\d,]+\.?\d*[BMKT]?)", text, re.IGNORECASE)
+        if aum_m:
+            aum = parse_money(aum_m.group(1))
+            if aum:
+                print(f"    VanEck: không có Holdings nhưng lấy được Total Net Assets = ${aum:,.0f} cho {ticker}")
+                return (None, None, aum)
         return None
     qty = float(m.group(1).replace(",", ""))
     date_m = re.search(r"ETF Statistics as of (\d{2}/\d{2}/\d{4})", text)
     as_of = date_m.group(1) if date_m else None
-    return (qty, as_of)
+    return (qty, as_of, None)
 
 
 
@@ -965,12 +993,24 @@ def run(r2):
                 t=etf["ticker"]
                 res=fetch_vaneck_holdings(session, etf["vaneck_slug"], etf["vaneck_asset_word"], t)
                 if res:
-                    qty, as_of = res
-                    holdings_today[t]=qty
+                    qty, as_of, site_aum = res
                     u=etf["underlying"]
-                    aum=qty*crypto_prices[u] if u in crypto_prices else None
-                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                    if qty:
+                        holdings_today[t]=qty
+                        aum=qty*crypto_prices[u] if u in crypto_prices else None
+                        issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                        print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                    elif site_aum:
+                        # Không lấy được coin quantity (Holdings bị lazy-load
+                        # chưa trigger được) nhưng có Total Net Assets thật →
+                        # suy ngược holdings ước lượng, vẫn tốt hơn Farside vì
+                        # AUM lấy thẳng từ VanEck, không qua bên thứ 3.
+                        qty_est=site_aum/crypto_prices[u] if u in crypto_prices and crypto_prices[u] else None
+                        if qty_est: holdings_today[t]=qty_est
+                        issuer[t]={"holdings":qty_est,"aum":site_aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                        print(f"  ✓ {t} (VanEck, chỉ có AUM): AUM={fmt_aum(site_aum)}  holdings≈{(qty_est or 0):.2f}")
+                    else:
+                        print(f"  ✗ {t}: không lấy được holdings/AUM từ VanEck — fallback Farside cho ticker này")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ VanEck — fallback Farside cho ticker này")
                 time.sleep(3.0)  # r.jina.ai free tier giới hạn ~20 req/phút
