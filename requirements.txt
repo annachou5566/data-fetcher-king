@@ -4,5 +4,4 @@ curl-cffi>=0.6.0
 cloudscraper
 boto3
 beautifulsoup4
-pip install playwright
-playwright install --with-deps chromium
+playwright
