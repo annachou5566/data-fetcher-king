@@ -1,5 +1,5 @@
 """
-scripts/fetch_etf.py  v17
+scripts/fetch_etf.py  v18
 - Lấy TOÀN BỘ lịch sử từ Farside (tất cả ngày từ ngày ra mắt) — CHỈ CÒN dùng làm
   fallback cuối cùng cho các ticker chưa tìm được nguồn gốc rễ (issuer/exchange),
   KHÔNG còn là nguồn chính.
@@ -7,18 +7,23 @@ scripts/fetch_etf.py  v17
 - self_computed = TỰ TÍNH Flow (Δholdings×price), lấy thẳng từ issuer, không qua
   Farside/bên thứ 3 nào:
     IBIT/ETHA (iShares API) · ARKB (ARK CSV) · BITB/ETHW/BSOL/BHYP (site riêng
-    Bitwise, SSR tĩnh) · TSOL/THYP (21shares.com, AUM thật) · GBTC/BTC/ETHE/HYPG
-    (Grayscale, cần Playwright vì SPA) · HODL/ETHV/VSOL/VBNB (VanEck, cần
-    Playwright vì SPA + modal chặn khu vực)
-- YÊU CẦU CÀI THÊM để VanEck/Grayscale hoạt động (không có sẵn trong requirements
-  cũ): pip install playwright && playwright install --with-deps chromium
-  Nếu chưa cài, code tự fallback sang r.jina.ai rồi Farside, KHÔNG crash.
+    Bitwise, SSR tĩnh, ĐÃ XÁC NHẬN hoạt động) · TSOL/THYP (21shares.com, AUM
+    thật, ĐÃ XÁC NHẬN hoạt động)
+- VanEck (HODL/ETHV/VSOL/VBNB): thử Playwright tự bấm qua modal "Personalize
+  Your Experience" nhưng click_texts đoán chưa đúng nút thật — vẫn fallback
+  Farside. Cần biết chính xác text nút trên trang thật để sửa (xem log
+  "VanEck (Playwright) ...: chạy được nhưng modal chưa đóng").
+- Grayscale (GBTC/BTC/ETHE/HYPG/GSOL): ĐÃ TẮT hẳn, không thử nữa — Playwright
+  bị chặn bởi "Vercel Security Checkpoint" (bot-detection chuyên dụng, không
+  phải chỉ JS chưa load). Quyết định KHÔNG lách qua loại chặn này. Vẫn dùng
+  Farside cho 5 ticker này.
 - CETH: đánh dấu inactive (quỹ đã ngừng hoạt động, xác nhận qua etfdb.com).
-- GSOL: vẫn dùng Farside — là sản phẩm OTC (không phải ETP niêm yết sàn), chưa
-  tìm được trang "holdings" công khai như các quỹ khác.
-- AUM: iShares live → ARK/Bitwise/VanEck/Grayscale (holdings thật) → 21Shares
-  (AUM thật) → static on-chain (BTC ETF còn lại) → Nasdaq "Net Assets" (SOL/HYP/
-  BNB còn lại) → cache cũ.
+- YÊU CẦU CÀI THÊM để VanEck hoạt động khi tìm đúng nút: pip install playwright
+  && playwright install --with-deps chromium (đã có trong requirements.txt +
+  workflow .yml, chỉ chạy khi RUN_MODE=full).
+- AUM: iShares live → ARK/Bitwise/VanEck (holdings thật) → 21Shares (AUM thật)
+  → static on-chain (BTC ETF còn lại) → Nasdaq "Net Assets" (SOL/HYP/BNB còn
+  lại) → cache cũ.
 """
 
 import json, os, re, time, csv, io
@@ -94,7 +99,7 @@ ETF_REGISTRY = [
     # nào giữa chừng nếu 1 nguồn tự tính bị lỗi/thay đổi định dạng.
     {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares","self_computed":True},
     {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
-    {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq","self_computed":True,"grayscale_url":"https://etfs.grayscale.com/gbtc"},
+    {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
     {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bitbetf.com"},
     {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"bitcoin-etf-hodl","vaneck_asset_word":"Bitcoin"},
@@ -103,10 +108,10 @@ ETF_REGISTRY = [
     {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
-    {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq","self_computed":True,"grayscale_url":"https://etfs.grayscale.com/btc"},
+    {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
     {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares","self_computed":True},
     {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
-    {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq","self_computed":True,"grayscale_url":"https://etfs.grayscale.com/ethe"},
+    {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
     {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"ethwetf.com"},
     {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"ethereum-etf-ethv","vaneck_asset_word":"Ether"},
     # CETH: XÁC NHẬN đã ngừng hoạt động (etfdb.com: "This ETF is no longer active",
@@ -134,7 +139,7 @@ ETF_REGISTRY = [
     # Hyperliquid ETFs — xác nhận issuer/fee qua search 07/2026
     {"ticker":"BHYP","name":"Bitwise Hyperliquid ETF","issuer":"Bitwise","underlying":"HYP","fee":0.34,"src":"nasdaq","self_computed":True,"bitwise_domain":"bhypetf.com"},
     {"ticker":"THYP","name":"21Shares Hyperliquid ETF","issuer":"21Shares","underlying":"HYP","fee":0.30,"src":"nasdaq","self_computed":True,"shares21_slug":"thyp"},
-    {"ticker":"HYPG","name":"Grayscale Hyperliquid Staking ETF","issuer":"Grayscale","underlying":"HYP","fee":0.29,"src":"nasdaq","self_computed":True,"grayscale_url":"https://etfs.grayscale.com/hypg"},
+    {"ticker":"HYPG","name":"Grayscale Hyperliquid Staking ETF","issuer":"Grayscale","underlying":"HYP","fee":0.29,"src":"nasdaq"},
     # BNB ETF — mới thêm, hiện chỉ có VanEck (VBNB). self_computed đã VERIFY THẬT
     # bằng cách fetch trực tiếp trang https://www.vaneck.com/us/en/investments/
     # bnb-etf-vbnb/ — có đúng bảng "ETF Statistics" với dòng "BNB in Trust:
@@ -143,6 +148,13 @@ ETF_REGISTRY = [
     {"ticker":"VBNB","name":"VanEck BNB ETF","issuer":"VanEck","underlying":"BNB","fee":0.39,"src":"nasdaq","self_computed":True,"vaneck_slug":"bnb-etf-vbnb","vaneck_asset_word":"BNB"},
 ]
 ETF_TICKERS = [e["ticker"] for e in ETF_REGISTRY if not e.get("inactive")]
+
+def fmt_aum(aum):
+    """Định dạng AUM: dùng $B nếu ≥1B, còn lại dùng $M — tránh hiện '$0.00B' gây
+    hiểu lầm mất dữ liệu cho các quỹ nhỏ (vd VBNB ~$2.2M, TSOL ~$3.1M)."""
+    aum = aum or 0
+    return f"${aum/1e9:.2f}B" if aum >= 1e9 else f"${aum/1e6:.2f}M"
+
 
 def parse_num(v):
     if v is None or str(v).strip() in ("","N/A","--","null","None"): return None
@@ -792,11 +804,16 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
     # 0) Playwright — render JS thật + tự bấm qua modal "Personalize Your
     # Experience"/chọn khu vực (nguyên nhân THẬT khiến r.jina.ai cũng trượt: modal
     # chặn trước cả khi nội dung fund load ra). Đây mới là fix gốc rễ.
-    text = fetch_rendered_text(url,
+    pw_text = fetch_rendered_text(url,
         click_texts=["Continue","United States","Individual Investor","Accept","Proceed"],
         wait_ms=3000, extra_wait_selector="text=ETF Statistics")
-    if text and "ETF Statistics" not in text:
-        text = None  # vẫn bị chặn bởi modal khác/chưa bấm đúng nút — coi như fail, rơi xuống fallback
+    if pw_text and "ETF Statistics" not in pw_text:
+        # Playwright CHẠY được nhưng modal vẫn chưa đóng — click_texts đoán sai.
+        # In ra để biết CHÍNH XÁC chữ trên nút thật (khác gì với "Continue"/
+        # "United States"/"Individual Investor"/"Accept"/"Proceed" đã thử).
+        print(f"    VanEck (Playwright) {ticker}: chạy được nhưng modal chưa đóng | 300 ký tự đầu: {pw_text[:300]!r}")
+    else:
+        text = pw_text
 
     # 1) r.jina.ai — render JS qua proxy (dự phòng nếu chưa cài Playwright)
     if not text:
@@ -899,7 +916,7 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Grayscale) — nguồn TỰ TÍNH flow, không qua Farside...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
     holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
@@ -911,7 +928,7 @@ def run(r2):
                 aum=raw.get("aum") or (raw["holdings"]*crypto_prices[u] if raw.get("holdings") and u in crypto_prices else None)
                 issuer[etf_ticker]={**raw,"nav":nav,"aum":aum}
                 if raw.get("holdings"): holdings_today[etf_ticker]=raw["holdings"]
-                print(f"  ✓ {etf_ticker}: AUM=${(aum or 0)/1e9:.2f}B  holdings={raw.get('holdings',0):.0f}")
+                print(f"  ✓ {etf_ticker}: AUM={fmt_aum(aum)}  holdings={raw.get('holdings',0):.0f}")
             time.sleep(0.5)
 
         for etf in ETF_REGISTRY:
@@ -924,7 +941,7 @@ def run(r2):
                     u=etf["underlying"]
                     aum=qty*crypto_prices[u] if u in crypto_prices else None
                     issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (ARK CSV): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                    print(f"  ✓ {t} (ARK CSV): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ ARK CSV — fallback Farside cho ticker này")
                 time.sleep(0.3)
@@ -939,7 +956,7 @@ def run(r2):
                     u=etf["underlying"]
                     aum=qty*crypto_prices[u] if u in crypto_prices else None
                     issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                    print(f"  ✓ {t} (VanEck): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ VanEck — fallback Farside cho ticker này")
                 time.sleep(3.0)  # r.jina.ai free tier giới hạn ~20 req/phút
@@ -956,7 +973,7 @@ def run(r2):
                     # tính qty×giá làm dự phòng nếu site không có field AUM.
                     aum=site_aum or (qty*crypto_prices[u] if u in crypto_prices else None)
                     issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (Bitwise): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
+                    print(f"  ✓ {t} (Bitwise): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ Bitwise — fallback Farside cho ticker này")
                 time.sleep(0.5)
@@ -974,25 +991,32 @@ def run(r2):
                     qty=aum/crypto_prices[u] if u in crypto_prices and crypto_prices[u] else None
                     if qty: holdings_today[t]=qty
                     issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (21Shares): AUM=${(aum or 0)/1e9:.2f}B  holdings≈{(qty or 0):.2f}")
+                    print(f"  ✓ {t} (21Shares): AUM={fmt_aum(aum)}  holdings≈{(qty or 0):.2f}")
                 else:
                     print(f"  ✗ {t}: không lấy được AUM từ 21Shares — fallback Farside cho ticker này")
                 time.sleep(0.5)
 
-        for etf in ETF_REGISTRY:
-            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("grayscale_url"):
-                t=etf["ticker"]
-                res=fetch_grayscale_holdings(session, etf["grayscale_url"], t)
-                if res:
-                    qty, as_of = res
-                    holdings_today[t]=qty
-                    u=etf["underlying"]
-                    aum=qty*crypto_prices[u] if u in crypto_prices else None
-                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (Grayscale): holdings={qty:.2f}  AUM=${(aum or 0)/1e9:.2f}B")
-                else:
-                    print(f"  ✗ {t}: không lấy được holdings từ Grayscale — fallback Farside cho ticker này")
-                time.sleep(1.0)
+        # Grayscale: ĐÃ TẮT — thử qua Playwright thì gặp "Vercel Security
+        # Checkpoint / Failed to verify your browser" (xác nhận qua log thật
+        # 07/2026). Đây là hệ thống CHẶN BOT chuyên dụng, chủ động phát hiện
+        # trình duyệt tự động, khác hẳn VanEck (chỉ là modal giao diện thường).
+        # Quyết định: KHÔNG cố lách qua bot-detection chuyên biệt — không tôn
+        # trọng ranh giới mà Grayscale cố tình dựng lên để chặn truy cập tự
+        # động. GBTC/BTC/ETHE/HYPG giữ nguyên dùng Farside như trước.
+        # for etf in ETF_REGISTRY:
+        #     if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("grayscale_url"):
+        #         t=etf["ticker"]
+        #         res=fetch_grayscale_holdings(session, etf["grayscale_url"], t)
+        #         if res:
+        #             qty, as_of = res
+        #             holdings_today[t]=qty
+        #             u=etf["underlying"]
+        #             aum=qty*crypto_prices[u] if u in crypto_prices else None
+        #             issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+        #             print(f"  ✓ {t} (Grayscale): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+        #         else:
+        #             print(f"  ✗ {t}: không lấy được holdings từ Grayscale — fallback Farside cho ticker này")
+        #         time.sleep(1.0)
 
     print("\n🔧 [4/4] Building output...")
     etfs=[]; totals={}
