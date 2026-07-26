@@ -28,7 +28,9 @@ permissions:
 jobs:
   fetch-etf:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15  # tăng từ 10 → 15: RUN_MODE=full giờ render thêm ~8 trang
+                         # bằng Chromium thật (VanEck+Grayscale qua Playwright),
+                         # chậm hơn hẳn fetch tĩnh thường (mỗi trang ~5-10s)
 
     steps:
       - name: Checkout
@@ -38,16 +40,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
 
       - name: Determine RUN_MODE
         id: mode
@@ -65,6 +57,35 @@ jobs:
           else
             echo "mode=price" >> $GITHUB_OUTPUT
           fi
+        # Đặt bước này SỚM (ngay sau checkout, trước cả install dependencies) vì
+        # bước cài Chromium bên dưới cần biết mode TRƯỚC để quyết định có cài hay
+        # không — nếu để sau như cũ sẽ không có thông tin này kịp lúc.
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Chromium chỉ cần cho VanEck/Grayscale (self_computed qua Playwright) —
+      # 2 nguồn này CHỈ được gọi khi RUN_MODE=full (xem run() trong fetch_etf.py:
+      # "if RUN_MODE=='full':"). Lịch 'price' chạy mỗi 30 phút trong giờ giao
+      # dịch (rất nhiều lần/ngày) KHÔNG cần Chromium — nếu cài ở mọi lần chạy sẽ
+      # tốn ~300MB tải về + thời gian cài đặt một cách lãng phí, không dùng đến.
+      - name: Cache Playwright browsers
+        if: steps.mode.outputs.mode == 'full'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright Chromium
+        if: steps.mode.outputs.mode == 'full'
+        run: playwright install --with-deps chromium
 
       - name: Run ETF Fetcher
         env:
