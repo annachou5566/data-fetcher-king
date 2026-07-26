@@ -880,7 +880,13 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
     text = text.replace("\xa0", " ")
     text = re.sub(r"[*_#|]", " ", text)
     text = re.sub(r"\s+", " ", text)
-    m = re.search(rf"{asset_word}\s+in\s+Trust\D{{0,20}}?([\d,]+\.?\d*)", text, re.IGNORECASE)
+    # Regex tổng quát "<từ bất kỳ> in Trust" thay vì cố định asset_word — XÁC
+    # NHẬN qua ảnh chụp thật 07/2026: VanEck ghi nhãn KHÔNG NHẤT QUÁN giữa các
+    # quỹ! HODL/ETHV/VBNB dùng tên coin ("Bitcoin/Ether/BNB in Trust") nhưng
+    # VSOL lại dùng TICKER ("VSOL in Trust", không phải "Solana in Trust") —
+    # asset_word cố định đã trượt vì lý do này. Mỗi trust chỉ có đúng 1 dòng
+    # holding thật nên regex tổng quát không rủi ro khớp nhầm.
+    m = re.search(r"[A-Za-z]+\s+in\s+Trust\D{0,20}?([\d,]+\.?\d*)", text, re.IGNORECASE)
     if not m:
         has_marker = "ETF Statistics" in text
         has_word = asset_word.lower() in text.lower()
