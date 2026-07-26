@@ -627,7 +627,7 @@ def fetch_21shares_aum(session, slug, ticker):
         return None
 
 
-def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector=None):
+def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector=None, screenshot_path=None):
     """Render trang bằng Chromium THẬT qua Playwright — giải pháp GỐC RỄ cho các
     trang React/Next SPA (VanEck, Grayscale) mà requests/cloudscraper không lấy
     được nội dung vì cần chạy JS.
@@ -641,6 +641,11 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
     "Personalize Your Experience" của VanEck có nút kiểu "Continue"/"United
     States"/"Individual Investor" — thử bấm lần lượt, cái nào không thấy thì bỏ
     qua (không có nút đó không phải lỗi, có thể trang không hiện modal lần này).
+
+    screenshot_path: nếu có, LƯU ẢNH CHỤP MÀN HÌNH đúng lúc đọc nội dung (sau khi
+    đã thử bấm hết click_texts) — để biết CHÍNH XÁC Playwright đang thấy gì, thay
+    vì đoán mù qua text thô. Ảnh lưu vào thư mục này sẽ được workflow .yml upload
+    làm artifact để bạn tải về xem trực tiếp.
 
     YÊU CẦU CÀI ĐẶT (không có sẵn trong sandbox của tôi, bạn cần thêm vào CI):
         pip install playwright
@@ -667,6 +672,11 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
                 except Exception:
                     pass
             page.wait_for_timeout(wait_ms)
+            if screenshot_path:
+                try:
+                    page.screenshot(path=screenshot_path, full_page=True)
+                except Exception as e:
+                    print(f"    Playwright: chụp màn hình lỗi ({screenshot_path}): {e}")
             text = page.inner_text("body")
             browser.close()
             return text
@@ -804,14 +814,18 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
     # 0) Playwright — render JS thật + tự bấm qua modal "Personalize Your
     # Experience"/chọn khu vực (nguyên nhân THẬT khiến r.jina.ai cũng trượt: modal
     # chặn trước cả khi nội dung fund load ra). Đây mới là fix gốc rễ.
+    os.makedirs("debug_screenshots", exist_ok=True)
+    shot_path = f"debug_screenshots/vaneck_{ticker}.png"
     pw_text = fetch_rendered_text(url,
-        click_texts=["Continue","United States","Individual Investor","Accept","Proceed"],
-        wait_ms=3000, extra_wait_selector="text=ETF Statistics")
+        click_texts=["Continue","United States","Individual Investor","Accept","Agree",
+                     "I Agree","Yes","Confirm","Enter","Get Started","OK","Proceed"],
+        wait_ms=3000, extra_wait_selector="text=ETF Statistics", screenshot_path=shot_path)
     if pw_text and "ETF Statistics" not in pw_text:
         # Playwright CHẠY được nhưng modal vẫn chưa đóng — click_texts đoán sai.
-        # In ra để biết CHÍNH XÁC chữ trên nút thật (khác gì với "Continue"/
-        # "United States"/"Individual Investor"/"Accept"/"Proceed" đã thử).
-        print(f"    VanEck (Playwright) {ticker}: chạy được nhưng modal chưa đóng | 300 ký tự đầu: {pw_text[:300]!r}")
+        # In ra để biết CHÍNH XÁC chữ trên nút thật, VÀ đã lưu ảnh chụp thật lúc
+        # đó vào debug_screenshots/ — workflow .yml sẽ upload làm artifact để
+        # xem trực tiếp, không cần đoán mù qua text nữa.
+        print(f"    VanEck (Playwright) {ticker}: chạy được nhưng modal chưa đóng | đã lưu ảnh {shot_path} | 300 ký tự đầu: {pw_text[:300]!r}")
     else:
         text = pw_text
 
