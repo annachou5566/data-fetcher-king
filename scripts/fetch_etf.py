@@ -108,7 +108,7 @@ ETF_REGISTRY = [
     # TỪNG BƯỚC, không phải xoá Farside 1 lần, để không bao giờ bị mất dữ liệu quỹ
     # nào giữa chừng nếu 1 nguồn tự tính bị lỗi/thay đổi định dạng.
     {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares","self_computed":True},
-    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FBTC"},
     {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
     {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bitbetf.com"},
@@ -120,7 +120,7 @@ ETF_REGISTRY = [
     {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
     {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
     {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares","self_computed":True},
-    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
+    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FETH"},
     {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
     {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"ethwetf.com"},
     {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"ethereum-etf-ethv","vaneck_asset_word":"Ether"},
@@ -136,7 +136,7 @@ ETF_REGISTRY = [
     # Solana ETFs — xác nhận issuer/fee qua search 07/2026
     {"ticker":"BSOL","name":"Bitwise Solana Staking ETF","issuer":"Bitwise","underlying":"SOL","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bsoletf.com"},
     {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq","self_computed":True,"vaneck_slug":"solana-etf-vsol","vaneck_asset_word":"Solana"},
-    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq"},
+    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FSOL"},
     {"ticker":"TSOL","name":"21Shares Solana ETF","issuer":"21Shares","underlying":"SOL","fee":0.21,"src":"nasdaq","self_computed":True,"shares21_slug":"tsol"},
     {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/47315/SINGLCLASS/franklin-solana-etf/SOEZ"},
     # GSOL: KHÁC cấu trúc — xác nhận qua Grayscale tweet chính thức "GSOL is not
@@ -712,6 +712,45 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
         return None
 
 
+def fetch_fidelity_holdings(session, symbol, ticker):
+    """⚠️ CHƯA XÁC MINH bằng Playwright thật (chỉ mới xác nhận qua nội dung
+    user tự paste từ trình duyệt thật, KHÔNG phải qua fetch tự động của tôi).
+
+    digital.fidelity.com/prgw/digital/research/quote/dashboard/summary — trang
+    quote công khai (không cần login để xem, chỉ cần login mới có real-time
+    thay vì delayed 15p). User xác nhận trang có sẵn:
+      "Total bitcoin in fund — As of Jul-24-2026: 172,278.8049"
+    (đúng số, đúng format, có ngày cập nhật — đây LÀ nguồn gốc rễ thật của
+    Fidelity, khác với kết luận sai trước đó của tôi rằng Fidelity không công
+    bố coin count).
+
+    Đã xác nhận qua fetch trực tiếp: trang là React SPA (fetch tĩnh chỉ ra
+    shell rỗng, không có số liệu) — cần Playwright để render JS ra số thật,
+    giống VanEck/Franklin/Invesco.
+
+    Field tên có thể khác nhau theo coin — dùng regex tổng quát "Total <coin>
+    in fund" (không cố định "bitcoin") để không lặp lỗi ghi nhãn không nhất
+    quán đã gặp trước đây (VanEck/VSOL dùng "VSOL in Trust" thay vì "Solana").
+    """
+    url = f"https://digital.fidelity.com/prgw/digital/research/quote/dashboard/summary?symbol={symbol}"
+    os.makedirs("debug_screenshots", exist_ok=True)
+    text = fetch_rendered_text(url, wait_ms=2500, scroll=True,
+        screenshot_path=f"debug_screenshots/fidelity_{ticker}.png")
+    if not text:
+        print(f"    Fidelity: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
+        return None
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text)
+    m = re.search(r"Total\s+[A-Za-z]+\s+in\s+fund\D{0,30}?([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if not m:
+        snippet = text[:300]
+        print(f"    Fidelity: không tìm thấy 'Total <coin> in fund' trên trang {ticker}")
+        print(f"      → độ dài trang: {len(text)} ký tự | 300 ký tự đầu: {snippet!r}")
+        return None
+    qty = float(m.group(1).replace(",", ""))
+    return (qty, None)
+
+
 def fetch_franklin_holdings(session, url, ticker):
     """✅ ĐÃ XÁC NHẬN hoạt động qua log thật 07/2026 (EZBC/EZET/SOEZ đều lấy được
     holdings ngay lần thử đầu tiên, không có lỗi).
@@ -1039,7 +1078,7 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin + Invesco) — nguồn TỰ TÍNH flow, không qua Farside...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin + Invesco + Fidelity thử nghiệm) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
     holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
@@ -1162,6 +1201,25 @@ def run(r2):
                     print(f"  ✓ {t} (Invesco): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
                 else:
                     print(f"  ✗ {t}: không lấy được holdings từ Invesco — fallback Farside cho ticker này")
+                time.sleep(1.0)
+
+        # ⚠️ Fidelity — CHƯA XÁC MINH bằng Playwright thật của tôi (chỉ mới xác
+        # nhận qua nội dung user tự paste từ trình duyệt thật). robots.txt
+        # fidelity.com (domain chính) không chặn path "research/quote" —
+        # chưa rõ digital.fidelity.com (subdomain) có policy riêng khác không.
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("fidelity_symbol"):
+                t=etf["ticker"]
+                res=fetch_fidelity_holdings(session, etf["fidelity_symbol"], t)
+                if res:
+                    qty, as_of=res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (Fidelity): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ Fidelity — fallback Farside cho ticker này")
                 time.sleep(1.0)
 
         # Grayscale: ĐÃ TẮT — thử qua Playwright thì gặp "Vercel Security
