@@ -984,16 +984,75 @@ def _first_occurrence_ids(events):
     lần đầu tiên của 1 symbol có thể ĐÃ được xử lý xong từ trước (không
     còn trong todo nữa), trong khi đợt sau (P2) mới là cái đang cần xử
     lý — vẫn cần biết nó KHÔNG PHẢI lần đầu để không áp nhầm listingTime.
+
+    [SỬA] BUG THẬT phát hiện qua "LAB": event loại "tge" (Token Generation
+    Event — phát hành/bán riêng token) có thể xảy ra RẤT LÂU TRƯỚC khi
+    token thật sự lên Alpha (đã xác minh: LAB có TGE ngày 14/10/2025,
+    nhưng mãi tới ~10/03/2026 mới lên Alpha — cách nhau gần 5 tháng).
+    Trước đây coi "sớm nhất theo ngày" = "lần list đầu", nên TGE (luôn
+    sớm nhất) bị NHẦM là lần list đầu, bị ghi đè ngày thật (14/10/2025)
+    bằng listingTime của Binance (~10/03/2026) — trùng khớp y hệt ngày
+    của sự kiện Airdrop, khiến 2 event khác nhau hiện CÙNG 1 NGÀY trên
+    frontend dù dữ liệu gốc có 2 ngày khác nhau hoàn toàn.
+
+    → TGE không bao giờ được coi là "lần list đầu" — luôn loại khỏi diện
+    này, dùng đúng ngày riêng của nó (không bị ghi đè bởi listingTime).
+    "Lần đầu" giờ chỉ xét trong số các event KHÔNG PHẢI TGE (grab/claim/
+    airdrop — các loại thật sự liên quan tới việc lên Alpha).
     """
     earliest = {}
     for e in events:
         sym = (e.get("symbol") or e.get("token") or "").upper()
         if not sym:
             continue
+        event_type = (e.get("event_type") or e.get("type") or "").lower()
+        if event_type == "tge":
+            continue  # TGE không liên quan tới ngày lên Alpha — luôn giữ nguyên ngày riêng
         d = (e.get("event_time") or e.get("date") or "")
         if sym not in earliest or d < earliest[sym][0]:
             earliest[sym] = (d, e)
     return {id(v[1]) for v in earliest.values()}
+
+
+def invalidate_wrong_tge_dates(events):
+    """
+    [MỚI] Dọn dữ liệu ĐÃ TÍNH SAI bởi đúng bug vừa tìm ra ở "LAB": TGE
+    (Token Generation Event) trước đây có thể bị nhầm là "lần list Alpha
+    đầu tiên" (vì luôn xảy ra sớm nhất theo ngày), khiến ngày thật của nó
+    bị GHI ĐÈ bằng listingTime của Binance — trùng hệt ngày của sự kiện
+    Airdrop/claim thật sự, dù 2 event hoàn toàn khác nhau và cách nhau
+    có thể tới vài tháng (LAB: TGE 14/10/2025, Alpha listing ~10/03/2026).
+
+    Không dùng chung cờ _multiround_checked với invalidate_multi_round_
+    listing_prices() — cờ đó đã được set (=True) từ TRƯỚC KHI có fix này,
+    nên sẽ bị bỏ qua nếu tái sử dụng. Cần cờ RIÊNG cho đúng bug này.
+
+    Phát hiện: event type="tge" có listing_price.date KHÁC với ngày gốc
+    (event_time/date) của chính nó — đây là bằng chứng rõ ràng nó đã bị
+    ghi đè bằng listingTime của 1 event khác (chỉ xảy ra do bug, TGE thật
+    ra không bao giờ nên đổi ngày so với ngày gốc).
+    """
+    invalidated = 0
+    for e in events:
+        if e.get("_tge_date_checked"):
+            continue
+        e["_tge_date_checked"] = True
+        event_type = (e.get("event_type") or e.get("type") or "").lower()
+        if event_type != "tge":
+            continue
+        lp = e.get("listing_price")
+        if not lp or not isinstance(lp, dict) or not lp.get("date"):
+            continue
+        own_date = (e.get("event_time") or e.get("date") or "")[:10]
+        if own_date and lp["date"] != own_date:
+            sym = e.get("symbol") or e.get("token") or "?"
+            print(f"  [invalidate-tge] {sym}: TGE có listing_price.date={lp['date']} nhưng ngày gốc={own_date} "
+                  f"— xoá để tính lại đúng ngày TGE thật")
+            e["listing_price"] = None
+            e["ath_since_listing_price"] = None
+            e["ath_since_listing_date"] = None
+            invalidated += 1
+    return invalidated
 
 
 def invalidate_multi_round_listing_prices(events):
@@ -1456,6 +1515,11 @@ def main():
     if at_risk_count:
         print(f"   [invalidate] Phát hiện {at_risk_count} event có nguy cơ dính bug ranh giới ngày VWAP "
               f"(listingTime không canh nửa đêm UTC) — đã xoá giá cũ để tính lại bằng logic đã sửa")
+
+    tge_date_count = invalidate_wrong_tge_dates(all_events)
+    if tge_date_count:
+        print(f"   [invalidate-tge] Phát hiện {tge_date_count} event loại TGE bị ghi đè sai ngày "
+              f"(trùng ngày với event Alpha-listing khác) — đã xoá giá cũ để tính lại đúng ngày TGE thật")
 
     multiround_count = invalidate_multi_round_listing_prices(all_events)
     if multiround_count:
