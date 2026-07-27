@@ -669,47 +669,55 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
     """
     if not HAS_PLAYWRIGHT:
         return None
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page(user_agent=FAKE_UA)
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(1500)
-            for txt in (click_texts or []):
-                try:
-                    page.get_by_text(txt, exact=False).first.click(timeout=2000)
-                    page.wait_for_timeout(800)
-                except Exception:
-                    pass  # không thấy nút này — bỏ qua, thử nút tiếp theo
-            if scroll:
-                try:
-                    height = page.evaluate("document.body.scrollHeight")
-                    step = 600
-                    y = 0
-                    while y < height:
-                        y += step
-                        page.evaluate(f"window.scrollTo(0, {y})")
-                        page.wait_for_timeout(400)  # đủ thời gian trigger IntersectionObserver
-                    page.evaluate("window.scrollTo(0, 0)")  # về đầu trang cho screenshot đẹp
-                except Exception as e:
-                    print(f"    Playwright: cuộn trang lỗi: {e}")
-            if extra_wait_selector:
-                try:
-                    page.wait_for_selector(extra_wait_selector, timeout=8000)
-                except Exception:
-                    pass
-            page.wait_for_timeout(wait_ms)
-            if screenshot_path:
-                try:
-                    page.screenshot(path=screenshot_path, full_page=True)
-                except Exception as e:
-                    print(f"    Playwright: chụp màn hình lỗi ({screenshot_path}): {e}")
-            text = page.inner_text("body")
-            browser.close()
-            return text
-    except Exception as e:
-        print(f"    Playwright lỗi ({url}): {e}")
-        return None
+    # Thử 2 lần: lần 1 bình thường, lần 2 (nếu lần 1 lỗi kết nối kiểu
+    # ERR_HTTP2_PROTOCOL_ERROR — xác nhận qua log thật với Fidelity 07/2026)
+    # tắt hẳn HTTP/2, buộc dùng HTTP/1.1 — 1 số server/WAF không tương thích
+    # HTTP/2 với Chromium headless dù trình duyệt thật vẫn vào bình thường.
+    for attempt, extra_args in enumerate([[], ["--disable-http2"]]):
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=extra_args)
+                page = browser.new_page(user_agent=FAKE_UA)
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(1500)
+                for txt in (click_texts or []):
+                    try:
+                        page.get_by_text(txt, exact=False).first.click(timeout=2000)
+                        page.wait_for_timeout(800)
+                    except Exception:
+                        pass  # không thấy nút này — bỏ qua, thử nút tiếp theo
+                if scroll:
+                    try:
+                        height = page.evaluate("document.body.scrollHeight")
+                        step = 600
+                        y = 0
+                        while y < height:
+                            y += step
+                            page.evaluate(f"window.scrollTo(0, {y})")
+                            page.wait_for_timeout(400)  # đủ thời gian trigger IntersectionObserver
+                        page.evaluate("window.scrollTo(0, 0)")  # về đầu trang cho screenshot đẹp
+                    except Exception as e:
+                        print(f"    Playwright: cuộn trang lỗi: {e}")
+                if extra_wait_selector:
+                    try:
+                        page.wait_for_selector(extra_wait_selector, timeout=8000)
+                    except Exception:
+                        pass
+                page.wait_for_timeout(wait_ms)
+                if screenshot_path:
+                    try:
+                        page.screenshot(path=screenshot_path, full_page=True)
+                    except Exception as e:
+                        print(f"    Playwright: chụp màn hình lỗi ({screenshot_path}): {e}")
+                text = page.inner_text("body")
+                browser.close()
+                return text
+        except Exception as e:
+            if attempt == 0:
+                print(f"    Playwright lỗi lần 1 ({url}): {e} — thử lại với --disable-http2")
+            else:
+                print(f"    Playwright lỗi lần 2 (đã thử --disable-http2) ({url}): {e}")
+    return None
 
 
 def fetch_fidelity_holdings(session, symbol, ticker):
