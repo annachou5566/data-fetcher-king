@@ -1,5 +1,5 @@
 """
-scripts/fetch_etf.py  v21
+scripts/fetch_etf.py  v22
 - Lấy TOÀN BỘ lịch sử từ Farside (tất cả ngày từ ngày ra mắt) — CHỈ CÒN dùng làm
   fallback CUỐI CÙNG cho các ticker chưa tìm được nguồn nào khác.
 - Lưu vào R2: etf-flows.json (daily latest) + etf-farside-history.json (full history)
@@ -9,12 +9,21 @@ scripts/fetch_etf.py  v21
     Playwright+scroll) · BITB/ETHW/BSOL/BHYP (site riêng Bitwise, SSR tĩnh) ·
     TSOL/THYP (21shares.com, AUM thật) · EZBC/EZET/SOEZ (Franklin Templeton,
     Playwright+scroll+role-gate) · BTCO/QETH (Invesco, Playwright+scroll+role-gate)
-- Ghi chú: lần đầu 1 ticker self_computed chạy, Flow HÔM ĐÓ vẫn tạm rơi về
-  Farside vì chưa có holdings_prev trong cache để tính Δ — từ lần chạy full
-  thứ 2 trở đi sẽ tự tính đầy đủ. Không phải bug.
-- ĐÃ THỬ bitbo.io làm fallback cho nhóm BTC còn thiếu — GỠ BỎ vì không giải
-  quyết đúng vấn đề (Farside đã có Flow rồi, bitbo.io cũng chỉ là bên thứ 3
-  khác, không phải gốc rễ).
+- BRRR: MỚI THÊM 27/07/2026, CHƯA CHẠY THẬT trên CI (19th self_computed nhưng
+  chưa được xác nhận qua log tự động — chỉ mới xác nhận qua nội dung user paste
+  từ trình duyệt thật). Valkyrie đã đổi thương hiệu thành "CoinShares Bitcoin
+  ETF" tại coinshares.com/etf/brrr/ (domain HOÀN TOÀN khác valkyrieinvesti.com).
+  robots.txt của coinshares.com CHO PHÉP crawl path này (khác valkyrieinvesti.com
+  chặn toàn bộ) — nhưng site dùng DataDome bot-management nên vẫn có rủi ro bị
+  chặn kỹ thuật dù robots.txt cho phép. Xem fetch_coinshares_holdings() để biết
+  chi tiết 3 tầng fallback. Cần theo dõi log lần chạy CI đầu tiên.
+- Fidelity (FBTC/FETH/FSOL): ĐÃ TẮT — trang digital.fidelity.com CÓ đủ dữ liệu
+  thật ("Total {coin} in fund"), xác nhận qua ảnh chụp user từ điện thoại thật
+  (IP thường, vào bình thường). NHƯNG từ GitHub Actions (IP datacenter) LUÔN bị
+  chặn ngay ở tầng kết nối (net::ERR_HTTP2_PROTOCOL_ERROR, thử --disable-http2
+  vẫn timeout) — WAF chặn theo dải IP datacenter/cloud, cùng loại vấn đề như
+  Grayscale (Vercel Security Checkpoint). Quyết định KHÔNG lách chặn IP, áp
+  dụng nhất quán nguyên tắc đã dùng cho Grayscale.
 - On-chain (theo dõi ví custodian): KHÔNG khả thi — custodian (Coinbase Custody,
   Fidelity Digital Assets...) chủ động KHÔNG công bố địa chỉ ví chính thức vì lý
   do bảo mật. Mọi "on-chain tracker" (Arkham, TheBlock) đều tự suy đoán, không
@@ -22,9 +31,9 @@ scripts/fetch_etf.py  v21
 - SEC EDGAR: các quỹ này là Delaware Trust MIỄN TRỪ Investment Company Act 1940
   nên không nộp N-PORT (holdings định kỳ chuẩn). Chỉ có 10-K/10-Q (Schedule of
   Investments) theo QUÝ/NĂM — không đủ tần suất cho Flow hàng ngày.
-- CÒN LẠI chưa tìm được nguồn daily công khai (dùng Farside):
-  FBTC/FETH/FSOL (Fidelity — chỉ có shares outstanding, không có coin count),
-  BTCW (WisdomTree), BRRR (Valkyrie — có trang holdings nhưng robots.txt CHẶN
+- CÒN LẠI chưa tìm được nguồn daily công khai hoặc bị chặn (dùng Farside):
+  FBTC/FETH/FSOL (Fidelity — WAF chặn IP datacenter), BTCW (WisdomTree —
+  không công bố), BRRR (Valkyrie — có trang holdings nhưng robots.txt CHẶN
   crawl, tôn trọng không lách), MSBT (Morgan Stanley — etfdb.com xác nhận
   "Holdings data not available"), GBTC/BTC/ETHE/HYPG/GSOL (Grayscale — Vercel
   Security Checkpoint bot-detection, quyết định không lách).
@@ -108,19 +117,27 @@ ETF_REGISTRY = [
     # TỪNG BƯỚC, không phải xoá Farside 1 lần, để không bao giờ bị mất dữ liệu quỹ
     # nào giữa chừng nếu 1 nguồn tự tính bị lỗi/thay đổi định dạng.
     {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares","self_computed":True},
-    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FBTC"},
+    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
     {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bitbetf.com"},
     {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"bitcoin-etf-hodl","vaneck_asset_word":"Bitcoin"},
     {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/39639/SINGLCLASS/franklin-bitcoin-etf/EZBC"},
-    {"ticker":"BRRR","name":"Valkyrie Bitcoin Fund","issuer":"Valkyrie","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    # BRRR: Valkyrie đã ĐỔI THƯƠNG HIỆU hoàn toàn thành "CoinShares Bitcoin ETF"
+    # (CoinShares mua lại mảng bitcoin ETF của Valkyrie) — domain mới hoàn toàn
+    # khác: coinshares.com/etf/brrr/ (không còn valkyrieinvesti.com). XÁC NHẬN
+    # qua robots.txt thật của coinshares.com (07/2026): các Disallow chỉ nhắm
+    # path theo locale (/at-en/*, /be-en/*...) và /*/d/*, /lookups/* — KHÔNG
+    # disallow /etf/brrr/, khác hẳn valkyrieinvesti.com (Disallow: / toàn bộ).
+    # Trang có sẵn bảng Holdings cập nhật hàng ngày: "BITCOIN XBTUSD <shares>
+    # <market value>" + "As of date: <ngày>" + AUM chính xác tới cent.
+    {"ticker":"BRRR","name":"CoinShares Bitcoin ETF","issuer":"CoinShares","underlying":"BTC","fee":0.25,"src":"nasdaq","self_computed":True,"coinshares_url":"https://coinshares.com/etf/brrr/"},
     {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq","self_computed":True,"invesco_url":"https://www.invesco.com/us/financial-products/etfs/holdings?audienceType=Investor&ticker=BTCO"},
     {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
     {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
     {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares","self_computed":True},
-    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FETH"},
+    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
     {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
     {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"ethwetf.com"},
     {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"ethereum-etf-ethv","vaneck_asset_word":"Ether"},
@@ -136,7 +153,7 @@ ETF_REGISTRY = [
     # Solana ETFs — xác nhận issuer/fee qua search 07/2026
     {"ticker":"BSOL","name":"Bitwise Solana Staking ETF","issuer":"Bitwise","underlying":"SOL","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bsoletf.com"},
     {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq","self_computed":True,"vaneck_slug":"solana-etf-vsol","vaneck_asset_word":"Solana"},
-    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FSOL"},
+    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq"},
     {"ticker":"TSOL","name":"21Shares Solana ETF","issuer":"21Shares","underlying":"SOL","fee":0.21,"src":"nasdaq","self_computed":True,"shares21_slug":"tsol"},
     {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/47315/SINGLCLASS/franklin-solana-etf/SOEZ"},
     # GSOL: KHÁC cấu trúc — xác nhận qua Grayscale tweet chính thức "GSOL is not
@@ -1032,6 +1049,105 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
     return (qty, as_of, None)
 
 
+def fetch_coinshares_holdings(session, url, ticker, asset_ticker="XBTUSD"):
+    """⚠️ CHƯA XÁC MINH bằng fetch tự động thật từ GitHub Actions (chỉ mới xác
+    nhận qua nội dung user tự paste từ trình duyệt thật 27/07/2026, KHÔNG phải
+    qua request tự động của tôi) — viết theo đúng bằng chứng đã có, cần theo
+    dõi log lần chạy CI đầu tiên để biết CHÍNH XÁC tier nào (0/1/2 bên dưới)
+    thực sự lấy được dữ liệu.
+
+    coinshares.com/etf/brrr/ (trước đây valkyrieinvesti.com/brrr.html, đã đổi
+    thương hiệu — xem chú thích registry). robots.txt CHO PHÉP scrape path
+    /etf/brrr/ (đã tự xác nhận qua robots.txt thật, chỉ disallow path locale
+    và /*/d/*, /lookups/*). Trang có bảng Holdings dạng:
+        "BITCOIN XBTUSD 5,890.21 377,868,595.57"
+    (cột 3 = số BTC nắm giữ, cột 4 = market value) + "As of date: MM/DD/YYYY"
+    + AUM chính xác tới cent ở mục Key Information ("AuM USD ...").
+
+    LƯU Ý QUAN TRỌNG: cookie declaration của chính trang coinshares.com (xem
+    ở trang /etf/brrr/product-guide/) liệt kê cookie "datadome" — tức site
+    dùng DataDome bot-management. Không có gì đảm bảo digitalocean/GitHub
+    Actions IP sẽ qua được dù robots.txt cho phép — robots.txt chỉ là quy ước
+    "được phép crawl", không phải "sẽ không bị chặn kỹ thuật". Vì vậy hàm này
+    thử theo 3 tầng tăng dần chi phí, dừng ngay khi tầng nào ra kết quả:
+      0) requests/cloudscraper trực tiếp — RẺ NHẤT, đáng thử trước vì nội
+         dung do user paste có số liệu thật ngay trong text (dấu hiệu có thể
+         là SSR/Next.js render sẵn ở server, không cần JS như VanEck) — nhưng
+         nếu DataDome chặn ở tầng này thì sẽ ra shell rỗng hoặc trang challenge.
+      1) r.jina.ai — proxy render JS công khai, miễn phí, đã dùng cho VanEck/
+         Grayscale trong chính file này.
+      2) Playwright (Chromium thật) — cuối cùng, tốn tài nguyên CI nhất.
+    """
+    text = None
+    site_aum = None
+
+    # 0) Fetch trực tiếp — rẻ nhất, thử trước
+    try:
+        r = session.get(url, headers={"User-Agent": FAKE_UA}, timeout=15)
+        if r.status_code == 200:
+            candidate = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+            if asset_ticker in candidate:
+                text = candidate
+            else:
+                print(f"    CoinShares (direct) {ticker}: HTTP 200 nhưng không thấy '{asset_ticker}' — có thể bị DataDome chặn/challenge hoặc cần JS")
+        else:
+            print(f"    CoinShares (direct) {ticker}: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"    CoinShares (direct) lỗi ({ticker}): {e}")
+
+    # 1) r.jina.ai — dự phòng nếu fetch trực tiếp không ra số
+    if not text:
+        try:
+            rj = session.get(f"https://r.jina.ai/{url}",
+                headers={"X-Return-Format":"text","Accept":"text/plain"}, timeout=25)
+            if rj.status_code == 200 and asset_ticker in rj.text:
+                text = rj.text
+            else:
+                print(f"    CoinShares (r.jina.ai) {ticker}: HTTP {rj.status_code}, có '{asset_ticker}': {asset_ticker in rj.text if rj.status_code==200 else 'N/A'}")
+        except Exception as e:
+            print(f"    CoinShares (r.jina.ai) lỗi ({ticker}): {e}")
+
+    # 2) Playwright — cuối cùng, tốn tài nguyên nhất
+    if not text:
+        os.makedirs("debug_screenshots", exist_ok=True)
+        text = fetch_rendered_text(url, wait_ms=3000, scroll=True,
+            extra_wait_selector=f"text={asset_ticker}",
+            screenshot_path=f"debug_screenshots/coinshares_{ticker}.png")
+        if not text:
+            print(f"    CoinShares: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
+
+    if not text:
+        print(f"    CoinShares: cả 3 tầng (direct/r.jina.ai/Playwright) đều thất bại cho {ticker}")
+        return None
+
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"[*_#|]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+
+    m = re.search(re.escape(asset_ticker) + r"\D{0,20}?([\d,]+\.?\d*)", text)
+    if not m:
+        has_marker = asset_ticker in text
+        snippet = text[:250]
+        print(f"    CoinShares: không tìm thấy holdings sau '{asset_ticker}' trên trang {ticker}")
+        print(f"      → độ dài trang: {len(text)} ký tự | có '{asset_ticker}': {has_marker}")
+        print(f"      → 250 ký tự đầu: {snippet!r}")
+        return None
+    qty = float(m.group(1).replace(",", ""))
+
+    date_m = re.search(r"As of date:\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+    as_of = date_m.group(1) if date_m else None
+
+    # AUM chính xác từ mục Key Information ("AuM USD 377,876,360.14") — ưu
+    # tiên hơn qty×price vì không bị làm tròn theo giá coin snapshot khác giờ.
+    aum_m = re.search(r"AuM\s*(?:\(US\$\))?\s*USD?\s*\$?\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if aum_m:
+        try:
+            site_aum = float(aum_m.group(1).replace(",", ""))
+        except ValueError:
+            site_aum = None
+
+    return (qty, as_of, site_aum)
+
 
 def compute_self_flow(holdings_today, holdings_prev, price_today):
     """Flow tự tính = Δholdings × giá — CHÍNH XÁC cùng phương pháp Farside/mọi bên
@@ -1086,7 +1202,7 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin + Invesco + Fidelity thử nghiệm) — nguồn TỰ TÍNH flow, không qua Farside...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin + Invesco) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
     holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
@@ -1211,24 +1327,49 @@ def run(r2):
                     print(f"  ✗ {t}: không lấy được holdings từ Invesco — fallback Farside cho ticker này")
                 time.sleep(1.0)
 
-        # ⚠️ Fidelity — CHƯA XÁC MINH bằng Playwright thật của tôi (chỉ mới xác
-        # nhận qua nội dung user tự paste từ trình duyệt thật). robots.txt
-        # fidelity.com (domain chính) không chặn path "research/quote" —
-        # chưa rõ digital.fidelity.com (subdomain) có policy riêng khác không.
+        # ⚠️ CoinShares (BRRR) — MỚI THÊM 27/07/2026, CHƯA CHẠY THẬT LẦN NÀO
+        # trên CI. Theo dõi log lần chạy đầu để biết tầng nào (direct/r.jina.ai/
+        # Playwright) thực sự lấy được dữ liệu — xem chú thích trong
+        # fetch_coinshares_holdings(). Nếu cả 3 tầng đều fail vì DataDome chặn
+        # cứng, ticker này tự fallback Farside như cũ, không mất dữ liệu.
         for etf in ETF_REGISTRY:
-            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("fidelity_symbol"):
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("coinshares_url"):
                 t=etf["ticker"]
-                res=fetch_fidelity_holdings(session, etf["fidelity_symbol"], t)
+                res=fetch_coinshares_holdings(session, etf["coinshares_url"], t)
                 if res:
-                    qty, as_of=res
+                    qty, as_of, site_aum=res
                     holdings_today[t]=qty
                     u=etf["underlying"]
-                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    aum=site_aum or (qty*crypto_prices[u] if u in crypto_prices else None)
                     issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (Fidelity): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                    print(f"  ✓ {t} (CoinShares): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
                 else:
-                    print(f"  ✗ {t}: không lấy được holdings từ Fidelity — fallback Farside cho ticker này")
+                    print(f"  ✗ {t}: không lấy được holdings từ CoinShares — fallback Farside cho ticker này")
                 time.sleep(1.0)
+
+        # Fidelity: ĐÃ TẮT — xác nhận qua log thật + ảnh chụp user 07/2026:
+        # trang digital.fidelity.com CÓ đủ dữ liệu thật ("Total ether in fund:
+        # 481,939.5378"...) khi mở bằng trình duyệt thật (IP thường), nhưng từ
+        # GitHub Actions (IP datacenter) LUÔN bị chặn ngay ở tầng kết nối
+        # (net::ERR_HTTP2_PROTOCOL_ERROR, thử --disable-http2 vẫn timeout).
+        # Đây là WAF chặn theo dải IP datacenter/cloud — cùng loại vấn đề như
+        # Grayscale (Vercel Security Checkpoint), chỉ khác cách biểu hiện.
+        # Quyết định: KHÔNG cố lách chặn IP, áp dụng nhất quán cùng nguyên tắc
+        # đã dùng cho Grayscale. FBTC/FETH/FSOL giữ nguyên dùng Farside.
+        # for etf in ETF_REGISTRY:
+        #     if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("fidelity_symbol"):
+        #         t=etf["ticker"]
+        #         res=fetch_fidelity_holdings(session, etf["fidelity_symbol"], t)
+        #         if res:
+        #             qty, as_of=res
+        #             holdings_today[t]=qty
+        #             u=etf["underlying"]
+        #             aum=qty*crypto_prices[u] if u in crypto_prices else None
+        #             issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+        #             print(f"  ✓ {t} (Fidelity): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+        #         else:
+        #             print(f"  ✗ {t}: không lấy được holdings từ Fidelity — fallback Farside cho ticker này")
+        #         time.sleep(1.0)
 
         # Grayscale: ĐÃ TẮT — thử qua Playwright thì gặp "Vercel Security
         # Checkpoint / Failed to verify your browser" (xác nhận qua log thật
