@@ -1,30 +1,38 @@
 """
-scripts/fetch_etf.py  v20
+scripts/fetch_etf.py  v21
 - Lấy TOÀN BỘ lịch sử từ Farside (tất cả ngày từ ngày ra mắt) — CHỈ CÒN dùng làm
   fallback CUỐI CÙNG cho các ticker chưa tìm được nguồn nào khác.
 - Lưu vào R2: etf-flows.json (daily latest) + etf-farside-history.json (full history)
 - self_computed = TỰ TÍNH Flow (Δholdings×price), lấy thẳng từ issuer, GỐC RỄ,
-  không qua bên thứ 3:
+  không qua bên thứ 3 — ĐÃ XÁC NHẬN hoạt động qua log thật (18 ticker):
     IBIT/ETHA (iShares API) · ARKB (ARK CSV) · HODL/ETHV/VSOL/VBNB (VanEck qua
     Playwright+scroll) · BITB/ETHW/BSOL/BHYP (site riêng Bitwise, SSR tĩnh) ·
-    TSOL/THYP (21shares.com, AUM thật)
-- ĐÃ THỬ bitbo.io làm fallback cho FBTC/EZBC/BRRR/BTCO/BTCW/MSBT — GỠ BỎ vì
-  không giải quyết đúng vấn đề: Farside đã có Flow cho các ticker này rồi,
-  bitbo.io cũng chỉ là bên thứ 3 khác (nhiều khả năng cùng gốc dữ liệu với
-  Farside) — đổi bên thứ 3 này lấy bên thứ 3 khác không phải là "gốc rễ".
-- ĐANG NGHIÊN CỨU: theo dõi ON-CHAIN trực tiếp (địa chỉ ví custodian của từng
-  quỹ) làm nguồn THẬT SỰ độc lập cho FBTC/EZBC/BRRR/BTCO/BTCW/MSBT (BTC) và
-  FETH/EZET/QETH (ETH) — đây mới là gốc rễ thật (dữ liệu on-chain công khai,
-  không phụ thuộc bên nào diễn giải).
-- Grayscale (GBTC/BTC/ETHE/HYPG/GSOL): ĐÃ TẮT hẳn — Playwright bị chặn bởi
-  "Vercel Security Checkpoint" (bot-detection chuyên dụng). Quyết định KHÔNG
-  lách qua loại chặn này. Vẫn dùng Farside.
-- CETH: đánh dấu inactive (quỹ đã ngừng hoạt động, xác nhận qua etfdb.com).
-- YÊU CẦU CÀI THÊM cho VanEck: pip install playwright && playwright install
-  --with-deps chromium (đã có trong requirements.txt + workflow .yml, chỉ chạy
-  khi RUN_MODE=full).
-- AUM: iShares live → ARK/Bitwise/VanEck (holdings thật) → 21Shares (AUM thật)
-  → static on-chain (BTC ETF còn lại) → Nasdaq "Net Assets" (SOL/HYP/BNB còn
+    TSOL/THYP (21shares.com, AUM thật) · EZBC/EZET/SOEZ (Franklin Templeton,
+    Playwright+scroll+role-gate) · BTCO/QETH (Invesco, Playwright+scroll+role-gate)
+- Ghi chú: lần đầu 1 ticker self_computed chạy, Flow HÔM ĐÓ vẫn tạm rơi về
+  Farside vì chưa có holdings_prev trong cache để tính Δ — từ lần chạy full
+  thứ 2 trở đi sẽ tự tính đầy đủ. Không phải bug.
+- ĐÃ THỬ bitbo.io làm fallback cho nhóm BTC còn thiếu — GỠ BỎ vì không giải
+  quyết đúng vấn đề (Farside đã có Flow rồi, bitbo.io cũng chỉ là bên thứ 3
+  khác, không phải gốc rễ).
+- On-chain (theo dõi ví custodian): KHÔNG khả thi — custodian (Coinbase Custody,
+  Fidelity Digital Assets...) chủ động KHÔNG công bố địa chỉ ví chính thức vì lý
+  do bảo mật. Mọi "on-chain tracker" (Arkham, TheBlock) đều tự suy đoán, không
+  phải quỹ xác nhận.
+- SEC EDGAR: các quỹ này là Delaware Trust MIỄN TRỪ Investment Company Act 1940
+  nên không nộp N-PORT (holdings định kỳ chuẩn). Chỉ có 10-K/10-Q (Schedule of
+  Investments) theo QUÝ/NĂM — không đủ tần suất cho Flow hàng ngày.
+- CÒN LẠI chưa tìm được nguồn daily công khai (dùng Farside):
+  FBTC/FETH/FSOL (Fidelity — chỉ có shares outstanding, không có coin count),
+  BTCW (WisdomTree), BRRR (Valkyrie — có trang holdings nhưng robots.txt CHẶN
+  crawl, tôn trọng không lách), MSBT (Morgan Stanley — etfdb.com xác nhận
+  "Holdings data not available"), GBTC/BTC/ETHE/HYPG/GSOL (Grayscale — Vercel
+  Security Checkpoint bot-detection, quyết định không lách).
+- YÊU CẦU CÀI THÊM cho VanEck/Franklin/Invesco: pip install playwright &&
+  playwright install --with-deps chromium (đã có trong requirements.txt +
+  workflow .yml, chỉ chạy khi RUN_MODE=full).
+- AUM: iShares live → ARK/Bitwise/VanEck/Franklin/Invesco (holdings thật) →
+  21Shares (AUM thật) → static on-chain → Nasdaq "Net Assets" (SOL/HYP/BNB còn
   lại) → cache cũ.
 """
 
@@ -705,15 +713,14 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
 
 
 def fetch_franklin_holdings(session, url, ticker):
-    """⚠️ CHƯA XÁC MINH — chưa tự chạy Playwright được trong sandbox nên chưa
-    kiểm chứng thực tế, cần user test và gửi log/ảnh lại.
+    """✅ ĐÃ XÁC NHẬN hoạt động qua log thật 07/2026 (EZBC/EZET/SOEZ đều lấy được
+    holdings ngay lần thử đầu tiên, không có lỗi).
 
     Franklin Templeton (franklintempleton.com) là SPA (fetch tĩnh chỉ ra
     "Loading..." — đã xác nhận qua fetch trực tiếp). robots.txt CHO PHÉP scrape
-    (chỉ disallow /llm.txt). Theo báo cáo research (Grok/Perplexity, CHƯA tự
-    kiểm chứng): trang sản phẩm có mục "Additional Fund Info" với dòng
-    "{Coin} in Fund — Updated Daily: <số>" sau khi JS render xong, có thể còn
-    cổng xác nhận vai trò nhà đầu tư/quốc gia trước đó (giống VanEck).
+    (chỉ disallow /llm.txt). Trang sản phẩm có mục "Additional Fund Info" với
+    dòng "{Coin} in Fund — Updated Daily: <số>" sau khi JS render xong, có cổng
+    xác nhận vai trò nhà đầu tư/quốc gia trước đó (giống VanEck).
 
     Dùng chung kỹ thuật đã THÀNH CÔNG với VanEck: Playwright + thử bấm qua các
     nút xác nhận phổ biến + cuộn trang trigger lazy-load, rồi regex tổng quát
@@ -741,14 +748,14 @@ def fetch_franklin_holdings(session, url, ticker):
 
 
 def fetch_invesco_holdings(session, url, ticker):
-    """⚠️ CHƯA XÁC MINH — tương tự fetch_franklin_holdings, cần user test.
+    """✅ ĐÃ XÁC NHẬN hoạt động qua log thật 07/2026 (BTCO/QETH đều lấy được
+    "Total units of crypto" ngay lần thử đầu tiên, khớp đúng ảnh chụp màn hình).
 
     Invesco (invesco.com) là SPA + cổng xác nhận vai trò nhà đầu tư (Individual/
     Financial Professional/Institutional) — đã xác nhận qua fetch trực tiếp
     (thấy rõ "Confirm your role to continue"). robots.txt CHO PHÉP scrape trang
-    sản phẩm ETF (chỉ disallow vài query-param như asOfDate=). Theo báo cáo
-    research (CHƯA tự kiểm chứng): có dòng "Total units of crypto <số>" sau khi
-    qua cổng + JS render xong.
+    sản phẩm ETF (chỉ disallow vài query-param như asOfDate=). Có dòng
+    "Total units of crypto <số>" sau khi qua cổng + JS render xong.
     """
     os.makedirs("debug_screenshots", exist_ok=True)
     text = fetch_rendered_text(url,
@@ -1032,7 +1039,7 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin/Invesco thử nghiệm) — nguồn TỰ TÍNH flow, không qua Farside...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin + Invesco) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
     holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
@@ -1124,9 +1131,8 @@ def run(r2):
                     print(f"  ✗ {t}: không lấy được AUM từ 21Shares — fallback Farside cho ticker này")
                 time.sleep(0.5)
 
-        # ⚠️ Franklin Templeton — CHƯA XÁC MINH, lần đầu thử qua Playwright.
-        # robots.txt CHO PHÉP scrape. Nếu fail, log sẽ in đủ chi tiết để chẩn
-        # đoán (giống cách đã làm với VanEck trước đây).
+        # ✅ Franklin Templeton — ĐÃ XÁC NHẬN hoạt động (EZBC/EZET/SOEZ, log
+        # thật 07/2026, không có lỗi).
         for etf in ETF_REGISTRY:
             if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("franklin_url"):
                 t=etf["ticker"]
@@ -1142,9 +1148,7 @@ def run(r2):
                     print(f"  ✗ {t}: không lấy được holdings từ Franklin — fallback Farside cho ticker này")
                 time.sleep(1.0)
 
-        # ⚠️ Invesco — CHƯA XÁC MINH, lần đầu thử qua Playwright.
-        # robots.txt CHO PHÉP scrape trang holdings (chỉ chặn vài query-param
-        # không liên quan).
+        # ✅ Invesco — ĐÃ XÁC NHẬN hoạt động (BTCO/QETH, log thật 07/2026).
         for etf in ETF_REGISTRY:
             if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("invesco_url"):
                 t=etf["ticker"]
