@@ -1,26 +1,28 @@
 """
-scripts/fetch_etf.py  v18
+scripts/fetch_etf.py  v20
 - Lấy TOÀN BỘ lịch sử từ Farside (tất cả ngày từ ngày ra mắt) — CHỈ CÒN dùng làm
-  fallback cuối cùng cho các ticker chưa tìm được nguồn gốc rễ (issuer/exchange),
-  KHÔNG còn là nguồn chính.
+  fallback CUỐI CÙNG cho các ticker chưa tìm được nguồn nào khác.
 - Lưu vào R2: etf-flows.json (daily latest) + etf-farside-history.json (full history)
-- self_computed = TỰ TÍNH Flow (Δholdings×price), lấy thẳng từ issuer, không qua
-  Farside/bên thứ 3 nào:
-    IBIT/ETHA (iShares API) · ARKB (ARK CSV) · BITB/ETHW/BSOL/BHYP (site riêng
-    Bitwise, SSR tĩnh, ĐÃ XÁC NHẬN hoạt động) · TSOL/THYP (21shares.com, AUM
-    thật, ĐÃ XÁC NHẬN hoạt động)
-- VanEck (HODL/ETHV/VSOL/VBNB): thử Playwright tự bấm qua modal "Personalize
-  Your Experience" nhưng click_texts đoán chưa đúng nút thật — vẫn fallback
-  Farside. Cần biết chính xác text nút trên trang thật để sửa (xem log
-  "VanEck (Playwright) ...: chạy được nhưng modal chưa đóng").
-- Grayscale (GBTC/BTC/ETHE/HYPG/GSOL): ĐÃ TẮT hẳn, không thử nữa — Playwright
-  bị chặn bởi "Vercel Security Checkpoint" (bot-detection chuyên dụng, không
-  phải chỉ JS chưa load). Quyết định KHÔNG lách qua loại chặn này. Vẫn dùng
-  Farside cho 5 ticker này.
+- self_computed = TỰ TÍNH Flow (Δholdings×price), lấy thẳng từ issuer, GỐC RỄ,
+  không qua bên thứ 3:
+    IBIT/ETHA (iShares API) · ARKB (ARK CSV) · HODL/ETHV/VSOL/VBNB (VanEck qua
+    Playwright+scroll) · BITB/ETHW/BSOL/BHYP (site riêng Bitwise, SSR tĩnh) ·
+    TSOL/THYP (21shares.com, AUM thật)
+- ĐÃ THỬ bitbo.io làm fallback cho FBTC/EZBC/BRRR/BTCO/BTCW/MSBT — GỠ BỎ vì
+  không giải quyết đúng vấn đề: Farside đã có Flow cho các ticker này rồi,
+  bitbo.io cũng chỉ là bên thứ 3 khác (nhiều khả năng cùng gốc dữ liệu với
+  Farside) — đổi bên thứ 3 này lấy bên thứ 3 khác không phải là "gốc rễ".
+- ĐANG NGHIÊN CỨU: theo dõi ON-CHAIN trực tiếp (địa chỉ ví custodian của từng
+  quỹ) làm nguồn THẬT SỰ độc lập cho FBTC/EZBC/BRRR/BTCO/BTCW/MSBT (BTC) và
+  FETH/EZET/QETH (ETH) — đây mới là gốc rễ thật (dữ liệu on-chain công khai,
+  không phụ thuộc bên nào diễn giải).
+- Grayscale (GBTC/BTC/ETHE/HYPG/GSOL): ĐÃ TẮT hẳn — Playwright bị chặn bởi
+  "Vercel Security Checkpoint" (bot-detection chuyên dụng). Quyết định KHÔNG
+  lách qua loại chặn này. Vẫn dùng Farside.
 - CETH: đánh dấu inactive (quỹ đã ngừng hoạt động, xác nhận qua etfdb.com).
-- YÊU CẦU CÀI THÊM để VanEck hoạt động khi tìm đúng nút: pip install playwright
-  && playwright install --with-deps chromium (đã có trong requirements.txt +
-  workflow .yml, chỉ chạy khi RUN_MODE=full).
+- YÊU CẦU CÀI THÊM cho VanEck: pip install playwright && playwright install
+  --with-deps chromium (đã có trong requirements.txt + workflow .yml, chỉ chạy
+  khi RUN_MODE=full).
 - AUM: iShares live → ARK/Bitwise/VanEck (holdings thật) → 21Shares (AUM thật)
   → static on-chain (BTC ETF còn lại) → Nasdaq "Net Assets" (SOL/HYP/BNB còn
   lại) → cache cũ.
@@ -103,9 +105,9 @@ ETF_REGISTRY = [
     {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bitbetf.com"},
     {"ticker":"HODL","name":"VanEck Bitcoin ETF","issuer":"VanEck","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"bitcoin-etf-hodl","vaneck_asset_word":"Bitcoin"},
-    {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq"},
+    {"ticker":"EZBC","name":"Franklin Bitcoin ETF","issuer":"Franklin","underlying":"BTC","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/39639/SINGLCLASS/franklin-bitcoin-etf/EZBC"},
     {"ticker":"BRRR","name":"Valkyrie Bitcoin Fund","issuer":"Valkyrie","underlying":"BTC","fee":0.25,"src":"nasdaq"},
-    {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"BTCO","name":"Invesco Galaxy Bitcoin ETF","issuer":"Invesco","underlying":"BTC","fee":0.25,"src":"nasdaq","self_computed":True,"invesco_url":"https://www.invesco.com/us/financial-products/etfs/holdings?audienceType=Investor&ticker=BTCO"},
     {"ticker":"BTCW","name":"WisdomTree Bitcoin Fund","issuer":"WisdomTree","underlying":"BTC","fee":0.25,"src":"nasdaq"},
     {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
     {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
@@ -121,14 +123,14 @@ ETF_REGISTRY = [
     # đánh dấu inactive để loại khỏi mọi tính toán/fetch (tránh lãng phí request
     # và tránh AUM/Flow=0 giả tạo lẫn vào tổng ETH).
     {"ticker":"CETH","name":"21Shares Core Ethereum ETF","issuer":"21Shares","underlying":"ETH","fee":0.21,"src":"nasdaq","inactive":True},
-    {"ticker":"EZET","name":"Franklin Ethereum ETF","issuer":"Franklin","underlying":"ETH","fee":0.19,"src":"nasdaq"},
-    {"ticker":"QETH","name":"Invesco Galaxy Ethereum ETF","issuer":"Invesco","underlying":"ETH","fee":0.25,"src":"nasdaq"},
+    {"ticker":"EZET","name":"Franklin Ethereum ETF","issuer":"Franklin","underlying":"ETH","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/40521/SINGLCLASS/franklin-ethereum-etf/EZET"},
+    {"ticker":"QETH","name":"Invesco Galaxy Ethereum ETF","issuer":"Invesco","underlying":"ETH","fee":0.25,"src":"nasdaq","self_computed":True,"invesco_url":"https://www.invesco.com/us/financial-products/etfs/holdings?audienceType=Investor&ticker=QETH"},
     # Solana ETFs — xác nhận issuer/fee qua search 07/2026
     {"ticker":"BSOL","name":"Bitwise Solana Staking ETF","issuer":"Bitwise","underlying":"SOL","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bsoletf.com"},
     {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq","self_computed":True,"vaneck_slug":"solana-etf-vsol","vaneck_asset_word":"Solana"},
     {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq"},
     {"ticker":"TSOL","name":"21Shares Solana ETF","issuer":"21Shares","underlying":"SOL","fee":0.21,"src":"nasdaq","self_computed":True,"shares21_slug":"tsol"},
-    {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq"},
+    {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/47315/SINGLCLASS/franklin-solana-etf/SOEZ"},
     # GSOL: KHÁC cấu trúc — xác nhận qua Grayscale tweet chính thức "GSOL is not
     # an ETP and is quoted on OTC Markets Group" (không niêm yết sàn như GBTC/
     # ETHE/HYPG, URL cũng ở domain khác: grayscale.com/funds/ thay vì
@@ -702,6 +704,72 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
         return None
 
 
+def fetch_franklin_holdings(session, url, ticker):
+    """⚠️ CHƯA XÁC MINH — chưa tự chạy Playwright được trong sandbox nên chưa
+    kiểm chứng thực tế, cần user test và gửi log/ảnh lại.
+
+    Franklin Templeton (franklintempleton.com) là SPA (fetch tĩnh chỉ ra
+    "Loading..." — đã xác nhận qua fetch trực tiếp). robots.txt CHO PHÉP scrape
+    (chỉ disallow /llm.txt). Theo báo cáo research (Grok/Perplexity, CHƯA tự
+    kiểm chứng): trang sản phẩm có mục "Additional Fund Info" với dòng
+    "{Coin} in Fund — Updated Daily: <số>" sau khi JS render xong, có thể còn
+    cổng xác nhận vai trò nhà đầu tư/quốc gia trước đó (giống VanEck).
+
+    Dùng chung kỹ thuật đã THÀNH CÔNG với VanEck: Playwright + thử bấm qua các
+    nút xác nhận phổ biến + cuộn trang trigger lazy-load, rồi regex tổng quát
+    "<coin> in Fund" (không cố định tên coin, tránh lặp lỗi ghi nhãn không nhất
+    quán như đã gặp ở VanEck/VSOL).
+    """
+    os.makedirs("debug_screenshots", exist_ok=True)
+    text = fetch_rendered_text(url,
+        click_texts=["Individual Investor","Continue","Accept","Agree","I Agree",
+                     "Yes","Confirm","United States","Enter","OK","Proceed"],
+        wait_ms=2000, scroll=True, screenshot_path=f"debug_screenshots/franklin_{ticker}.png")
+    if not text:
+        print(f"    Franklin: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
+        return None
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text)
+    m = re.search(r"[A-Za-z]+\s+in\s+Fund\D{0,20}?([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if not m:
+        snippet = text[:300]
+        print(f"    Franklin: không tìm thấy '<coin> in Fund' trên trang {ticker}")
+        print(f"      → độ dài trang: {len(text)} ký tự | 300 ký tự đầu: {snippet!r}")
+        return None
+    qty = float(m.group(1).replace(",", ""))
+    return (qty, None)
+
+
+def fetch_invesco_holdings(session, url, ticker):
+    """⚠️ CHƯA XÁC MINH — tương tự fetch_franklin_holdings, cần user test.
+
+    Invesco (invesco.com) là SPA + cổng xác nhận vai trò nhà đầu tư (Individual/
+    Financial Professional/Institutional) — đã xác nhận qua fetch trực tiếp
+    (thấy rõ "Confirm your role to continue"). robots.txt CHO PHÉP scrape trang
+    sản phẩm ETF (chỉ disallow vài query-param như asOfDate=). Theo báo cáo
+    research (CHƯA tự kiểm chứng): có dòng "Total units of crypto <số>" sau khi
+    qua cổng + JS render xong.
+    """
+    os.makedirs("debug_screenshots", exist_ok=True)
+    text = fetch_rendered_text(url,
+        click_texts=["Individual Investor","Confirm","Continue","Accept","Agree",
+                     "I Agree","Yes","United States","Enter","OK","Proceed"],
+        wait_ms=2000, scroll=True, screenshot_path=f"debug_screenshots/invesco_{ticker}.png")
+    if not text:
+        print(f"    Invesco: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
+        return None
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text)
+    m = re.search(r"Total\s+units?\s+of\s+crypto\D{0,20}?([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if not m:
+        snippet = text[:300]
+        print(f"    Invesco: không tìm thấy 'Total units of crypto' trên trang {ticker}")
+        print(f"      → độ dài trang: {len(text)} ký tự | 300 ký tự đầu: {snippet!r}")
+        return None
+    qty = float(m.group(1).replace(",", ""))
+    return (qty, None)
+
+
 def fetch_grayscale_holdings(session, url, ticker):
     """Grayscale render bằng JavaScript — đã xác nhận THẬT qua fetch trực tiếp
     07/2026: trang có sẵn LABEL "Total {Asset} in Trust", "Assets Under
@@ -964,7 +1032,7 @@ def run(r2):
     else:
         print("⏭️  Skip Farside")
 
-    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares) — nguồn TỰ TÍNH flow, không qua Farside...")
+    print("\n🏦 [3/4] Issuer holdings (iShares + ARK + VanEck + Bitwise + 21Shares + Franklin/Invesco thử nghiệm) — nguồn TỰ TÍNH flow, không qua Farside...")
     issuer={}
     holdings_today={}  # ticker -> holdings mới fetch được lần chạy này (để lưu lại làm mốc "hôm qua" cho lần sau)
     if RUN_MODE=="full":
@@ -1055,6 +1123,42 @@ def run(r2):
                 else:
                     print(f"  ✗ {t}: không lấy được AUM từ 21Shares — fallback Farside cho ticker này")
                 time.sleep(0.5)
+
+        # ⚠️ Franklin Templeton — CHƯA XÁC MINH, lần đầu thử qua Playwright.
+        # robots.txt CHO PHÉP scrape. Nếu fail, log sẽ in đủ chi tiết để chẩn
+        # đoán (giống cách đã làm với VanEck trước đây).
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("franklin_url"):
+                t=etf["ticker"]
+                res=fetch_franklin_holdings(session, etf["franklin_url"], t)
+                if res:
+                    qty, as_of=res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (Franklin): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ Franklin — fallback Farside cho ticker này")
+                time.sleep(1.0)
+
+        # ⚠️ Invesco — CHƯA XÁC MINH, lần đầu thử qua Playwright.
+        # robots.txt CHO PHÉP scrape trang holdings (chỉ chặn vài query-param
+        # không liên quan).
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("invesco_url"):
+                t=etf["ticker"]
+                res=fetch_invesco_holdings(session, etf["invesco_url"], t)
+                if res:
+                    qty, as_of=res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (Invesco): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ Invesco — fallback Farside cho ticker này")
+                time.sleep(1.0)
 
         # Grayscale: ĐÃ TẮT — thử qua Playwright thì gặp "Vercel Security
         # Checkpoint / Failed to verify your browser" (xác nhận qua log thật
