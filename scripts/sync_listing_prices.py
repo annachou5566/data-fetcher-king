@@ -973,6 +973,50 @@ def _process_one(e, idx, total, is_first_occurrence=True):
     return e, result
 
 
+def assign_air_numbers(events):
+    """
+    [MỚI] Tính và LƯU THẲNG số thứ tự airdrop ("Air N") vào từng event,
+    thay vì để frontend tự đoán bằng cách đếm/group lại mỗi lần render.
+
+    Lý do làm ở backend, không phải frontend:
+    - Đây là nơi DUY NHẤT có đủ toàn bộ lịch sử (all.json = backfill cũ +
+      event realtime từ wa-listener gộp lại) để đếm chính xác "đây là lần
+      airdrop thứ mấy của token này" — wa-listener (storage.py) không đủ
+      thông tin để tự tính vì nó không biết các lần airdrop xảy ra TRƯỚC
+      khi nó tồn tại.
+    - Tính 1 lần, lưu vào data → mọi nơi đọc ra (frontend, API, export)
+      đều thấy cùng 1 con số, không lệch nhau do khác cách nhóm/parse.
+
+    Cách tính: nhóm theo symbol (viết hoa), loại "tge" ra khỏi phép đếm
+    (TGE là phát hành/bán riêng, không phải đợt airdrop — dùng chung logic
+    loại trừ với _first_occurrence_ids ở trên), sort theo event_time tăng
+    dần, đánh số 1,2,3... theo đúng thứ tự thời gian thật.
+
+    Idempotent + rẻ: luôn tính lại toàn bộ mỗi lần chạy (không cần cờ
+    chống chạy lại), vì đây chỉ là phép sort+đếm trong RAM, không tốn
+    request mạng nào.
+    """
+    groups = {}
+    for e in events:
+        event_type = (e.get("event_type") or e.get("type") or "").lower()
+        if event_type == "tge":
+            continue  # TGE không tính vào số thứ tự airdrop
+        sym = (e.get("symbol") or e.get("token") or "").upper()
+        if not sym:
+            continue
+        groups.setdefault(sym, []).append(e)
+
+    changed = 0
+    for sym, evs in groups.items():
+        evs.sort(key=lambda ev: str(ev.get("event_time") or ev.get("date") or ev.get("created_at") or ""))
+        for i, e in enumerate(evs, start=1):
+            if e.get("air_number") != i:
+                e["air_number"] = i
+                changed += 1
+
+    return changed
+
+
 def _first_occurrence_ids(events):
     """
     [MỚI] Trả về set id() của event là lần xuất hiện SỚM NHẤT (theo
@@ -1575,6 +1619,10 @@ def main():
     #     ath_*,...), và không có bằng chứng có hệ thống khác cùng ghi
     #     đè 2 file này (khác hẳn upcoming/live — có bằng chứng rõ ràng
     #     wa-listener ghi liên tục).
+    air_number_changed = assign_air_numbers(all_events)
+    if air_number_changed:
+        print(f"   [air_number] Cập nhật số thứ tự airdrop (Air N) cho {air_number_changed} event ✓")
+
     history = [e for e in all_events if e.get("status") in ("ended", None) or e.get("status") not in ("upcoming", "live")]
 
     # [MỚI] Sort theo thời gian MỚI NHẤT lên đầu. Cần thiết vì giờ
