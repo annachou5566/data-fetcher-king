@@ -1577,6 +1577,18 @@ def main():
     #     wa-listener ghi liên tục).
     history = [e for e in all_events if e.get("status") in ("ended", None) or e.get("status") not in ("upcoming", "live")]
 
+    # [MỚI] Sort theo thời gian MỚI NHẤT lên đầu. Cần thiết vì giờ
+    # wa-listener (storage.py) cũng append event realtime thẳng vào
+    # all.json (xem _upsert_ended_to_all_events) để script này tự nhận
+    # diện và enrich giá — nhưng nó append vào CUỐI mảng, không theo thứ
+    # tự ngày. Nếu không sort ở đây, mỗi lần script này chạy lại (theo
+    # lịch GitHub Actions) sẽ ghi đè mất thứ tự đã sort bởi wa-listener,
+    # khiến event mới lại rớt xuống cuối danh sách History trên frontend.
+    def _history_sort_key(ev):
+        ts = ev.get("event_time") or ev.get("created_at") or ""
+        return str(ts)
+    history.sort(key=_history_sort_key, reverse=True)
+
     upload_json(r2, "alpha-events/all.json",     all_events)
     upload_json(r2, "alpha-events/history.json", history)
 
