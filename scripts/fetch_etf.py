@@ -750,24 +750,33 @@ def fetch_fidelity_holdings(session, symbol, ticker):
     phải lỗi tạm thời. Vì vậy bỏ hẳn tầng "direct fetch" (khác CoinShares —
     trang đó có SSR một phần).
 
-    XÁC NHẬN QUA LOG CI THẬT 07/2026: Playwright (Chromium THẬT) từ IP GitHub
-    Actions từng bị chặn ở tầng kết nối (net::ERR_HTTP2_PROTOCOL_ERROR) —
-    nghi WAF chặn theo IP reputation. Nhưng r.jina.ai (tầng dưới đây) CHẠY
-    ĐƯỢC và trả về HTTP 200 có khớp field — VẤN ĐỀ MỚI PHÁT SINH: kết quả nó
-    khớp SAI (false positive regex, ra qty=24 cho cả 3 ticker khác coin) —
-    xem SANITY CHECK bên dưới, đã thêm để chặn không cho số liệu sai lọt vào
-    output thay vì fix nguyên nhân gốc (chưa xác định chính xác r.jina.ai trả
-    về nội dung gì gây khớp sai — cần user paste lại raw response của
-    r.jina.ai để chẩn đoán tiếp, không đoán mò thêm).
+    XÁC NHẬN QUA RAW OUTPUT THẬT 27/07/2026 (user tự lấy r.jina.ai, không
+    phải tôi đoán) — 2 phát hiện:
+      (a) FBTC: r.jina.ai đôi khi chụp quá sớm, trả về trang còn "Loading
+          This could take a moment." — không có field nào. → thêm X-Timeout
+          ở tầng dưới để đợi lâu hơn.
+      (b) FETH/FSOL: r.jina.ai trả về ĐẦY ĐỦ dữ liệu thật, nhưng cấu trúc
+          thật là "Total ether in fund [tooltip ~50 ký tự] As of <ngày>
+          <số>" — khoảng cách "fund"→số thật ~57 ký tự, vượt giới hạn regex
+          cũ (\\D{0,30}) nên KHÔNG BAO GIỜ khớp đúng. Đây là nguyên nhân thật
+          của việc CI ra qty=24 giống nhau ở cả 3 ticker trước đó — không
+          phải chặn IP hay DataDome, mà là bug parse. Đã sửa: neo "Total
+          <coin> in fund" trước, sau đó tìm cặp "As of <ngày> <số>" ĐẦU TIÊN
+          xuất hiện sau neo (không phải "Ether per share"/"Shares per ether"
+          — các field đó cũng có dạng "As of ... <số>" nhưng đứng SAU, nên
+          lấy cặp đầu tiên là đúng).
     """
     url = f"https://digital.fidelity.com/prgw/digital/research/quote/dashboard/summary?symbol={symbol}"
     text = None
 
     # 1) r.jina.ai — ĐÃ XÁC NHẬN CHẠY QUA ĐƯỢC (HTTP 200) theo log CI thật,
-    # nhưng nội dung trả về gây false positive regex — xem sanity check
+    # nhưng đôi khi chụp quá sớm lúc trang còn "Loading" (xác nhận qua raw
+    # output thật của FBTC user paste 27/07/2026 — chỉ có chữ "Loading This
+    # could take a moment.", không có field nào). Thêm X-Timeout để jina đợi
+    # lâu hơn trước khi trả về, giảm khả năng chụp trúng lúc chưa render xong.
     try:
         rj = session.get(f"https://r.jina.ai/{url}",
-            headers={"X-Return-Format":"text","Accept":"text/plain"}, timeout=25)
+            headers={"X-Return-Format":"text","Accept":"text/plain","X-Timeout":"20"}, timeout=30)
         if rj.status_code == 200 and re.search(r"Total\s+[A-Za-z]+\s+in\s+fund", rj.text, re.IGNORECASE):
             text = rj.text
         else:
@@ -775,11 +784,13 @@ def fetch_fidelity_holdings(session, symbol, ticker):
     except Exception as e:
         print(f"    Fidelity (r.jina.ai) lỗi ({ticker}): {e}")
 
-    # 2) Playwright — dự phòng cuối, đã biết trước khả năng cao vẫn bị chặn
-    # ở tầng kết nối (xem docstring)
+    # 2) Playwright — dự phòng cuối. Đợi CÓ ĐIỀU KIỆN (chờ chữ "Total" xuất
+    # hiện) thay vì chỉ chờ cố định 2500ms — vì đã xác nhận trang này có thể
+    # load chậm hơn mức đó (xem lý do ở tầng 1).
     if not text:
         os.makedirs("debug_screenshots", exist_ok=True)
-        text = fetch_rendered_text(url, wait_ms=2500, scroll=True,
+        text = fetch_rendered_text(url, wait_ms=4000, scroll=True,
+            extra_wait_selector="text=Total",
             screenshot_path=f"debug_screenshots/fidelity_{ticker}.png")
         if not text:
             print(f"    Fidelity: Playwright không lấy được nội dung cho {ticker} (chặn kết nối hoặc chưa cài playwright)")
@@ -790,13 +801,34 @@ def fetch_fidelity_holdings(session, symbol, ticker):
 
     text = text.replace("\xa0", " ")
     text = re.sub(r"\s+", " ", text)
-    m = re.search(r"Total\s+[A-Za-z]+\s+in\s+fund\D{0,30}?([\d,]+\.?\d*)", text, re.IGNORECASE)
-    if not m:
-        snippet = text[:300]
-        print(f"    Fidelity: không tìm thấy 'Total <coin> in fund' trên trang {ticker}")
-        print(f"      → độ dài trang: {len(text)} ký tự | 300 ký tự đầu: {snippet!r}")
+
+    # ⚠️ SỬA 27/07/2026 sau khi user paste raw r.jina.ai output thật cho cả
+    # FBTC/FETH/FSOL. Phát hiện: cấu trúc trang thật là
+    #   "Total ether in fund [tooltip dài ~50 ký tự chen giữa] As of <ngày> <số>"
+    # — khoảng cách giữa "fund" và số thật ~57 ký tự, VƯỢT giới hạn cũ \D{0,30}
+    # → regex cũ KHÔNG BAO GIỜ khớp đúng, và có thể đã vơ nhầm số rác ở chỗ
+    # khác trên trang (giải thích được vì sao log CI ra 24 giống hệt cả 3
+    # ticker). Cách mới: neo "Total <coin> in fund" trước để xác định đúng
+    # khu vực, sau đó tìm cặp "As of <ngày> <số>" ĐẦU TIÊN xuất hiện sau neo
+    # đó (trong cửa sổ 400 ký tự) — khớp đúng cấu trúc thật đã thấy ở cả
+    # FETH ("As of Jul-24-2026 481,939.5378") và FSOL ("As of Jul-24-2026
+    # 1,709,750.6034"). Lấy cặp ĐẦU TIÊN là bắt buộc — các field sau đó như
+    # "Ether per share" cũng có dạng "As of <ngày> <số>" nhưng là tỷ lệ nhỏ
+    # (~0.00996), không phải holdings.
+    anchor = re.search(r"Total\s+([A-Za-z]+)\s+in\s+fund", text, re.IGNORECASE)
+    if not anchor:
+        print(f"    Fidelity: không tìm thấy neo 'Total <coin> in fund' trên trang {ticker}")
+        print(f"      → độ dài trang: {len(text)} ký tự | 300 ký tự đầu: {text[:300]!r}")
         return None
-    qty = float(m.group(1).replace(",", ""))
+
+    window = text[anchor.end(): anchor.end() + 400]
+    m = re.search(r"As of\s+([A-Za-z]{3}-\d{1,2}-\d{4})\s+([\d,]+\.?\d*)", window)
+    if not m:
+        print(f"    Fidelity: tìm thấy neo '{anchor.group(0)}' nhưng không thấy 'As of <ngày> <số>' theo sau trên trang {ticker}")
+        print(f"      → 400 ký tự sau neo: {window!r}")
+        return None
+    as_of = m.group(1)
+    qty = float(m.group(2).replace(",", ""))
 
     # ⚠️ SANITY CHECK — THÊM 27/07/2026 sau khi log CI thật cho ra holdings=24
     # cho CẢ 3 ticker (FBTC/FETH/FSOL, khác coin hoàn toàn) — dấu hiệu chắc
@@ -808,17 +840,15 @@ def fetch_fidelity_holdings(session, symbol, ticker):
     MIN_PLAUSIBLE_QTY = 100
     if qty < MIN_PLAUSIBLE_QTY:
         print(f"    Fidelity: {ticker} parse ra qty={qty} — QUÁ NHỎ so với ngưỡng hợp lý ({MIN_PLAUSIBLE_QTY}), nghi false positive regex, coi như thất bại")
-        print(f"      → 300 ký tự quanh chỗ khớp: {text[max(0,m.start()-100):m.end()+100]!r}")
+        print(f"      → đoạn khớp: {window[max(0,m.start()-100):m.end()+100]!r}")
         return None
 
     baseline = STATIC_BTC_HOLDINGS.get(ticker)
     if baseline and not (0.3 * baseline <= qty <= 3.0 * baseline):
         print(f"    Fidelity: {ticker} parse ra qty={qty:.2f} — lệch quá xa baseline tĩnh ({baseline:.2f}), nghi false positive regex, coi như thất bại")
-        print(f"      → 300 ký tự quanh chỗ khớp: {text[max(0,m.start()-100):m.end()+100]!r}")
+        print(f"      → đoạn khớp: {window[max(0,m.start()-100):m.end()+100]!r}")
         return None
 
-    date_m = re.search(r"As of\s+([A-Za-z]{3}-\d{1,2}-\d{4})", text, re.IGNORECASE)
-    as_of = date_m.group(1) if date_m else None
     return (qty, as_of)
 
 
