@@ -1229,12 +1229,31 @@ def compute_self_flow(holdings_today, holdings_prev, price_today):
     """Flow tự tính = Δholdings × giá — CHÍNH XÁC cùng phương pháp Farside/mọi bên
     tracker khác dùng (Shares Outstanding/Holdings đổi × NAV hoặc giá tài sản),
     chỉ khác là mình tính trực tiếp từ dữ liệu holdings gốc của issuer, không qua
-    trung gian nào. Trả về None nếu thiếu bất kỳ input nào (không đoán/không giả)."""
+    trung gian nào. Trả về None nếu thiếu bất kỳ input nào (không đoán/không giả).
+
+    ⚠️ SANITY CHECK THÊM 27/07/2026 — xác nhận qua log CI thật: lần chạy sớm
+    hơn (trước khi có sanity check ở fetch_fidelity_holdings) đã lỡ GHI SỐ
+    HOLDINGS SAI (qty=24, do lỗi regex cũ) vào holdings_history — tức "mốc
+    hôm qua" bị nhiễm. Lần chạy sau đó tính đúng holdings thật (172,278.80)
+    nhưng trừ cho mốc hỏng (24) → ra flow ~$10.9 TỶ (gần bằng nguyên AUM),
+    lọt thẳng vào output vì trước đây compute_self_flow không kiểm tra độ
+    lớn của flow, chỉ kiểm tra có đủ input hay không.
+
+    Giờ chặn thêm: flow 1 ngày của các quỹ ETF này trong thực tế hiếm khi
+    vượt quá ~50% AUM (kể cả ngày biến động mạnh nhất lịch sử). Nếu vượt,
+    coi là dấu hiệu holdings_prev (mốc hôm qua) bị hỏng/nhiễm — trả None để
+    tự fallback Farside cho NGÀY ĐÓ, thay vì đẩy con số sai vào output. Mốc
+    holdings_history vẫn được ghi đè bằng số ĐÚNG ở cuối lần chạy này (xem
+    run()), nên lần chạy KẾ TIẾP sẽ tự khỏi, không cần can thiệp thủ công."""
     if holdings_today is None or holdings_prev is None or price_today is None:
         return None
     if holdings_prev <= 0:
         return None  # tránh trường hợp dữ liệu holdings cũ bị lỗi/rỗng
-    return (holdings_today - holdings_prev) * price_today
+    flow = (holdings_today - holdings_prev) * price_today
+    aum_today = holdings_today * price_today
+    if aum_today > 0 and abs(flow) > 0.5 * aum_today:
+        return None  # nghi holdings_prev (mốc "hôm qua") bị nhiễm số liệu sai
+    return flow
 
 
 HOLDINGS_HISTORY_KEY = "etf-holdings-history.json"
