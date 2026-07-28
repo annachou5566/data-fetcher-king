@@ -117,7 +117,7 @@ ETF_REGISTRY = [
     # TỪNG BƯỚC, không phải xoá Farside 1 lần, để không bao giờ bị mất dữ liệu quỹ
     # nào giữa chừng nếu 1 nguồn tự tính bị lỗi/thay đổi định dạng.
     {"ticker":"IBIT","name":"iShares Bitcoin Trust ETF","issuer":"BlackRock","underlying":"BTC","fee":0.25,"src":"ishares","self_computed":True},
-    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq"},
+    {"ticker":"FBTC","name":"Fidelity Wise Origin Bitcoin Fund","issuer":"Fidelity","underlying":"BTC","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FBTC"},
     {"ticker":"GBTC","name":"Grayscale Bitcoin Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":1.50,"src":"nasdaq"},
     {"ticker":"ARKB","name":"ARK 21Shares Bitcoin ETF","issuer":"ARK/21Shares","underlying":"BTC","fee":0.21,"src":"nasdaq","self_computed":True,"ark_fund_name":"21SHARES_BITCOIN"},
     {"ticker":"BITB","name":"Bitwise Bitcoin ETF","issuer":"Bitwise","underlying":"BTC","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bitbetf.com"},
@@ -137,7 +137,7 @@ ETF_REGISTRY = [
     {"ticker":"MSBT","name":"Morgan Stanley Bitcoin Trust","issuer":"Morgan Stanley","underlying":"BTC","fee":0.14,"src":"nasdaq"},
     {"ticker":"BTC","name":"Grayscale Bitcoin Mini Trust ETF","issuer":"Grayscale","underlying":"BTC","fee":0.15,"src":"nasdaq"},
     {"ticker":"ETHA","name":"iShares Ethereum Trust ETF","issuer":"BlackRock","underlying":"ETH","fee":0.25,"src":"ishares","self_computed":True},
-    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq"},
+    {"ticker":"FETH","name":"Fidelity Ethereum Fund","issuer":"Fidelity","underlying":"ETH","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FETH"},
     {"ticker":"ETHE","name":"Grayscale Ethereum Trust ETF","issuer":"Grayscale","underlying":"ETH","fee":2.50,"src":"nasdaq"},
     {"ticker":"ETHW","name":"Bitwise Ethereum ETF","issuer":"Bitwise","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"ethwetf.com"},
     {"ticker":"ETHV","name":"VanEck Ethereum ETF","issuer":"VanEck","underlying":"ETH","fee":0.20,"src":"nasdaq","self_computed":True,"vaneck_slug":"ethereum-etf-ethv","vaneck_asset_word":"Ether"},
@@ -153,7 +153,7 @@ ETF_REGISTRY = [
     # Solana ETFs — xác nhận issuer/fee qua search 07/2026
     {"ticker":"BSOL","name":"Bitwise Solana Staking ETF","issuer":"Bitwise","underlying":"SOL","fee":0.20,"src":"nasdaq","self_computed":True,"bitwise_domain":"bsoletf.com"},
     {"ticker":"VSOL","name":"VanEck Solana ETF","issuer":"VanEck","underlying":"SOL","fee":0.30,"src":"nasdaq","self_computed":True,"vaneck_slug":"solana-etf-vsol","vaneck_asset_word":"Solana"},
-    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq"},
+    {"ticker":"FSOL","name":"Fidelity Solana Fund","issuer":"Fidelity","underlying":"SOL","fee":0.25,"src":"nasdaq","self_computed":True,"fidelity_symbol":"FSOL"},
     {"ticker":"TSOL","name":"21Shares Solana ETF","issuer":"21Shares","underlying":"SOL","fee":0.21,"src":"nasdaq","self_computed":True,"shares21_slug":"tsol"},
     {"ticker":"SOEZ","name":"Franklin Solana ETF","issuer":"Franklin","underlying":"SOL","fee":0.19,"src":"nasdaq","self_computed":True,"franklin_url":"https://www.franklintempleton.com/investments/options/exchange-traded-funds/products/47315/SINGLCLASS/franklin-solana-etf/SOEZ"},
     # GSOL: KHÁC cấu trúc — xác nhận qua Grayscale tweet chính thức "GSOL is not
@@ -738,32 +738,56 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
 
 
 def fetch_fidelity_holdings(session, symbol, ticker):
-    """⚠️ CHƯA XÁC MINH bằng Playwright thật (chỉ mới xác nhận qua nội dung
-    user tự paste từ trình duyệt thật, KHÔNG phải qua fetch tự động của tôi).
-
-    digital.fidelity.com/prgw/digital/research/quote/dashboard/summary — trang
-    quote công khai (không cần login để xem, chỉ cần login mới có real-time
-    thay vì delayed 15p). User xác nhận trang có sẵn:
+    """digital.fidelity.com/prgw/digital/research/quote/dashboard/summary —
+    trang quote công khai (không cần login), có sẵn field:
       "Total bitcoin in fund — As of Jul-24-2026: 172,278.8049"
-    (đúng số, đúng format, có ngày cập nhật — đây LÀ nguồn gốc rễ thật của
-    Fidelity, khác với kết luận sai trước đó của tôi rằng Fidelity không công
-    bố coin count).
 
-    Đã xác nhận qua fetch trực tiếp: trang là React SPA (fetch tĩnh chỉ ra
-    shell rỗng, không có số liệu) — cần Playwright để render JS ra số thật,
-    giống VanEck/Franklin/Invesco.
+    XÁC NHẬN QUA VIEW-SOURCE THẬT 27/07/2026 (user tự lấy, không phải tôi
+    đoán): nội dung app CHỈ LÀ "<resexp-app-root ...></resexp-app-root>" —
+    custom element RỖNG, số liệu do JS bơm vào sau khi load. Nghĩa là fetch
+    trực tiếp (requests/curl_cffi) KHÔNG BAO GIỜ lấy được số liệu, bất kể có
+    vượt qua được chặn IP hay không — đây là bản chất kiến trúc trang, không
+    phải lỗi tạm thời. Vì vậy bỏ hẳn tầng "direct fetch" (khác CoinShares —
+    trang đó có SSR một phần).
 
-    Field tên có thể khác nhau theo coin — dùng regex tổng quát "Total <coin>
-    in fund" (không cố định "bitcoin") để không lặp lỗi ghi nhãn không nhất
-    quán đã gặp trước đây (VanEck/VSOL dùng "VSOL in Trust" thay vì "Solana").
+    XÁC NHẬN QUA LOG CI THẬT 07/2026: Playwright (Chromium THẬT) từ IP GitHub
+    Actions từng bị chặn ở tầng kết nối (net::ERR_HTTP2_PROTOCOL_ERROR) —
+    nghi WAF chặn theo IP reputation. Nhưng r.jina.ai (tầng dưới đây) CHẠY
+    ĐƯỢC và trả về HTTP 200 có khớp field — VẤN ĐỀ MỚI PHÁT SINH: kết quả nó
+    khớp SAI (false positive regex, ra qty=24 cho cả 3 ticker khác coin) —
+    xem SANITY CHECK bên dưới, đã thêm để chặn không cho số liệu sai lọt vào
+    output thay vì fix nguyên nhân gốc (chưa xác định chính xác r.jina.ai trả
+    về nội dung gì gây khớp sai — cần user paste lại raw response của
+    r.jina.ai để chẩn đoán tiếp, không đoán mò thêm).
     """
     url = f"https://digital.fidelity.com/prgw/digital/research/quote/dashboard/summary?symbol={symbol}"
-    os.makedirs("debug_screenshots", exist_ok=True)
-    text = fetch_rendered_text(url, wait_ms=2500, scroll=True,
-        screenshot_path=f"debug_screenshots/fidelity_{ticker}.png")
+    text = None
+
+    # 1) r.jina.ai — ĐÃ XÁC NHẬN CHẠY QUA ĐƯỢC (HTTP 200) theo log CI thật,
+    # nhưng nội dung trả về gây false positive regex — xem sanity check
+    try:
+        rj = session.get(f"https://r.jina.ai/{url}",
+            headers={"X-Return-Format":"text","Accept":"text/plain"}, timeout=25)
+        if rj.status_code == 200 and re.search(r"Total\s+[A-Za-z]+\s+in\s+fund", rj.text, re.IGNORECASE):
+            text = rj.text
+        else:
+            print(f"    Fidelity (r.jina.ai) {ticker}: HTTP {rj.status_code}, khớp field: {bool(re.search(r'Total .{1,20} in fund', rj.text, re.IGNORECASE)) if rj.status_code==200 else 'N/A'}")
+    except Exception as e:
+        print(f"    Fidelity (r.jina.ai) lỗi ({ticker}): {e}")
+
+    # 2) Playwright — dự phòng cuối, đã biết trước khả năng cao vẫn bị chặn
+    # ở tầng kết nối (xem docstring)
     if not text:
-        print(f"    Fidelity: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
+        os.makedirs("debug_screenshots", exist_ok=True)
+        text = fetch_rendered_text(url, wait_ms=2500, scroll=True,
+            screenshot_path=f"debug_screenshots/fidelity_{ticker}.png")
+        if not text:
+            print(f"    Fidelity: Playwright không lấy được nội dung cho {ticker} (chặn kết nối hoặc chưa cài playwright)")
+
+    if not text:
+        print(f"    Fidelity: cả 2 tầng (r.jina.ai/Playwright) đều thất bại cho {ticker}")
         return None
+
     text = text.replace("\xa0", " ")
     text = re.sub(r"\s+", " ", text)
     m = re.search(r"Total\s+[A-Za-z]+\s+in\s+fund\D{0,30}?([\d,]+\.?\d*)", text, re.IGNORECASE)
@@ -773,7 +797,29 @@ def fetch_fidelity_holdings(session, symbol, ticker):
         print(f"      → độ dài trang: {len(text)} ký tự | 300 ký tự đầu: {snippet!r}")
         return None
     qty = float(m.group(1).replace(",", ""))
-    return (qty, None)
+
+    # ⚠️ SANITY CHECK — THÊM 27/07/2026 sau khi log CI thật cho ra holdings=24
+    # cho CẢ 3 ticker (FBTC/FETH/FSOL, khác coin hoàn toàn) — dấu hiệu chắc
+    # chắn của false positive: r.jina.ai/Playwright khớp nhầm 1 đoạn text nào
+    # đó tình cờ đúng dạng "Total <chữ> in fund ... 24" nhưng KHÔNG PHẢI số
+    # holdings thật. Không quỹ ETF nào trong danh sách này giữ dưới 100 coin —
+    # nếu qty thấp bất thường, coi là parse sai, KHÔNG trả kết quả (để tự
+    # fallback Farside) thay vì âm thầm ghi AUM sai lệch hàng trăm/nghìn lần.
+    MIN_PLAUSIBLE_QTY = 100
+    if qty < MIN_PLAUSIBLE_QTY:
+        print(f"    Fidelity: {ticker} parse ra qty={qty} — QUÁ NHỎ so với ngưỡng hợp lý ({MIN_PLAUSIBLE_QTY}), nghi false positive regex, coi như thất bại")
+        print(f"      → 300 ký tự quanh chỗ khớp: {text[max(0,m.start()-100):m.end()+100]!r}")
+        return None
+
+    baseline = STATIC_BTC_HOLDINGS.get(ticker)
+    if baseline and not (0.3 * baseline <= qty <= 3.0 * baseline):
+        print(f"    Fidelity: {ticker} parse ra qty={qty:.2f} — lệch quá xa baseline tĩnh ({baseline:.2f}), nghi false positive regex, coi như thất bại")
+        print(f"      → 300 ký tự quanh chỗ khớp: {text[max(0,m.start()-100):m.end()+100]!r}")
+        return None
+
+    date_m = re.search(r"As of\s+([A-Za-z]{3}-\d{1,2}-\d{4})", text, re.IGNORECASE)
+    as_of = date_m.group(1) if date_m else None
+    return (qty, as_of)
 
 
 def fetch_franklin_holdings(session, url, ticker):
@@ -1347,29 +1393,28 @@ def run(r2):
                     print(f"  ✗ {t}: không lấy được holdings từ CoinShares — fallback Farside cho ticker này")
                 time.sleep(1.0)
 
-        # Fidelity: ĐÃ TẮT — xác nhận qua log thật + ảnh chụp user 07/2026:
-        # trang digital.fidelity.com CÓ đủ dữ liệu thật ("Total ether in fund:
-        # 481,939.5378"...) khi mở bằng trình duyệt thật (IP thường), nhưng từ
-        # GitHub Actions (IP datacenter) LUÔN bị chặn ngay ở tầng kết nối
-        # (net::ERR_HTTP2_PROTOCOL_ERROR, thử --disable-http2 vẫn timeout).
-        # Đây là WAF chặn theo dải IP datacenter/cloud — cùng loại vấn đề như
-        # Grayscale (Vercel Security Checkpoint), chỉ khác cách biểu hiện.
-        # Quyết định: KHÔNG cố lách chặn IP, áp dụng nhất quán cùng nguyên tắc
-        # đã dùng cho Grayscale. FBTC/FETH/FSOL giữ nguyên dùng Farside.
-        # for etf in ETF_REGISTRY:
-        #     if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("fidelity_symbol"):
-        #         t=etf["ticker"]
-        #         res=fetch_fidelity_holdings(session, etf["fidelity_symbol"], t)
-        #         if res:
-        #             qty, as_of=res
-        #             holdings_today[t]=qty
-        #             u=etf["underlying"]
-        #             aum=qty*crypto_prices[u] if u in crypto_prices else None
-        #             issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-        #             print(f"  ✓ {t} (Fidelity): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
-        #         else:
-        #             print(f"  ✗ {t}: không lấy được holdings từ Fidelity — fallback Farside cho ticker này")
-        #         time.sleep(1.0)
+        # ⚠️ Fidelity — BẬT LẠI 27/07/2026 với 3 tầng fallback (xem docstring
+        # fetch_fidelity_holdings). Trước đó tắt vì Playwright bị chặn ở tầng
+        # kết nối (net::ERR_HTTP2_PROTOCOL_ERROR) — CHƯA thử r.jina.ai (tầng
+        # có IP khác GitHub Actions, đã lấy được BRRR dù DataDome chặn request
+        # trực tiếp). Nếu log CI lần này vẫn ra "cả 3 tầng đều thất bại" cho
+        # cả FBTC/FETH/FSOL → xác nhận chắc chắn là chặn IP thuần, không phải
+        # thiếu kỹ thuật gì thêm có thể thử miễn phí — lúc đó residential
+        # proxy là bước hợp lý duy nhất còn lại.
+        for etf in ETF_REGISTRY:
+            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("fidelity_symbol"):
+                t=etf["ticker"]
+                res=fetch_fidelity_holdings(session, etf["fidelity_symbol"], t)
+                if res:
+                    qty, as_of=res
+                    holdings_today[t]=qty
+                    u=etf["underlying"]
+                    aum=qty*crypto_prices[u] if u in crypto_prices else None
+                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+                    print(f"  ✓ {t} (Fidelity): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+                else:
+                    print(f"  ✗ {t}: không lấy được holdings từ Fidelity — fallback Farside cho ticker này")
+                time.sleep(1.0)
 
         # Grayscale: ĐÃ TẮT — thử qua Playwright thì gặp "Vercel Security
         # Checkpoint / Failed to verify your browser" (xác nhận qua log thật
