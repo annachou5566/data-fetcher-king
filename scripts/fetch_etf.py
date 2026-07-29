@@ -654,7 +654,7 @@ def fetch_21shares_aum(session, slug, ticker):
         return None
 
 
-def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector=None, screenshot_path=None, scroll=False):
+def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector=None, scroll=False):
     """Render trang bằng Chromium THẬT qua Playwright — giải pháp GỐC RỄ cho các
     trang React/Next SPA (VanEck, Grayscale) mà requests/cloudscraper không lấy
     được nội dung vì cần chạy JS.
@@ -674,10 +674,10 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
     (lazy-load để tiết kiệm tài nguyên), nếu không cuộn thì các widget đó sẽ
     mãi trống trơn dù trang đã "render xong" về mặt kỹ thuật.
 
-    screenshot_path: nếu có, LƯU ẢNH CHỤP MÀN HÌNH đúng lúc đọc nội dung (sau khi
-    đã thử bấm hết click_texts) — để biết CHÍNH XÁC Playwright đang thấy gì, thay
-    vì đoán mù qua text thô. Ảnh lưu vào thư mục này sẽ được workflow .yml upload
-    làm artifact để bạn tải về xem trực tiếp.
+    (Đã bỏ chụp màn hình debug 28/07/2026 — không còn dùng tới, chỉ tốn thời
+    gian chạy CI. Nếu cần debug lại sau này, xem log print() chi tiết ngay
+    tại chỗ regex fail — đã có sẵn đủ thông tin: độ dài trang, có/không thấy
+    field, và 200-400 ký tự quanh chỗ khớp/không khớp.)
 
     YÊU CẦU CÀI ĐẶT (không có sẵn trong sandbox của tôi, bạn cần thêm vào CI):
         pip install playwright
@@ -712,7 +712,7 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
                             y += step
                             page.evaluate(f"window.scrollTo(0, {y})")
                             page.wait_for_timeout(400)  # đủ thời gian trigger IntersectionObserver
-                        page.evaluate("window.scrollTo(0, 0)")  # về đầu trang cho screenshot đẹp
+                        page.evaluate("window.scrollTo(0, 0)")
                     except Exception as e:
                         print(f"    Playwright: cuộn trang lỗi: {e}")
                 if extra_wait_selector:
@@ -721,11 +721,6 @@ def fetch_rendered_text(url, click_texts=None, wait_ms=4000, extra_wait_selector
                     except Exception:
                         pass
                 page.wait_for_timeout(wait_ms)
-                if screenshot_path:
-                    try:
-                        page.screenshot(path=screenshot_path, full_page=True)
-                    except Exception as e:
-                        print(f"    Playwright: chụp màn hình lỗi ({screenshot_path}): {e}")
                 text = page.inner_text("body")
                 browser.close()
                 return text
@@ -788,10 +783,8 @@ def fetch_fidelity_holdings(session, symbol, ticker):
     # hiện) thay vì chỉ chờ cố định 2500ms — vì đã xác nhận trang này có thể
     # load chậm hơn mức đó (xem lý do ở tầng 1).
     if not text:
-        os.makedirs("debug_screenshots", exist_ok=True)
         text = fetch_rendered_text(url, wait_ms=4000, scroll=True,
-            extra_wait_selector="text=Total",
-            screenshot_path=f"debug_screenshots/fidelity_{ticker}.png")
+            extra_wait_selector="text=Total")
         if not text:
             print(f"    Fidelity: Playwright không lấy được nội dung cho {ticker} (chặn kết nối hoặc chưa cài playwright)")
 
@@ -867,11 +860,10 @@ def fetch_franklin_holdings(session, url, ticker):
     "<coin> in Fund" (không cố định tên coin, tránh lặp lỗi ghi nhãn không nhất
     quán như đã gặp ở VanEck/VSOL).
     """
-    os.makedirs("debug_screenshots", exist_ok=True)
     text = fetch_rendered_text(url,
         click_texts=["Individual Investor","Continue","Accept","Agree","I Agree",
                      "Yes","Confirm","United States","Enter","OK","Proceed"],
-        wait_ms=2000, scroll=True, screenshot_path=f"debug_screenshots/franklin_{ticker}.png")
+        wait_ms=2000, scroll=True)
     if not text:
         print(f"    Franklin: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
         return None
@@ -897,11 +889,10 @@ def fetch_invesco_holdings(session, url, ticker):
     sản phẩm ETF (chỉ disallow vài query-param như asOfDate=). Có dòng
     "Total units of crypto <số>" sau khi qua cổng + JS render xong.
     """
-    os.makedirs("debug_screenshots", exist_ok=True)
     text = fetch_rendered_text(url,
         click_texts=["Individual Investor","Confirm","Continue","Accept","Agree",
                      "I Agree","Yes","United States","Enter","OK","Proceed"],
-        wait_ms=2000, scroll=True, screenshot_path=f"debug_screenshots/invesco_{ticker}.png")
+        wait_ms=2000, scroll=True)
     if not text:
         print(f"    Invesco: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
         return None
@@ -1089,18 +1080,14 @@ def fetch_vaneck_holdings(session, url_slug, asset_word, ticker):
     # thật) — vấn đề THẬT là mục "Holdings" (chứa "ETF Statistics"/"X in Fund")
     # nằm DƯỚI màn hình đầu, chỉ load khi cuộn tới (lazy-load, giống Performance/
     # Fees cũng trống tương tự cho tới khi cuộn qua).
-    os.makedirs("debug_screenshots", exist_ok=True)
-    shot_path = f"debug_screenshots/vaneck_{ticker}.png"
     pw_text = fetch_rendered_text(url,
         click_texts=["Continue","United States","Individual Investor","Accept","Agree",
                      "I Agree","Yes","Confirm","Enter","Get Started","OK","Proceed"],
-        wait_ms=2000, extra_wait_selector="text=ETF Statistics", screenshot_path=shot_path, scroll=True)
+        wait_ms=2000, extra_wait_selector="text=ETF Statistics", scroll=True)
     if pw_text and "ETF Statistics" not in pw_text:
         # Vẫn chưa thấy dữ liệu Holdings dù đã cuộn — có thể cần cuộn chậm hơn/
-        # chờ lâu hơn nữa. In ra để biết CHÍNH XÁC, VÀ đã lưu ảnh chụp thật lúc
-        # đó vào debug_screenshots/ — workflow .yml sẽ upload làm artifact để
-        # xem trực tiếp, không cần đoán mù qua text nữa.
-        print(f"    VanEck (Playwright) {ticker}: đã cuộn nhưng vẫn chưa thấy Holdings | đã lưu ảnh {shot_path} | 300 ký tự đầu: {pw_text[:300]!r}")
+        # chờ lâu hơn nữa. In ra 300 ký tự đầu để chẩn đoán, không cần ảnh chụp.
+        print(f"    VanEck (Playwright) {ticker}: đã cuộn nhưng vẫn chưa thấy Holdings | 300 ký tự đầu: {pw_text[:300]!r}")
     text = pw_text  # dùng luôn dù chưa chắc có Holdings — vẫn có thể có AUM
 
     # 1) r.jina.ai — render JS qua proxy (dự phòng nếu chưa cài Playwright)
@@ -1225,10 +1212,8 @@ def fetch_coinshares_holdings(session, url, ticker, asset_ticker="XBTUSD"):
 
     # 2) Playwright — cuối cùng, tốn tài nguyên nhất
     if not text:
-        os.makedirs("debug_screenshots", exist_ok=True)
         text = fetch_rendered_text(url, wait_ms=3000, scroll=True,
-            extra_wait_selector=f"text={asset_ticker}",
-            screenshot_path=f"debug_screenshots/coinshares_{ticker}.png")
+            extra_wait_selector=f"text={asset_ticker}")
         if not text:
             print(f"    CoinShares: Playwright không lấy được nội dung cho {ticker} (chưa cài playwright hoặc lỗi mạng)")
 
@@ -1505,29 +1490,33 @@ def run(r2):
                     print(f"  ✗ {t}: không lấy được holdings từ Fidelity — fallback Farside cho ticker này")
                 time.sleep(1.0)
 
-        # ⚠️ Grayscale — BẬT LẠI 28/07/2026 sau khi xác nhận robots.txt CHO
-        # PHÉP hoàn toàn (Allow: *, khác giả định ban đầu) và cấu trúc trang
-        # thật (nhãn "TOTAL <COIN> IN FUND", không phải "in Trust" như đoán
-        # trước — user tự Ctrl+A copy trang GBTC thật để xác nhận). GSOL vẫn
-        # giữ Farside — tài liệu cũ ghi rõ đây là sản phẩm OTC, domain khác
-        # (grayscale.com/funds/ chứ không phải etfs.grayscale.com/), CHƯA xác
-        # nhận lại. URL của BTC/ETHE/HYPG là ĐOÁN theo pattern GBTC (domain +
-        # ticker viết thường) — CHƯA xác nhận từng URL riêng, nếu sai sẽ tự
-        # fallback Farside an toàn (không có rủi ro sai số, đã có sanity check).
-        for etf in ETF_REGISTRY:
-            if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("grayscale_url"):
-                t=etf["ticker"]
-                res=fetch_grayscale_holdings(session, etf["grayscale_url"], t)
-                if res:
-                    qty, as_of = res
-                    holdings_today[t]=qty
-                    u=etf["underlying"]
-                    aum=qty*crypto_prices[u] if u in crypto_prices else None
-                    issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
-                    print(f"  ✓ {t} (Grayscale): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
-                else:
-                    print(f"  ✗ {t}: không lấy được holdings từ Grayscale — fallback Farside cho ticker này")
-                time.sleep(1.0)
+        # Grayscale: ĐÃ TẮT LẠI 28/07/2026 sau khi thử thật qua CI — xác nhận
+        # KẾT LUẬN CŨ ĐÚNG: cả 4 ticker (GBTC/BTC/ETHE/HYPG) đều dính
+        # "Failed to verify your browser Code 21 Vercel Security Checkpoint"
+        # ở CẢ 3 TẦNG, kể cả r.jina.ai (trước đó r.jina.ai từng qua được với
+        # CoinShares/DataDome, nhưng KHÔNG qua được Kasada của Grayscale) —
+        # không phải lỗi code, robots.txt vẫn cho phép (Allow: *), chỉ là
+        # Kasada quá mạnh, không có cách miễn phí nào vượt qua được. Không
+        # bật lại nữa — giữ Farside cho cả 5 ticker Grayscale, tránh gõ cửa
+        # vô ích vào hệ thống chống bot của họ mỗi ngày (tốn thời gian CI,
+        # không lịch sự). Code fetch_grayscale_holdings() vẫn giữ nguyên
+        # trong file (đã đúng cấu trúc "TOTAL X IN FUND") phòng khi Grayscale
+        # thay đổi hệ thống chống bot trong tương lai, muốn thử lại chỉ cần
+        # bỏ comment đoạn dưới.
+        # for etf in ETF_REGISTRY:
+        #     if etf.get("src")=="nasdaq" and etf.get("self_computed") and etf.get("grayscale_url"):
+        #         t=etf["ticker"]
+        #         res=fetch_grayscale_holdings(session, etf["grayscale_url"], t)
+        #         if res:
+        #             qty, as_of = res
+        #             holdings_today[t]=qty
+        #             u=etf["underlying"]
+        #             aum=qty*crypto_prices[u] if u in crypto_prices else None
+        #             issuer[t]={"holdings":qty,"aum":aum,"nav":nasdaq.get(t,{}).get("price"),"nav_date":as_of}
+        #             print(f"  ✓ {t} (Grayscale): holdings={qty:.2f}  AUM={fmt_aum(aum)}")
+        #         else:
+        #             print(f"  ✗ {t}: không lấy được holdings từ Grayscale — fallback Farside cho ticker này")
+        #         time.sleep(1.0)
 
     print("\n🔧 [4/4] Building output...")
     etfs=[]; totals={}
