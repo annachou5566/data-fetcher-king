@@ -1,46 +1,51 @@
 """
-Multi-tier scraper with automatic fallback chain:
-  1) curl_cffi (TLS/browser impersonation)
-  2) Playwright (headless real browser)
-  3) cloudscraper
-  4) Crawl4AI (last resort)
+Test crawl toàn bộ 17 quỹ Grayscale qua r.jina.ai (đã xác nhận qua được Kasada
+khi thêm header x-no-cache: true — bản cũ thiếu header này nên dính cache của
+chính response bị chặn).
 
-Always writes a JSON output file, even on total failure.
+Mục tiêu: xác nhận ticker nào lấy được đủ dữ liệu (đặc biệt "Total X in Trust"
+= holdings, cần cho việc tự tính Flow), ticker nào không có field này (covered
+call / miners / multi-asset — vốn không có holdings coin trực tiếp).
+
+Luôn ghi JSON, luôn upload artifact, in log số liệu cụ thể từng ticker.
 """
 
-import asyncio
 import json
 import os
 import random
+import re
 import time
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-URL = "https://etfs.grayscale.com/btc"
+import requests
+
 ROOT = Path(__file__).resolve().parent
-OUTPUT_FILE = ROOT / "grayscale_btc.json"
+OUTPUT_FILE = ROOT / "grayscale_all.json"
 
-REQUEST_TIMEOUT = 30  # seconds, per attempt
-MAX_RETRIES_PER_METHOD = 3
+REQUEST_TIMEOUT = 30
+MAX_RETRIES = 3
 
-REALISTIC_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
-
-DEFAULT_HEADERS = {
-    "User-Agent": REALISTIC_UA,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-}
+# Toàn bộ 17 link bạn đưa, kèm ghi chú loại quỹ để đối chiếu kết quả parse
+GRAYSCALE_FUNDS = [
+    {"ticker": "GAVA", "url": "https://etfs.grayscale.com/gava", "kind": "spot_single (Aptos)"},
+    {"ticker": "BTC",  "url": "https://etfs.grayscale.com/btc",  "kind": "spot_single (Bitcoin Mini Trust)"},
+    {"ticker": "GBTC", "url": "https://etfs.grayscale.com/gbtc", "kind": "spot_single (Bitcoin Trust)"},
+    {"ticker": "GLNK", "url": "https://etfs.grayscale.com/glnk", "kind": "spot_single (Chainlink)"},
+    {"ticker": "GDOG", "url": "https://etfs.grayscale.com/gdog", "kind": "spot_single (Dogecoin)"},
+    {"ticker": "ETHE", "url": "https://etfs.grayscale.com/ethe", "kind": "spot_single (Ethereum Trust)"},
+    {"ticker": "ETH",  "url": "https://etfs.grayscale.com/eth",  "kind": "spot_single (Ethereum Mini Trust)"},
+    {"ticker": "HYPG", "url": "https://etfs.grayscale.com/hypg", "kind": "spot_single (Hyperliquid)"},
+    {"ticker": "GSOL", "url": "https://etfs.grayscale.com/gsol", "kind": "spot_single (Solana)"},
+    {"ticker": "GSUI", "url": "https://etfs.grayscale.com/gsui", "kind": "spot_single_staking (Sui)"},
+    {"ticker": "GXRP", "url": "https://etfs.grayscale.com/gxrp", "kind": "spot_single (XRP)"},
+    {"ticker": "GDLC", "url": "https://etfs.grayscale.com/gdlc", "kind": "multi_asset (rổ 5 coin)"},
+    {"ticker": "BCOR", "url": "https://etfs.grayscale.com/bcor", "kind": "equity (Bitcoin Adopters — cổ phiếu cty)"},
+    {"ticker": "BTCC", "url": "https://etfs.grayscale.com/btcc", "kind": "derivatives (Bitcoin Covered Call)"},
+    {"ticker": "MNRS", "url": "https://etfs.grayscale.com/mnrs", "kind": "equity (Bitcoin Miners — cổ phiếu cty)"},
+    {"ticker": "BPI",  "url": "https://etfs.grayscale.com/bpi",  "kind": "derivatives (Bitcoin Premium Income)"},
+    {"ticker": "ETCO", "url": "https://etfs.grayscale.com/etco", "kind": "derivatives (Ethereum Covered Call)"},
+]
 
 
 def log(tag, msg):
@@ -49,400 +54,179 @@ def log(tag, msg):
 
 
 def backoff_sleep(attempt):
-    base = min(2 ** attempt, 10)
-    jitter = random.uniform(0, 1.5)
-    delay = base + jitter
-    log("RETRY", f"sleeping {delay:.2f}s before retry (attempt {attempt})")
+    delay = min(2 ** attempt, 8) + random.uniform(0, 1.2)
+    log("RETRY", f"sleeping {delay:.2f}s (attempt {attempt})")
     time.sleep(delay)
 
 
-def extract_text_and_title(html):
-    """Best-effort text/title extraction using BeautifulSoup, never raises."""
-    title = None
-    extracted_text = None
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html or "", "lxml")
-        if soup.title and soup.title.string:
-            title = soup.title.string.strip()
-        for tag in soup(["script", "style", "noscript"]):
-            tag.decompose()
-        extracted_text = soup.get_text(separator="\n", strip=True)
-    except Exception as e:
-        log("PARSE", f"bs4 extraction failed: {e}")
-    return title, extracted_text
-
-
-def make_result(method, success, status_code=None, html=None, final_url=None,
-                 error_message=None, markdown=None, debug=None):
-    title, extracted_text = extract_text_and_title(html) if html else (None, None)
-    return {
-        "method_used": method,
-        "success": success,
-        "status_code": status_code,
-        "final_url": final_url,
-        "title": title,
-        "html": html,
-        "html_length": len(html) if html else 0,
-        "extracted_text": extracted_text,
-        "cleaned_html": extracted_text,  # alias for compatibility
-        "markdown": markdown,
-        "markdown_length": len(markdown) if markdown else 0,
-        "error_message": error_message,
-        "debug": debug or {},
-    }
-
-# ---------------------------------------------------------------------------
-# Tier 0: r.jina.ai Reader — fetch qua hạ tầng của Jina, né chặn IP GitHub Actions
-# Free, không cần signup, không cần API key (rate limit 20 req/phút không key)
-# ---------------------------------------------------------------------------
-def fetch_jina_reader():
-    method = "jina_reader"
-    try:
-        import requests
-    except ImportError as e:
-        log(method, f"not installed: {e}")
-        return make_result(method, False, error_message=f"import failed: {e}")
-
-    jina_url = f"https://r.jina.ai/{URL}"
-    jina_headers = {
+def fetch_jina(url, ticker):
+    """Fetch qua r.jina.ai với x-no-cache=true — đây là fix đã xác nhận qua
+    được Kasada của Grayscale (bản cũ thiếu header này nên dính cache cũ)."""
+    jina_url = f"https://r.jina.ai/{url}"
+    headers = {
         "Accept": "text/plain",
-        "x-no-cache": "true",  # bỏ qua cache nếu response cũ từng bị lỗi/chặn
+        "x-no-cache": "true",
     }
-    # Nếu sau này bạn có JINA_API_KEY (vẫn free, chỉ tăng rate limit), tự động dùng
     jina_key = os.getenv("JINA_API_KEY")
     if jina_key:
-        jina_headers["Authorization"] = f"Bearer {jina_key}"
+        headers["Authorization"] = f"Bearer {jina_key}"
 
-    for attempt in range(1, MAX_RETRIES_PER_METHOD + 1):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            log(method, f"attempt {attempt} -> {jina_url}")
-            resp = requests.get(jina_url, headers=jina_headers, timeout=REQUEST_TIMEOUT)
+            log(ticker, f"jina attempt {attempt} -> {jina_url}")
+            resp = requests.get(jina_url, headers=headers, timeout=REQUEST_TIMEOUT)
             status = resp.status_code
             text = resp.text or ""
-            log(method, f"status={status} len={len(text)}")
+            log(ticker, f"status={status} len={len(text)}")
 
             if status == 200 and text.strip():
-                # Jina trả về format: "Title: ...\nURL Source: ...\nMarkdown Content:\n..."
-                title = None
-                for line in text.splitlines()[:5]:
-                    if line.lower().startswith("title:"):
-                        title = line.split(":", 1)[1].strip()
-                        break
-
-                return {
-                    "method_used": method,
-                    "success": True,
-                    "status_code": status,
-                    "final_url": jina_url,
-                    "title": title,
-                    "html": None,
-                    "html_length": 0,
-                    "extracted_text": text,
-                    "cleaned_html": text,
-                    "markdown": text,
-                    "markdown_length": len(text),
-                    "error_message": None,
-                    "debug": {"attempt": attempt, "source": "r.jina.ai"},
-                }
-            else:
-                log(method, f"non-200 or empty body (status={status})")
-                if attempt < MAX_RETRIES_PER_METHOD:
-                    backoff_sleep(attempt)
-        except Exception as e:
-            log(method, f"exception: {e}")
-            if attempt < MAX_RETRIES_PER_METHOD:
-                backoff_sleep(attempt)
-
-    return make_result(method, False, error_message="all jina_reader attempts failed")
-
-# ---------------------------------------------------------------------------
-# Tier 1: curl_cffi (TLS / HTTP2 / browser fingerprint impersonation)
-# ---------------------------------------------------------------------------
-def fetch_curl_cffi():
-    method = "curl_cffi"
-    try:
-        from curl_cffi import requests as cffi_requests
-    except ImportError as e:
-        log(method, f"not installed: {e}")
-        return make_result(method, False, error_message=f"import failed: {e}")
-
-    impersonations = ["chrome124", "chrome120", "chrome110", "safari17_0"]
-
-    for attempt in range(1, MAX_RETRIES_PER_METHOD + 1):
-        imp = impersonations[(attempt - 1) % len(impersonations)]
-        try:
-            log(method, f"attempt {attempt} using impersonate={imp}")
-            resp = cffi_requests.get(
-                URL,
-                impersonate=imp,
-                timeout=REQUEST_TIMEOUT,
-                headers=DEFAULT_HEADERS,
-                allow_redirects=True,
-            )
-            status = resp.status_code
-            log(method, f"status={status} len={len(resp.text or '')}")
-
-            if status == 200 and resp.text:
-                return make_result(
-                    method, True, status_code=status, html=resp.text,
-                    final_url=str(resp.url),
-                    debug={"impersonate": imp, "attempt": attempt},
-                )
-            else:
-                log(method, f"non-200 or empty body (status={status})")
-                if attempt < MAX_RETRIES_PER_METHOD:
-                    backoff_sleep(attempt)
-        except Exception as e:
-            log(method, f"exception: {e}")
-            if attempt < MAX_RETRIES_PER_METHOD:
-                backoff_sleep(attempt)
-
-    return make_result(method, False, error_message="all curl_cffi attempts failed")
-
-
-# ---------------------------------------------------------------------------
-# Tier 2: Playwright headless (real browser, executes JS)
-# ---------------------------------------------------------------------------
-async def fetch_playwright():
-    method = "playwright"
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError as e:
-        log(method, f"not installed: {e}")
-        return make_result(method, False, error_message=f"import failed: {e}")
-
-    for attempt in range(1, MAX_RETRIES_PER_METHOD + 1):
-        try:
-            log(method, f"attempt {attempt}")
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                    ],
-                )
-                context = await browser.new_context(
-                    user_agent=REALISTIC_UA,
-                    viewport={"width": 1366, "height": 768},
-                    locale="en-US",
-                    extra_http_headers={
-                        k: v for k, v in DEFAULT_HEADERS.items()
-                        if k != "User-Agent"
-                    },
-                )
-
-                # Best-effort stealth patch, optional dependency
-                try:
-                    from playwright_stealth import stealth_async
-                    page = await context.new_page()
-                    await stealth_async(page)
-                except ImportError:
-                    page = await context.new_page()
-
-                response = await page.goto(
-                    URL, timeout=REQUEST_TIMEOUT * 1000, wait_until="domcontentloaded"
-                )
-                # Give the SPA a moment to render
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=15000)
-                except Exception:
-                    pass
-
-                html = await page.content()
-                status = response.status if response else None
-                final_url = page.url
-
-                await context.close()
-                await browser.close()
-
-                log(method, f"status={status} len={len(html or '')}")
-
-                if status and status < 400 and html:
-                    return make_result(
-                        method, True, status_code=status, html=html,
-                        final_url=final_url, debug={"attempt": attempt},
-                    )
-                else:
-                    log(method, f"bad status={status}")
-                    if attempt < MAX_RETRIES_PER_METHOD:
+                # Phát hiện trang chặn Kasada dù status=200 (đôi khi CDN trả 200
+                # kèm trang "Verifying your browser" thay vì nội dung thật)
+                if re.search(r"verify your browser|security checkpoint", text, re.IGNORECASE):
+                    log(ticker, "WARNING: phát hiện dấu hiệu Kasada checkpoint trong nội dung dù status=200")
+                    if attempt < MAX_RETRIES:
                         backoff_sleep(attempt)
-        except Exception as e:
-            log(method, f"exception: {e}")
-            if attempt < MAX_RETRIES_PER_METHOD:
-                backoff_sleep(attempt)
-
-    return make_result(method, False, error_message="all playwright attempts failed")
-
-
-# ---------------------------------------------------------------------------
-# Tier 3: cloudscraper
-# ---------------------------------------------------------------------------
-def fetch_cloudscraper():
-    method = "cloudscraper"
-    try:
-        import cloudscraper
-    except ImportError as e:
-        log(method, f"not installed: {e}")
-        return make_result(method, False, error_message=f"import failed: {e}")
-
-    for attempt in range(1, MAX_RETRIES_PER_METHOD + 1):
-        try:
-            log(method, f"attempt {attempt}")
-            scraper = cloudscraper.create_scraper(
-                browser={"browser": "chrome", "platform": "windows", "mobile": False}
-            )
-            resp = scraper.get(URL, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-            log(method, f"status={resp.status_code} len={len(resp.text or '')}")
-
-            if resp.status_code == 200 and resp.text:
-                return make_result(
-                    method, True, status_code=resp.status_code, html=resp.text,
-                    final_url=resp.url, debug={"attempt": attempt},
-                )
+                    continue
+                return True, text, status, None
             else:
-                if attempt < MAX_RETRIES_PER_METHOD:
+                if attempt < MAX_RETRIES:
                     backoff_sleep(attempt)
         except Exception as e:
-            log(method, f"exception: {e}")
-            if attempt < MAX_RETRIES_PER_METHOD:
+            log(ticker, f"exception: {e}")
+            if attempt < MAX_RETRIES:
                 backoff_sleep(attempt)
 
-    return make_result(method, False, error_message="all cloudscraper attempts failed")
+    return False, None, None, "all jina attempts failed"
 
 
-# ---------------------------------------------------------------------------
-# Tier 4: Crawl4AI (last resort — known to 429 on this site already)
-# ---------------------------------------------------------------------------
-async def fetch_crawl4ai():
-    method = "crawl4ai"
-    try:
-        from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
-    except ImportError as e:
-        log(method, f"not installed: {e}")
-        return make_result(method, False, error_message=f"import failed: {e}")
+def parse_metrics(text, ticker):
+    """Trích số liệu cụ thể để kiểm tra bằng mắt. Field nào không có sẽ là None
+    (bình thường với quỹ covered-call/miners/equity — không có holdings coin)."""
+    if not text:
+        return {}
 
-    for attempt in range(1, MAX_RETRIES_PER_METHOD + 1):
-        try:
-            log(method, f"attempt {attempt}")
-            browser_config = BrowserConfig(headless=True, verbose=False, user_agent=REALISTIC_UA)
-            run_config = CrawlerRunConfig(
-                page_timeout=int(REQUEST_TIMEOUT * 1000),
-                cache_mode=CacheMode.BYPASS,
-                wait_for="css:body",
-                word_count_threshold=1,
-            )
-            async with AsyncWebCrawler(config=browser_config) as crawler:
-                result = await crawler.arun(url=URL, config=run_config)
+    clean = text.replace("\xa0", " ")
 
-            success = getattr(result, "success", False)
-            status_code = getattr(result, "status_code", None)
-            html = getattr(result, "html", None)
-            markdown = getattr(result, "markdown", None)
-            error_message = getattr(result, "error_message", None)
-
-            log(method, f"success={success} status={status_code}")
-
-            if success:
-                return make_result(
-                    method, True, status_code=status_code, html=html,
-                    markdown=markdown if isinstance(markdown, str) else str(markdown) if markdown else None,
-                    debug={"attempt": attempt},
-                )
-            else:
-                log(method, f"failed: {error_message}")
-                if attempt < MAX_RETRIES_PER_METHOD:
-                    backoff_sleep(attempt)
-        except Exception as e:
-            log(method, f"exception: {e}")
-            if attempt < MAX_RETRIES_PER_METHOD:
-                backoff_sleep(attempt)
-
-    return make_result(method, False, error_message="all crawl4ai attempts failed")
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
-async def run_all_tiers():
-    attempts_log = []
-
-    # Tier 0 — thử trước tiên, né chặn IP GitHub Actions
-    r = fetch_jina_reader()
-    attempts_log.append({"method": r["method_used"], "success": r["success"], "error": r["error_message"]})
-    if r["success"]:
-        return r, attempts_log
-
-    # Tier 1
-    r = fetch_curl_cffi()
-    attempts_log.append({"method": r["method_used"], "success": r["success"], "error": r["error_message"]})
-    if r["success"]:
-        return r, attempts_log
-
-    # Tier 2
-    r = await fetch_playwright()
-    attempts_log.append({"method": r["method_used"], "success": r["success"], "error": r["error_message"]})
-    if r["success"]:
-        return r, attempts_log
-
-    # Tier 3
-    r = fetch_cloudscraper()
-    attempts_log.append({"method": r["method_used"], "success": r["success"], "error": r["error_message"]})
-    if r["success"]:
-        return r, attempts_log
-
-    # Tier 4 (last resort)
-    r = await fetch_crawl4ai()
-    attempts_log.append({"method": r["method_used"], "success": r["success"], "error": r["error_message"]})
-    return r, attempts_log
-
-
-async def main():
-    started_at = datetime.now(timezone.utc).isoformat()
-    result, attempts_log = None, []
-
-    try:
-        result, attempts_log = await run_all_tiers()
-    except Exception as e:
-        log("FATAL", f"unexpected top-level exception: {e}")
-        result = make_result(
-            "none", False,
-            error_message=f"unexpected top-level exception: {e}\n{traceback.format_exc()}",
-        )
-
-    final_data = {
-        "url": URL,
-        "workspace": os.getenv("GITHUB_WORKSPACE"),
-        "script_path": str(Path(__file__).resolve()),
-        "output_path": str(OUTPUT_FILE.resolve()),
-        "started_at_utc": started_at,
-        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
-        "attempts_summary": attempts_log,
-        **result,
+    patterns = {
+        "total_in_trust": r"TOTAL\s+([A-Z]+)\s+IN\s+TRUST\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
+        "aum_non_gaap": r"ASSETS UNDER MANAGEMENT \(NON-GAAP\)\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
+        "gaap_aum": r"GAAP AUM\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
+        "nav_per_share": r"NET ASSET VALUE \(NAV\) PER SHARE\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*\.\d+)",
+        "market_price": r"MARKET PRICE\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*\.\d+)",
+        "shares_outstanding": r"SHARES OUTSTANDING\s*\n?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
+        "sponsors_fee": r"SPONSOR'?S FEE\s*\n?\s*(\d+\.?\d*)%",
+        "as_of_date": r"As of (\d{1,2}/\d{1,2}/\d{4})",
     }
 
-    # Always write output, no matter what
-    try:
-        OUTPUT_FILE.write_text(
-            json.dumps(final_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        log("OUTPUT", f"written to {OUTPUT_FILE}")
-    except Exception as e:
-        # last-ditch effort: write a minimal error file so artifact upload never has nothing
-        log("OUTPUT", f"failed to write full JSON: {e}")
-        OUTPUT_FILE.write_text(
-            json.dumps({"success": False, "error_message": f"failed to serialize result: {e}"}),
-            encoding="utf-8",
-        )
+    result = {}
+    coin_symbol = None
+    for key, pat in patterns.items():
+        m = re.search(pat, clean, re.IGNORECASE)
+        if not m:
+            result[key] = None
+            continue
+        if key == "total_in_trust":
+            coin_symbol = m.group(1)
+            result[key] = float(m.group(2).replace(",", ""))
+        elif key == "as_of_date":
+            result[key] = m.group(1)
+        else:
+            result[key] = float(m.group(1).replace(",", ""))
 
-    if not final_data.get("success"):
-        # Non-zero exit so the job is visibly marked failed,
-        # but the artifact/JSON has already been written above.
-        raise SystemExit(1)
+    result["coin_symbol_detected"] = coin_symbol
+
+    title_match = re.search(r"^Title:\s*(.+)$", text, re.MULTILINE)
+    result["title"] = title_match.group(1).strip() if title_match else None
+
+    return result
+
+
+def run_all():
+    started_at = datetime.now(timezone.utc).isoformat()
+    results = {}
+
+    for fund in GRAYSCALE_FUNDS:
+        ticker, url, kind = fund["ticker"], fund["url"], fund["kind"]
+        log("=====", f"--- {ticker} ({kind}) ---")
+
+        success, text, status, error = fetch_jina(url, ticker)
+
+        entry = {
+            "ticker": ticker,
+            "url": url,
+            "kind": kind,
+            "success": success,
+            "status_code": status,
+            "error_message": error,
+            "raw_markdown_length": len(text) if text else 0,
+        }
+
+        if success:
+            metrics = parse_metrics(text, ticker)
+            entry["metrics"] = metrics
+            entry["raw_markdown"] = text  # giữ full để bạn tự đối chiếu nếu cần
+
+            # In log số liệu cụ thể ngay ra console để kiểm tra bằng mắt
+            log(ticker, f"title            = {metrics.get('title')}")
+            log(ticker, f"coin_detected    = {metrics.get('coin_symbol_detected')}")
+            log(ticker, f"total_in_trust   = {metrics.get('total_in_trust')}")
+            log(ticker, f"aum_non_gaap     = {metrics.get('aum_non_gaap')}")
+            log(ticker, f"gaap_aum         = {metrics.get('gaap_aum')}")
+            log(ticker, f"nav_per_share    = {metrics.get('nav_per_share')}")
+            log(ticker, f"market_price     = {metrics.get('market_price')}")
+            log(ticker, f"shares_outst.    = {metrics.get('shares_outstanding')}")
+            log(ticker, f"sponsors_fee(%)  = {metrics.get('sponsors_fee')}")
+            log(ticker, f"as_of_date       = {metrics.get('as_of_date')}")
+
+            has_holdings = metrics.get("total_in_trust") is not None
+            log(ticker, f"=> {'✅ CÓ holdings, dùng được cho Flow' if has_holdings else '⚠️  KHÔNG có holdings (bình thường nếu là covered-call/miners/equity/multi-asset)'}")
+        else:
+            entry["metrics"] = None
+            entry["raw_markdown"] = None
+            log(ticker, f"❌ FAILED: {error}")
+
+        results[ticker] = entry
+        time.sleep(1.5)  # tôn trọng rate-limit free của r.jina.ai (20 req/phút)
+
+    return results, started_at
+
+
+def main():
+    results, started_at = run_all()
+
+    success_count = sum(1 for r in results.values() if r["success"])
+    holdings_count = sum(
+        1 for r in results.values()
+        if r["success"] and r.get("metrics", {}).get("total_in_trust") is not None
+    )
+
+    final_data = {
+        "started_at_utc": started_at,
+        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        "total_funds_tested": len(GRAYSCALE_FUNDS),
+        "success_count": success_count,
+        "funds_with_holdings_data": holdings_count,
+        "results": results,
+    }
+
+    OUTPUT_FILE.write_text(
+        json.dumps(final_data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    log("OUTPUT", f"written to {OUTPUT_FILE} ({success_count}/{len(GRAYSCALE_FUNDS)} thành công, {holdings_count} có holdings)")
+
+    print("\n" + "=" * 70)
+    print("TÓM TẮT KẾT QUẢ:")
+    print("=" * 70)
+    for ticker, entry in results.items():
+        status_icon = "✅" if entry["success"] else "❌"
+        holdings_icon = ""
+        if entry["success"]:
+            has_h = entry.get("metrics", {}).get("total_in_trust") is not None
+            holdings_icon = " [có holdings]" if has_h else " [không có holdings]"
+        print(f"  {status_icon} {ticker:6s} ({entry['kind']}){holdings_icon}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
