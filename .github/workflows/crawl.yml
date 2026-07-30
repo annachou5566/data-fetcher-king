@@ -42,29 +42,35 @@ jobs:
         run: python ./scripts/crawl.py
 
       - name: Show output preview
+        if: always()
         run: |
-          test -f ./scripts/grayscale_btc.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
+          if [ -f ./scripts/grayscale_btc.json ]; then
+            python - <<'PY'
+            import json
+            from pathlib import Path
 
-          p = Path("./scripts/grayscale_btc.json")
-          print("exists:", p.exists())
-          print("path:", p.resolve())
+            p = Path("./scripts/grayscale_btc.json")
+            print("exists:", p.exists())
+            print("path:", p.resolve())
 
-          with p.open("r", encoding="utf-8") as f:
-              data = json.load(f)
+            with p.open("r", encoding="utf-8") as f:
+                data = json.load(f)
 
-          print("success:", data.get("success"))
-          print("status_code:", data.get("status_code"))
-          print("title:", data.get("title"))
-          print("markdown_length:", data.get("markdown_length"))
-          print("html_length:", data.get("html_length"))
-          print("error_message:", data.get("error_message"))
-          PY
+            print("success:", data.get("success"))
+            print("status_code:", data.get("status_code"))
+            print("title:", data.get("title"))
+            print("markdown_length:", data.get("markdown_length"))
+            print("html_length:", data.get("html_length"))
+            print("error_message:", data.get("error_message"))
+            PY
+          else
+            echo "grayscale_btc.json not found"
+          fi
 
       - name: Upload result artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: grayscale-btc-json
           path: ./scripts/grayscale_btc.json
+          if-no-files-found: warn
