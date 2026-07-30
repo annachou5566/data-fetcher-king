@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent
 OUTPUT_FILE = ROOT / "grayscale_all.json"
 
 REQUEST_TIMEOUT = 30
-MAX_RETRIES = 3
+MAX_RETRIES = 6
 
 # Toàn bộ 17 link bạn đưa, kèm ghi chú loại quỹ để đối chiếu kết quả parse
 GRAYSCALE_FUNDS = [
@@ -54,22 +54,24 @@ def log(tag, msg):
 
 
 def backoff_sleep(attempt):
-    delay = min(2 ** attempt, 8) + random.uniform(0, 1.2)
+    delay = min(3 ** attempt, 25) + random.uniform(0, 2)  # backoff dài hơn
     log("RETRY", f"sleeping {delay:.2f}s (attempt {attempt})")
     time.sleep(delay)
 
 
 def fetch_jina(url, ticker):
-    """Fetch qua r.jina.ai với x-no-cache=true — đây là fix đã xác nhận qua
-    được Kasada của Grayscale (bản cũ thiếu header này nên dính cache cũ)."""
     jina_url = f"https://r.jina.ai/{url}"
     headers = {
         "Accept": "text/plain",
         "x-no-cache": "true",
+        "x-engine": "browser",   # ép dùng browser engine đầy đủ, khuyến nghị của Jina cho site có bot-challenge
+        "x-timeout": "30",
     }
     jina_key = os.getenv("JINA_API_KEY")
     if jina_key:
         headers["Authorization"] = f"Bearer {jina_key}"
+
+    last_blocked_snippet = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -80,14 +82,13 @@ def fetch_jina(url, ticker):
             log(ticker, f"status={status} len={len(text)}")
 
             if status == 200 and text.strip():
-                # Phát hiện trang chặn Kasada dù status=200 (đôi khi CDN trả 200
-                # kèm trang "Verifying your browser" thay vì nội dung thật)
-                if re.search(r"verify your browser|security checkpoint", text, re.IGNORECASE):
-                    log(ticker, "WARNING: phát hiện dấu hiệu Kasada checkpoint trong nội dung dù status=200")
+                if re.search(r"verify your browser|security checkpoint", text, re.IGNORECASE) or len(text) < 500:
+                    last_blocked_snippet = text[:300]
+                    log(ticker, f"WARNING: nghi checkpoint (len={len(text)}) — snippet: {text[:150]!r}")
                     if attempt < MAX_RETRIES:
                         backoff_sleep(attempt)
                     continue
-                return True, text, status, None
+                return True, text, status, None, None
             else:
                 if attempt < MAX_RETRIES:
                     backoff_sleep(attempt)
@@ -96,25 +97,27 @@ def fetch_jina(url, ticker):
             if attempt < MAX_RETRIES:
                 backoff_sleep(attempt)
 
-    return False, None, None, "all jina attempts failed"
+    return False, None, None, "all jina attempts failed", last_blocked_snippet
 
 
 def parse_metrics(text, ticker):
-    """Trích số liệu cụ thể để kiểm tra bằng mắt. Field nào không có sẽ là None
-    (bình thường với quỹ covered-call/miners/equity — không có holdings coin)."""
     if not text:
         return {}
 
+    # QUAN TRỌNG: strip markdown formatting TRƯỚC khi regex — bug ở lần trước
+    # là thiếu bước này, nên "**TOTAL APT IN TRUST**" không khớp được pattern.
     clean = text.replace("\xa0", " ")
+    clean = re.sub(r"[*_#|]", " ", clean)
+    clean = re.sub(r"[ \t]+", " ", clean)
 
     patterns = {
-        "total_in_trust": r"TOTAL\s+([A-Z]+)\s+IN\s+TRUST\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
-        "aum_non_gaap": r"ASSETS UNDER MANAGEMENT \(NON-GAAP\)\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
-        "gaap_aum": r"GAAP AUM\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
-        "nav_per_share": r"NET ASSET VALUE \(NAV\) PER SHARE\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*\.\d+)",
-        "market_price": r"MARKET PRICE\s*\n?\s*\$?(\d{1,3}(?:,\d{3})*\.\d+)",
-        "shares_outstanding": r"SHARES OUTSTANDING\s*\n?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)",
-        "sponsors_fee": r"SPONSOR'?S FEE\s*\n?\s*(\d+\.?\d*)%",
+        "total_in_trust": r"TOTAL\s+([A-Z]+)\s+IN\s+TRUST\s*\n?\s*\$?([\d,]{1,15}\.?\d*)",
+        "aum_non_gaap": r"ASSETS UNDER MANAGEMENT \(NON-GAAP\)\s*\n?\s*\$?([\d,]{1,15}\.?\d*)",
+        "gaap_aum": r"GAAP AUM\s*\n?\s*\$?([\d,]{1,15}\.?\d*)",
+        "nav_per_share": r"NET ASSET VALUE \(NAV\) PER SHARE\s*\n?\s*\$?([\d,]{1,15}\.\d+)",
+        "market_price": r"(?<!1D CHANGE \()MARKET PRICE\s*\n?\s*\$?([\d,]{1,15}\.\d+)",
+        "shares_outstanding": r"SHARES OUTSTANDING\s*\n?\s*([\d,]{1,15}\.?\d*)",
+        "sponsors_fee": r"SPONSOR'?S FEE\s*\n?\s*([\d.]+)%",
         "as_of_date": r"As of (\d{1,2}/\d{1,2}/\d{4})",
     }
 
@@ -134,10 +137,8 @@ def parse_metrics(text, ticker):
             result[key] = float(m.group(1).replace(",", ""))
 
     result["coin_symbol_detected"] = coin_symbol
-
     title_match = re.search(r"^Title:\s*(.+)$", text, re.MULTILINE)
     result["title"] = title_match.group(1).strip() if title_match else None
-
     return result
 
 
@@ -149,17 +150,14 @@ def run_all():
         ticker, url, kind = fund["ticker"], fund["url"], fund["kind"]
         log("=====", f"--- {ticker} ({kind}) ---")
 
-        success, text, status, error = fetch_jina(url, ticker)
-
-        entry = {
-            "ticker": ticker,
-            "url": url,
-            "kind": kind,
-            "success": success,
-            "status_code": status,
-            "error_message": error,
-            "raw_markdown_length": len(text) if text else 0,
-        }
+        success, text, status, error, blocked_snippet = fetch_jina(url, ticker)
+entry = {
+    "ticker": ticker, "url": url, "kind": kind,
+    "success": success, "status_code": status,
+    "error_message": error,
+    "blocked_snippet": blocked_snippet,   # để xem chính xác trang chặn nói gì
+    "raw_markdown_length": len(text) if text else 0,
+}
 
         if success:
             metrics = parse_metrics(text, ticker)
@@ -186,7 +184,7 @@ def run_all():
             log(ticker, f"❌ FAILED: {error}")
 
         results[ticker] = entry
-        time.sleep(1.5)  # tôn trọng rate-limit free của r.jina.ai (20 req/phút)
+        time.sleep(random.uniform(6, 9))  # thay cho time.sleep(1.5) cũ — giảm áp lực lên proxy pool
 
     return results, started_at
 
