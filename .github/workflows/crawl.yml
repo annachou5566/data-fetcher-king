@@ -1,0 +1,49 @@
+name: Crawl Grayscale BTC
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install crawl4ai
+          crawl4ai-setup
+
+      - name: Run crawler
+        run: python crawl.py
+
+      - name: Show output preview
+        run: |
+          python - <<'PY'
+          import json
+          with open("grayscale_btc.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+          print("success:", data.get("success"))
+          print("status_code:", data.get("status_code"))
+          print("title:", data.get("title"))
+          print("markdown_length:", data.get("markdown_length"))
+          print("html_length:", data.get("html_length"))
+          print("error_message:", data.get("error_message"))
+          PY
+
+      - name: Upload result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grayscale-btc-json
+          path: grayscale_btc.json
