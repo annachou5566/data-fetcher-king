@@ -8,11 +8,18 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Debug workspace
+        run: |
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          pwd
+          ls -la
+          find . -maxdepth 4 -type f | sort
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,15 +32,29 @@ jobs:
           pip install crawl4ai
           crawl4ai-setup
 
+      - name: Verify scripts/crawl.py exists
+        run: |
+          test -f ./scripts/crawl.py
+          echo "scripts/crawl.py found"
+
       - name: Run crawler
-        run: python crawl.py
+        working-directory: ${{ github.workspace }}
+        run: python ./scripts/crawl.py
 
       - name: Show output preview
         run: |
+          test -f ./scripts/grayscale_btc.json
           python - <<'PY'
           import json
-          with open("grayscale_btc.json", "r", encoding="utf-8") as f:
+          from pathlib import Path
+
+          p = Path("./scripts/grayscale_btc.json")
+          print("exists:", p.exists())
+          print("path:", p.resolve())
+
+          with p.open("r", encoding="utf-8") as f:
               data = json.load(f)
+
           print("success:", data.get("success"))
           print("status_code:", data.get("status_code"))
           print("title:", data.get("title"))
@@ -46,4 +67,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: grayscale-btc-json
-          path: grayscale_btc.json
+          path: ./scripts/grayscale_btc.json
