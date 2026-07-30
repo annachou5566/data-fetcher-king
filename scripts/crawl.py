@@ -92,6 +92,69 @@ def make_result(method, success, status_code=None, html=None, final_url=None,
         "debug": debug or {},
     }
 
+# ---------------------------------------------------------------------------
+# Tier 0: r.jina.ai Reader — fetch qua hạ tầng của Jina, né chặn IP GitHub Actions
+# Free, không cần signup, không cần API key (rate limit 20 req/phút không key)
+# ---------------------------------------------------------------------------
+def fetch_jina_reader():
+    method = "jina_reader"
+    try:
+        import requests
+    except ImportError as e:
+        log(method, f"not installed: {e}")
+        return make_result(method, False, error_message=f"import failed: {e}")
+
+    jina_url = f"https://r.jina.ai/{URL}"
+    jina_headers = {
+        "Accept": "text/plain",
+        "x-no-cache": "true",  # bỏ qua cache nếu response cũ từng bị lỗi/chặn
+    }
+    # Nếu sau này bạn có JINA_API_KEY (vẫn free, chỉ tăng rate limit), tự động dùng
+    jina_key = os.getenv("JINA_API_KEY")
+    if jina_key:
+        jina_headers["Authorization"] = f"Bearer {jina_key}"
+
+    for attempt in range(1, MAX_RETRIES_PER_METHOD + 1):
+        try:
+            log(method, f"attempt {attempt} -> {jina_url}")
+            resp = requests.get(jina_url, headers=jina_headers, timeout=REQUEST_TIMEOUT)
+            status = resp.status_code
+            text = resp.text or ""
+            log(method, f"status={status} len={len(text)}")
+
+            if status == 200 and text.strip():
+                # Jina trả về format: "Title: ...\nURL Source: ...\nMarkdown Content:\n..."
+                title = None
+                for line in text.splitlines()[:5]:
+                    if line.lower().startswith("title:"):
+                        title = line.split(":", 1)[1].strip()
+                        break
+
+                return {
+                    "method_used": method,
+                    "success": True,
+                    "status_code": status,
+                    "final_url": jina_url,
+                    "title": title,
+                    "html": None,
+                    "html_length": 0,
+                    "extracted_text": text,
+                    "cleaned_html": text,
+                    "markdown": text,
+                    "markdown_length": len(text),
+                    "error_message": None,
+                    "debug": {"attempt": attempt, "source": "r.jina.ai"},
+                }
+            else:
+                log(method, f"non-200 or empty body (status={status})")
+                if attempt < MAX_RETRIES_PER_METHOD:
+                    backoff_sleep(attempt)
+        except Exception as e:
+            log(method, f"exception: {e}")
+            if attempt < MAX_RETRIES_PER_METHOD:
+                backoff_sleep(attempt)
+
+    return make_result(method, False, error_message="all jina_reader attempts failed")
 
 # ---------------------------------------------------------------------------
 # Tier 1: curl_cffi (TLS / HTTP2 / browser fingerprint impersonation)
@@ -305,6 +368,12 @@ async def fetch_crawl4ai():
 # ---------------------------------------------------------------------------
 async def run_all_tiers():
     attempts_log = []
+
+    # Tier 0 — thử trước tiên, né chặn IP GitHub Actions
+    r = fetch_jina_reader()
+    attempts_log.append({"method": r["method_used"], "success": r["success"], "error": r["error_message"]})
+    if r["success"]:
+        return r, attempts_log
 
     # Tier 1
     r = fetch_curl_cffi()
