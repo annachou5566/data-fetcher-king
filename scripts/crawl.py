@@ -1,12 +1,14 @@
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 
 URL = "https://etfs.grayscale.com/btc"
-OUTPUT_FILE = Path("grayscale_btc.json")
+ROOT = Path(__file__).resolve().parent
+OUTPUT_FILE = ROOT / "grayscale_btc.json"
 
 
 async def main():
@@ -16,11 +18,14 @@ async def main():
     )
 
     run_config = CrawlerRunConfig(
-        page_timeout=60000,
+        page_timeout=90000,
         remove_overlay_elements=True,
         process_iframes=True,
         cache_mode=CacheMode.BYPASS,
-        wait_for="js:document.readyState === 'complete'",
+        wait_for="css:body",
+        wait_for_images=True,
+        scan_full_page=True,
+        scroll_delay=0.5,
         word_count_threshold=1,
     )
 
@@ -32,6 +37,9 @@ async def main():
 
     data = {
         "url": URL,
+        "workspace": os.getenv("GITHUB_WORKSPACE"),
+        "script_path": str(Path(__file__).resolve()),
+        "output_path": str(OUTPUT_FILE.resolve()),
         "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
         "success": getattr(result, "success", None),
         "status_code": getattr(result, "status_code", None),
@@ -52,6 +60,9 @@ async def main():
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    if not data["success"]:
+        raise RuntimeError(data["error_message"] or "crawl failed")
 
 
 if __name__ == "__main__":
