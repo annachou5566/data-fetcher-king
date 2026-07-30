@@ -1,23 +1,22 @@
 """
-Test crawl toàn bộ 17 quỹ Grayscale qua r.jina.ai.
+Crawl toàn bộ 17 quỹ Grayscale qua r.jina.ai với API key.
 
-Đã sửa so với bản trước:
-1. Strip markdown (*, _, #, |) TRƯỚC khi regex — bug khiến GAVA/GXRP có data
-   nhưng tất cả field ra None vì "**TOTAL APT IN TRUST**" không khớp pattern.
-2. Tăng MAX_RETRIES 3→6 và backoff dài hơn — log cho thấy nhiều ticker cần
-   tới attempt 2-3 mới qua được Kasada challenge (không ổn định theo request).
-3. Thêm header x-engine: browser — khuyến nghị chính thức của Jina cho site
-   có bot-challenge mạnh.
-4. Lưu lại blocked_snippet (300 ký tự đầu của response bị chặn) vào JSON để
-   kiểm tra chính xác trang chặn nói gì, thay vì chỉ log ra console.
-5. Tăng thời gian nghỉ giữa các ticker 1.5s → 6-9s ngẫu nhiên, giảm áp lực
-   lên proxy pool của Jina.
+Thay đổi so với bản free-tier:
+1. Bắt buộc JINA_API_KEY (route qua pool ổn định hơn free-tier ẩn danh,
+   free-tier trước đó dính 429 dai dẳng do rate-limit theo IP dùng chung).
+2. Phát hiện đúng bản chất lỗi: "Vercel Security Checkpoint" + "429 Too Many
+   Requests" là Grayscale tự rate-limit ở tầng gốc, KHÔNG phải bot-challenge
+   — nên retry dồn dập không giúp ích, giảm hẳn số lần retry, tăng nghỉ giữa
+   các ticker để tránh cộng dồn request vào cùng cửa sổ rate-limit.
+3. Timeout tổng thể được tính toán để không bị GitHub Actions cancel giữa
+   chừng (17 ticker x thời gian tối đa mỗi ticker phải nằm dưới timeout job).
 """
 
 import json
 import os
 import random
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +27,10 @@ ROOT = Path(__file__).resolve().parent
 OUTPUT_FILE = ROOT / "grayscale_all.json"
 
 REQUEST_TIMEOUT = 30
-MAX_RETRIES = 6
+MAX_RETRIES = 3          # giảm từ 6 — lỗi 429 dai dẳng, retry nhiều không giúp
+DELAY_BETWEEN_TICKERS = (8, 12)  # giây, ngẫu nhiên
+
+JINA_API_KEY = os.getenv("JINA_API_KEY")
 
 GRAYSCALE_FUNDS = [
     {"ticker": "GAVA", "url": "https://etfs.grayscale.com/gava", "kind": "spot_single (Aptos)"},
@@ -57,23 +59,29 @@ def log(tag, msg):
 
 
 def backoff_sleep(attempt):
-    delay = min(3 ** attempt, 25) + random.uniform(0, 2)
+    delay = min(4 ** attempt, 20) + random.uniform(0, 2)
     log("RETRY", f"sleeping {delay:.2f}s (attempt {attempt})")
     time.sleep(delay)
 
 
+def is_rate_limited_response(text):
+    """Nhận diện đúng bản chất: trang lỗi 429 gốc của Vercel/Grayscale,
+    không phải bot-challenge thật."""
+    if not text:
+        return False
+    return bool(re.search(r"Vercel Security Checkpoint|Too Many Requests", text, re.IGNORECASE)) or len(text) < 500
+
+
 def fetch_jina(url, ticker):
-    """Fetch qua r.jina.ai. Trả về (success, text, status, error, blocked_snippet)."""
+    """Fetch qua r.jina.ai với API key. Trả về (success, text, status, error, blocked_snippet)."""
     jina_url = f"https://r.jina.ai/{url}"
     headers = {
         "Accept": "text/plain",
         "x-no-cache": "true",
         "x-engine": "browser",
         "x-timeout": "30",
+        "Authorization": f"Bearer {JINA_API_KEY}",
     }
-    jina_key = os.getenv("JINA_API_KEY")
-    if jina_key:
-        headers["Authorization"] = f"Bearer {jina_key}"
 
     last_blocked_snippet = None
 
@@ -85,19 +93,23 @@ def fetch_jina(url, ticker):
             text = resp.text or ""
             log(ticker, f"status={status} len={len(text)}")
 
+            # Header rate-limit của chính Jina (khác với 429 do Grayscale trả về
+            # trong BODY) — nếu Jina tự rate-limit request của mình thì retry
+            # có ý nghĩa hơn nhiều so với việc Grayscale rate-limit ở nguồn.
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            if remaining is not None:
+                log(ticker, f"jina rate-limit remaining={remaining}")
+
             if status == 200 and text.strip():
-                looks_blocked = (
-                    re.search(r"verify your browser|security checkpoint", text, re.IGNORECASE)
-                    or len(text) < 500
-                )
-                if looks_blocked:
+                if is_rate_limited_response(text):
                     last_blocked_snippet = text[:300]
-                    log(ticker, f"WARNING: nghi checkpoint (len={len(text)}) — snippet: {text[:150]!r}")
+                    log(ticker, f"WARNING: Grayscale trả 429 (qua Jina) — snippet: {text[:150]!r}")
                     if attempt < MAX_RETRIES:
                         backoff_sleep(attempt)
                     continue
                 return True, text, status, None, None
             else:
+                last_blocked_snippet = text[:300] if text else None
                 if attempt < MAX_RETRIES:
                     backoff_sleep(attempt)
         except Exception as e:
@@ -105,11 +117,10 @@ def fetch_jina(url, ticker):
             if attempt < MAX_RETRIES:
                 backoff_sleep(attempt)
 
-    return False, None, None, "all jina attempts failed", last_blocked_snippet
+    return False, None, None, "all jina attempts failed (Grayscale rate-limit hoặc lỗi khác)", last_blocked_snippet
 
 
 def parse_metrics(text, ticker):
-    """Trích số liệu cụ thể. Strip markdown TRƯỚC khi regex (bug đã sửa)."""
     if not text:
         return {}
 
@@ -144,10 +155,8 @@ def parse_metrics(text, ticker):
             result[key] = float(m.group(1).replace(",", ""))
 
     result["coin_symbol_detected"] = coin_symbol
-
     title_match = re.search(r"^Title:\s*(.+)$", text, re.MULTILINE)
     result["title"] = title_match.group(1).strip() if title_match else None
-
     return result
 
 
@@ -155,7 +164,7 @@ def run_all():
     started_at = datetime.now(timezone.utc).isoformat()
     results = {}
 
-    for fund in GRAYSCALE_FUNDS:
+    for i, fund in enumerate(GRAYSCALE_FUNDS):
         ticker, url, kind = fund["ticker"], fund["url"], fund["kind"]
         log("=====", f"--- {ticker} ({kind}) ---")
 
@@ -198,32 +207,54 @@ def run_all():
                 log(ticker, f"   blocked_snippet: {blocked_snippet!r}")
 
         results[ticker] = entry
-        time.sleep(random.uniform(6, 9))
+
+        # Ghi JSON từng phần sau MỖI ticker — nếu job bị cancel/timeout giữa
+        # chừng (như lần trước), vẫn có dữ liệu partial thay vì mất trắng.
+        _write_partial(results, started_at)
+
+        if i < len(GRAYSCALE_FUNDS) - 1:
+            time.sleep(random.uniform(*DELAY_BETWEEN_TICKERS))
 
     return results, started_at
 
 
-def main():
-    results, started_at = run_all()
-
+def _write_partial(results, started_at):
     success_count = sum(1 for r in results.values() if r["success"])
     holdings_count = sum(
         1 for r in results.values()
         if r["success"] and r.get("metrics", {}).get("total_in_trust") is not None
     )
-
-    final_data = {
+    data = {
         "started_at_utc": started_at,
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
         "total_funds_tested": len(GRAYSCALE_FUNDS),
+        "funds_processed_so_far": len(results),
         "success_count": success_count,
         "funds_with_holdings_data": holdings_count,
         "results": results,
     }
+    OUTPUT_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    OUTPUT_FILE.write_text(
-        json.dumps(final_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+
+def main():
+    if not JINA_API_KEY:
+        log("FATAL", "Thiếu JINA_API_KEY — thêm secret JINA_API_KEY trong GitHub repo settings")
+        # vẫn ghi 1 file JSON rỗng để artifact upload không bị lỗi hoàn toàn
+        OUTPUT_FILE.write_text(
+            json.dumps({"error": "JINA_API_KEY not set", "results": {}}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        sys.exit(1)
+
+    log("INIT", f"JINA_API_KEY loaded (length={len(JINA_API_KEY)})")
+
+    results, started_at = run_all()
+    _write_partial(results, started_at)
+
+    success_count = sum(1 for r in results.values() if r["success"])
+    holdings_count = sum(
+        1 for r in results.values()
+        if r["success"] and r.get("metrics", {}).get("total_in_trust") is not None
     )
     log("OUTPUT", f"written to {OUTPUT_FILE} ({success_count}/{len(GRAYSCALE_FUNDS)} thành công, {holdings_count} có holdings)")
 
