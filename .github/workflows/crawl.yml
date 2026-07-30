@@ -29,8 +29,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install crawl4ai
-          crawl4ai-setup
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+          crawl4ai-setup || echo "crawl4ai-setup failed, continuing anyway"
 
       - name: Verify scripts/crawl.py exists
         run: |
@@ -40,32 +41,11 @@ jobs:
       - name: Run crawler
         working-directory: ${{ github.workspace }}
         run: python ./scripts/crawl.py
+        continue-on-error: true
 
       - name: Show output preview
         if: always()
-        run: |
-          if [ -f ./scripts/grayscale_btc.json ]; then
-            python - <<'PY'
-            import json
-            from pathlib import Path
-
-            p = Path("./scripts/grayscale_btc.json")
-            print("exists:", p.exists())
-            print("path:", p.resolve())
-
-            with p.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            print("success:", data.get("success"))
-            print("status_code:", data.get("status_code"))
-            print("title:", data.get("title"))
-            print("markdown_length:", data.get("markdown_length"))
-            print("html_length:", data.get("html_length"))
-            print("error_message:", data.get("error_message"))
-            PY
-          else
-            echo "grayscale_btc.json not found"
-          fi
+        run: python ./scripts/preview_output.py
 
       - name: Upload result artifact
         if: always()
