@@ -5,3 +5,7 @@ cloudscraper
 boto3
 beautifulsoup4
 playwright
+# --- thêm để script crawl.py chạy đủ 4 tầng ---
+lxml
+playwright-stealth
+crawl4ai
