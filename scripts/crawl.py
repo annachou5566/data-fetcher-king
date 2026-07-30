@@ -1,13 +1,17 @@
 """
-Test crawl toàn bộ 17 quỹ Grayscale qua r.jina.ai (đã xác nhận qua được Kasada
-khi thêm header x-no-cache: true — bản cũ thiếu header này nên dính cache của
-chính response bị chặn).
+Test crawl toàn bộ 17 quỹ Grayscale qua r.jina.ai.
 
-Mục tiêu: xác nhận ticker nào lấy được đủ dữ liệu (đặc biệt "Total X in Trust"
-= holdings, cần cho việc tự tính Flow), ticker nào không có field này (covered
-call / miners / multi-asset — vốn không có holdings coin trực tiếp).
-
-Luôn ghi JSON, luôn upload artifact, in log số liệu cụ thể từng ticker.
+Đã sửa so với bản trước:
+1. Strip markdown (*, _, #, |) TRƯỚC khi regex — bug khiến GAVA/GXRP có data
+   nhưng tất cả field ra None vì "**TOTAL APT IN TRUST**" không khớp pattern.
+2. Tăng MAX_RETRIES 3→6 và backoff dài hơn — log cho thấy nhiều ticker cần
+   tới attempt 2-3 mới qua được Kasada challenge (không ổn định theo request).
+3. Thêm header x-engine: browser — khuyến nghị chính thức của Jina cho site
+   có bot-challenge mạnh.
+4. Lưu lại blocked_snippet (300 ký tự đầu của response bị chặn) vào JSON để
+   kiểm tra chính xác trang chặn nói gì, thay vì chỉ log ra console.
+5. Tăng thời gian nghỉ giữa các ticker 1.5s → 6-9s ngẫu nhiên, giảm áp lực
+   lên proxy pool của Jina.
 """
 
 import json
@@ -26,7 +30,6 @@ OUTPUT_FILE = ROOT / "grayscale_all.json"
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 6
 
-# Toàn bộ 17 link bạn đưa, kèm ghi chú loại quỹ để đối chiếu kết quả parse
 GRAYSCALE_FUNDS = [
     {"ticker": "GAVA", "url": "https://etfs.grayscale.com/gava", "kind": "spot_single (Aptos)"},
     {"ticker": "BTC",  "url": "https://etfs.grayscale.com/btc",  "kind": "spot_single (Bitcoin Mini Trust)"},
@@ -54,17 +57,18 @@ def log(tag, msg):
 
 
 def backoff_sleep(attempt):
-    delay = min(3 ** attempt, 25) + random.uniform(0, 2)  # backoff dài hơn
+    delay = min(3 ** attempt, 25) + random.uniform(0, 2)
     log("RETRY", f"sleeping {delay:.2f}s (attempt {attempt})")
     time.sleep(delay)
 
 
 def fetch_jina(url, ticker):
+    """Fetch qua r.jina.ai. Trả về (success, text, status, error, blocked_snippet)."""
     jina_url = f"https://r.jina.ai/{url}"
     headers = {
         "Accept": "text/plain",
         "x-no-cache": "true",
-        "x-engine": "browser",   # ép dùng browser engine đầy đủ, khuyến nghị của Jina cho site có bot-challenge
+        "x-engine": "browser",
         "x-timeout": "30",
     }
     jina_key = os.getenv("JINA_API_KEY")
@@ -82,7 +86,11 @@ def fetch_jina(url, ticker):
             log(ticker, f"status={status} len={len(text)}")
 
             if status == 200 and text.strip():
-                if re.search(r"verify your browser|security checkpoint", text, re.IGNORECASE) or len(text) < 500:
+                looks_blocked = (
+                    re.search(r"verify your browser|security checkpoint", text, re.IGNORECASE)
+                    or len(text) < 500
+                )
+                if looks_blocked:
                     last_blocked_snippet = text[:300]
                     log(ticker, f"WARNING: nghi checkpoint (len={len(text)}) — snippet: {text[:150]!r}")
                     if attempt < MAX_RETRIES:
@@ -101,11 +109,10 @@ def fetch_jina(url, ticker):
 
 
 def parse_metrics(text, ticker):
+    """Trích số liệu cụ thể. Strip markdown TRƯỚC khi regex (bug đã sửa)."""
     if not text:
         return {}
 
-    # QUAN TRỌNG: strip markdown formatting TRƯỚC khi regex — bug ở lần trước
-    # là thiếu bước này, nên "**TOTAL APT IN TRUST**" không khớp được pattern.
     clean = text.replace("\xa0", " ")
     clean = re.sub(r"[*_#|]", " ", clean)
     clean = re.sub(r"[ \t]+", " ", clean)
@@ -137,8 +144,10 @@ def parse_metrics(text, ticker):
             result[key] = float(m.group(1).replace(",", ""))
 
     result["coin_symbol_detected"] = coin_symbol
+
     title_match = re.search(r"^Title:\s*(.+)$", text, re.MULTILINE)
     result["title"] = title_match.group(1).strip() if title_match else None
+
     return result
 
 
@@ -151,20 +160,23 @@ def run_all():
         log("=====", f"--- {ticker} ({kind}) ---")
 
         success, text, status, error, blocked_snippet = fetch_jina(url, ticker)
-entry = {
-    "ticker": ticker, "url": url, "kind": kind,
-    "success": success, "status_code": status,
-    "error_message": error,
-    "blocked_snippet": blocked_snippet,   # để xem chính xác trang chặn nói gì
-    "raw_markdown_length": len(text) if text else 0,
-}
+
+        entry = {
+            "ticker": ticker,
+            "url": url,
+            "kind": kind,
+            "success": success,
+            "status_code": status,
+            "error_message": error,
+            "blocked_snippet": blocked_snippet,
+            "raw_markdown_length": len(text) if text else 0,
+        }
 
         if success:
             metrics = parse_metrics(text, ticker)
             entry["metrics"] = metrics
-            entry["raw_markdown"] = text  # giữ full để bạn tự đối chiếu nếu cần
+            entry["raw_markdown"] = text
 
-            # In log số liệu cụ thể ngay ra console để kiểm tra bằng mắt
             log(ticker, f"title            = {metrics.get('title')}")
             log(ticker, f"coin_detected    = {metrics.get('coin_symbol_detected')}")
             log(ticker, f"total_in_trust   = {metrics.get('total_in_trust')}")
@@ -182,9 +194,11 @@ entry = {
             entry["metrics"] = None
             entry["raw_markdown"] = None
             log(ticker, f"❌ FAILED: {error}")
+            if blocked_snippet:
+                log(ticker, f"   blocked_snippet: {blocked_snippet!r}")
 
         results[ticker] = entry
-        time.sleep(random.uniform(6, 9))  # thay cho time.sleep(1.5) cũ — giảm áp lực lên proxy pool
+        time.sleep(random.uniform(6, 9))
 
     return results, started_at
 
