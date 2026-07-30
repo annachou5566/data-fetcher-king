@@ -11,6 +11,7 @@ with p.open("r", encoding="utf-8") as f:
     data = json.load(f)
 
 print("total_funds_tested:", data.get("total_funds_tested"))
+print("funds_processed_so_far:", data.get("funds_processed_so_far"))
 print("success_count:", data.get("success_count"))
 print("funds_with_holdings_data:", data.get("funds_with_holdings_data"))
 print()
