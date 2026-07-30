@@ -1,25 +1,16 @@
-name: Crawl Grayscale BTC
+name: Crawl Grayscale All Funds
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */6 * * *"
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Debug workspace
-        run: |
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          pwd
-          ls -la
-          find . -maxdepth 4 -type f | sort
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,14 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-          crawl4ai-setup || echo "crawl4ai-setup failed, continuing anyway"
-
-      - name: Verify scripts/crawl.py exists
-        run: |
-          test -f ./scripts/crawl.py
-          echo "scripts/crawl.py found"
+          pip install requests
 
       - name: Run crawler
         working-directory: ${{ github.workspace }}
@@ -51,6 +35,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: grayscale-btc-json
-          path: ./scripts/grayscale_btc.json
+          name: grayscale-all-json
+          path: ./scripts/grayscale_all.json
           if-no-files-found: warn
