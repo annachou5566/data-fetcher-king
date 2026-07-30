@@ -22,9 +22,14 @@ for ticker, entry in data.get("results", {}).items():
         m = entry.get("metrics", {}) or {}
         print("  total_in_trust:", m.get("total_in_trust"), m.get("coin_symbol_detected"))
         print("  aum_non_gaap:", m.get("aum_non_gaap"))
+        print("  gaap_aum:", m.get("gaap_aum"))
         print("  nav_per_share:", m.get("nav_per_share"))
         print("  market_price:", m.get("market_price"))
+        print("  shares_outstanding:", m.get("shares_outstanding"))
+        print("  sponsors_fee:", m.get("sponsors_fee"))
         print("  as_of_date:", m.get("as_of_date"))
     else:
         print("  error:", entry.get("error_message"))
+        if entry.get("blocked_snippet"):
+            print("  blocked_snippet:", repr(entry.get("blocked_snippet")))
     print()
