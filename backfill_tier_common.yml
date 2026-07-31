@@ -1,0 +1,49 @@
+name: Backfill tier_common (1 lần)
+
+# Workflow này KHÔNG chạy tự động theo lịch (không phải cron định kỳ) —
+# nó chỉ chạy khi bạn tự bấm nút "Run workflow" trên tab Actions của
+# GitHub, vì backfill_tier_common.py là migration MỘT LẦN, không phải
+# job lặp lại (những job lặp lại như poll/enrich/expire đã chuyển hết
+# sang APScheduler chạy trong scheduler.py trên Render rồi — xem
+# docstring đầu file scheduler.py).
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Ghi thật vào Supabase? (false = chỉ xem trước, KHÔNG ghi gì)"
+        type: boolean
+        default: false
+      refresh:
+        description: "Sau khi ghi xong, tự đồng bộ luôn lên R2?"
+        type: boolean
+        default: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cài dependencies
+        run: pip install -r requirements.txt
+
+      - name: Chạy backfill (dry-run mặc định)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            ARGS="$ARGS --apply"
+          fi
+          if [ "${{ inputs.refresh }}" = "true" ]; then
+            ARGS="$ARGS --refresh"
+          fi
+          echo "Chạy: python backfill_tier_common.py $ARGS"
+          python backfill_tier_common.py $ARGS
