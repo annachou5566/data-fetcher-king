@@ -31,7 +31,15 @@ jobs:
           python-version: "3.11"
 
       - name: Cài dependencies
-        run: pip install -r requirements.txt
+        run: |
+          # Cài requirements.txt của repo nếu có (không bắt buộc phải có)
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # [SỬA] Cài THẲNG đúng 2 package script này cần — không phụ thuộc
+          # vào requirements.txt có liệt kê đủ hay không (trước đó bị lỗi
+          # "No module named 'supabase'" vì thiếu).
+          pip install supabase boto3
 
       - name: Chạy backfill (dry-run mặc định)
         env:
