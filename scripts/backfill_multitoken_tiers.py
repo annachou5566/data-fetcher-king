@@ -1,62 +1,77 @@
 """
 backfill_multitoken_tiers.py
 ──────────────────────────────
-Migration MỘT LẦN — quét lại raw_text của TOÀN BỘ event bằng ĐÚNG hàm
-_parse_multi_token_tiers() hiện tại trong alpha_parser.py (import thẳng,
-không copy lại regex — đảm bảo logic giống 100% với production).
+Migration MỘT LẦN — quét lại raw_text của TOÀN BỘ event bằng regex tách
+tier (copy y hệt logic _parse_multi_token_tiers trong alpha_parser.py —
+KHÔNG import cross-repo, vì alpha_parser.py nằm ở repo khác, không phải
+repo data-fetcher-king này).
 
 Bắt các trường hợp event Alpha Box nhiều token (VD: EDGE+BEE, ON+MPLX...)
 bị lưu THIẾU hoặc SAI lúc parser cũ (bản đang chạy tại thời điểm event đó
 được tạo) chưa tách tier đúng — tokens_detail bị null/thiếu token,
 symbols_all null, amount_per_user lấy nhầm tier cao thay vì tier_common.
 
-Với mỗi event, nếu parser HIỆN TẠI re-parse raw_text ra tokens_detail
-KHÁC với bản đang lưu (thiếu token, hoặc tier_common khác amount_per_user
-đang lưu) → cập nhật lại: tokens_detail, symbols_all, symbol (token đầu),
-amount_per_user, value_usd.
+Với mỗi event, nếu re-parse raw_text ra tokens_detail KHÁC với bản đang
+lưu (thiếu token, hoặc tier_common khác amount_per_user đang lưu) → cập
+nhật lại: tokens_detail, symbols_all, symbol (token đầu), amount_per_user,
+value_usd.
 
 KHÔNG tự enrich contract/giá cho token phụ mới thêm (VD BEE) — việc đó để
-job_enrich_prices() (chạy mỗi 5 phút trên Render) tự nhặt tiếp, vì nó đã
-có sẵn logic loop qua tokens_detail để enrich từng token con rồi.
+job_enrich_prices() (chạy mỗi 5 phút trên Render, ở repo kia) tự nhặt
+tiếp, vì nó đã có sẵn logic loop qua tokens_detail để enrich từng token
+con rồi.
 
-Cách chạy (giống backfill_tier_common.py):
+Cách chạy:
     python scripts/backfill_multitoken_tiers.py             # dry-run
+    python scripts/backfill_multitoken_tiers.py --apply
     python scripts/backfill_multitoken_tiers.py --apply --refresh
+      (--refresh gọi HTTP GET tới REFRESH_URL, KHÔNG import storage.py
+       — vì storage.py cũng nằm ở repo khác)
 """
 
 import os
+import re
 import sys
 import json
+import requests
 from supabase import create_client
-
-
-def _add_alpha_parser_dir_to_path():
-    """[SỬA — BUG] Trước đây giả định alpha_parser.py nằm ở gốc repo
-    (dirname(dirname(__file__))) — sai cấu trúc thư mục thật, gây lỗi
-    "ModuleNotFoundError: No module named 'alpha_parser'". Giờ TỰ TÌM
-    file alpha_parser.py nằm ở đâu trong repo (quét từ gốc repo xuống),
-    add đúng thư mục chứa nó vào sys.path — không cần đoán vị trí nữa.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(here)  # scripts/ nằm ngay dưới gốc repo
-    for root in (repo_root, here, os.getcwd()):
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__")]
-            if "alpha_parser.py" in filenames:
-                if dirpath not in sys.path:
-                    sys.path.insert(0, dirpath)
-                return
-    print("⚠️  Không tìm thấy alpha_parser.py trong repo — import sẽ lỗi ngay sau đây.")
-
-
-_add_alpha_parser_dir_to_path()
-
-# Import ĐÚNG hàm regex đang chạy thật trong parser — không viết lại.
-from alpha_parser import _parse_multi_token_tiers
 
 
 def get_supabase():
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
+
+# Copy y hệt regex trong alpha_parser.py::_parse_multi_token_tiers — giữ
+# nguyên logic (kể cả cách xử lý dấu phẩy) để kết quả khớp 100% với
+# những gì parser thật sẽ ra nếu chạy trên cùng raw_text này.
+_TIER_PATTERN = re.compile(
+    r'(\d[\d,]*)\s*,\s*(\d[\d,]*)\s*,?\s*or\s*(\d[\d,]*)\s+([A-Z]{2,10})\s+tokens?',
+    re.IGNORECASE
+)
+
+
+def parse_multi_token_tiers(text: str) -> list:
+    """→ [{"symbol":"EDGE","tier_common":69,"tier_rare":86,"tier_super_rare":244}, ...]"""
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for m in _TIER_PATTERN.finditer(text):
+        low, mid, high, sym = m.groups()
+        sym = sym.upper()
+        if sym in seen or sym == "OR":  # "or" đôi khi bị regex khớp nhầm là symbol
+            continue
+        seen.add(sym)
+        try:
+            out.append({
+                "symbol": sym,
+                "tier_common": float(low.replace(",", "")),
+                "tier_rare": float(mid.replace(",", "")),
+                "tier_super_rare": float(high.replace(",", "")),
+            })
+        except Exception:
+            continue
+    return out
 
 
 def main():
@@ -68,7 +83,6 @@ def main():
 
     supabase = get_supabase()
 
-    # Lấy toàn bộ event có raw_text (phân trang, phòng khi >1000 dòng).
     rows = []
     page_size = 1000
     offset = 0
@@ -91,11 +105,10 @@ def main():
         if not raw_text or row.get("event_type") != "airdrop":
             continue
 
-        reparsed = _parse_multi_token_tiers(raw_text)
+        reparsed = parse_multi_token_tiers(raw_text)
         if len(reparsed) < 2:
             continue  # không phải Alpha Box nhiều token — bỏ qua
 
-        # So sánh với dữ liệu đang lưu
         current_td = row.get("tokens_detail")
         if isinstance(current_td, str):
             try:
@@ -110,9 +123,6 @@ def main():
         except Exception:
             current_amount_f = None
 
-        # Coi là "cần sửa" nếu: tokens_detail đang thiếu hẳn, HOẶC thiếu
-        # token nào đó so với bản re-parse, HOẶC amount_per_user lệch
-        # tier_common.
         needs_fix = False
         if not current_td or not isinstance(current_td, list):
             needs_fix = True
@@ -177,9 +187,16 @@ def main():
     print(f"\n✓ Đã sửa {updated}/{len(to_fix)} event trên Supabase")
 
     if do_refresh:
-        from storage import refresh_r2_snapshot
-        refresh_r2_snapshot()
-        print("✓ Đã refresh_r2_snapshot() — R2 đã đồng bộ lại")
+        refresh_url = os.environ.get("REFRESH_URL")
+        if not refresh_url:
+            print("\n⚠️  Chưa set REFRESH_URL (secret/env) nên KHÔNG tự refresh được.")
+            print("   Tự mở https://<app-của-bạn>.onrender.com/refresh trên trình duyệt.")
+        else:
+            try:
+                r = requests.get(refresh_url, timeout=30)
+                print(f"✓ Đã gọi {refresh_url} → {r.status_code} {r.text[:200]}")
+            except Exception as e:
+                print(f"⚠️  Gọi REFRESH_URL lỗi: {e}")
     else:
         print("\nLƯU Ý: R2 chưa được đồng bộ — mở https://<app-của-bạn>.onrender.com/refresh")
 
