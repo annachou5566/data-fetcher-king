@@ -45,12 +45,40 @@ def main():
 
     supabase = get_supabase()
 
-    rows = supabase.table("alpha_events") \
-        .select("id, symbol, project_name, amount_per_user, price_snapshot, value_usd, tokens_detail, source_msg_id") \
-        .not_.is_("tokens_detail", "null") \
-        .execute().data
+    # [SỬA — BUG] Filter .not_.is_("tokens_detail", "null") của PostgREST
+    # trả về 0 kết quả dù DB thật sự có event tokens_detail (case ON) —
+    # nhiều khả năng do kiểu cột (jsonb lưu string JSON lồng bên trong,
+    # hoặc rỗng "" thay vì SQL NULL). Để không phụ thuộc filter phía
+    # server nữa, giờ LẤY TOÀN BỘ bảng (có phân trang, phòng khi >1000
+    # dòng — mặc định Supabase chỉ trả tối đa 1000 dòng/lần) rồi tự lọc
+    # tokens_detail bằng Python cho chắc ăn.
+    rows = []
+    page_size = 1000
+    offset = 0
+    while True:
+        batch = supabase.table("alpha_events") \
+            .select("id, symbol, project_name, amount_per_user, price_snapshot, value_usd, tokens_detail, source_msg_id") \
+            .range(offset, offset + page_size - 1) \
+            .execute().data
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
 
-    print(f"Tìm thấy {len(rows)} event có tokens_detail (Alpha Box nhiều tier)\n")
+    print(f"Tổng số event trong bảng alpha_events: {len(rows)}")
+
+    has_tokens_detail = [r for r in rows if r.get("tokens_detail")]
+    print(f"Số event có tokens_detail (không rỗng/không null): {len(has_tokens_detail)}\n")
+
+    # Debug: nếu vẫn 0, in thử vài dòng bất kỳ để xem cấu trúc thật của
+    # cột tokens_detail đang là gì (giúp chẩn đoán tiếp nếu còn lỗi).
+    if not has_tokens_detail:
+        print("⚠️  Không tìm thấy event nào có tokens_detail. Xem thử 3 event có symbol chứa nhiều token (source_msg_id gần AEON/ON) để debug:")
+        sample = [r for r in rows if r.get("symbol") == "ON"]
+        for r in sample[:3]:
+            print(f"  id={r.get('id')} symbol={r.get('symbol')} tokens_detail={r.get('tokens_detail')!r} (type={type(r.get('tokens_detail')).__name__})")
+
+    rows = has_tokens_detail
 
     to_fix = []
     for row in rows:
