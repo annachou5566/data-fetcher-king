@@ -45,5 +45,5 @@ jobs:
           if [ "${{ inputs.refresh }}" = "true" ]; then
             ARGS="$ARGS --refresh"
           fi
-          echo "Chạy: python backfill_tier_common.py $ARGS"
-          python backfill_tier_common.py $ARGS
+          echo "Chạy: python scripts/backfill_tier_common.py $ARGS"
+          python scripts/backfill_tier_common.py $ARGS
