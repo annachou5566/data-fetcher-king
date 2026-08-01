@@ -1,0 +1,61 @@
+name: Backfill tier_common (1 lần)
+
+# Workflow này KHÔNG chạy tự động theo lịch (không phải cron định kỳ) —
+# nó chỉ chạy khi bạn tự bấm nút "Run workflow" trên tab Actions của
+# GitHub, vì backfill_tier_common.py là migration MỘT LẦN, không phải
+# job lặp lại (những job lặp lại như poll/enrich/expire đã chuyển hết
+# sang APScheduler chạy trong scheduler.py trên Render rồi — xem
+# docstring đầu file scheduler.py).
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Ghi thật vào Supabase? (false = chỉ xem trước, KHÔNG ghi gì)"
+        type: boolean
+        default: false
+      refresh:
+        description: "Sau khi ghi xong, tự đồng bộ luôn lên R2?"
+        type: boolean
+        default: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cài dependencies
+        run: |
+          # Cài requirements.txt của repo nếu có (không bắt buộc phải có)
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # [SỬA] Cài THẲNG đúng 2 package script này cần — không phụ thuộc
+          # vào requirements.txt có liệt kê đủ hay không (trước đó bị lỗi
+          # "No module named 'supabase'" vì thiếu).
+          pip install supabase boto3
+
+      - name: Chạy backfill (dry-run mặc định)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # [SỬA] Dùng secret riêng SUPABASE_PRI_KEY cho các script backfill
+          # 1-lần này — KHÁC với SUPABASE_SERVICE_ROLE_KEY (đang dùng cho
+          # việc khác), tránh trùng/đụng nhau. Value vẫn là service_role/
+          # secret key thật của Supabase (không phải publishable key).
+          SUPABASE_KEY: ${{ secrets.SUPABASE_PRI_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            ARGS="$ARGS --apply"
+          fi
+          if [ "${{ inputs.refresh }}" = "true" ]; then
+            ARGS="$ARGS --refresh"
+          fi
+          echo "Chạy: python scripts/backfill_tier_common.py $ARGS"
+          python scripts/backfill_tier_common.py $ARGS

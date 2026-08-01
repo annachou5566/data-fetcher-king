@@ -1,0 +1,54 @@
+name: Backfill multi-token tiers (1 lần)
+
+# Cũng chạy khi bấm tay "Run workflow", KHÔNG tự động theo lịch — dùng
+# lại đúng 2 secret đã cấu hình từ workflow backfill_tier_common.yml
+# trước đó (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY).
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Ghi thật vào Supabase? (false = chỉ xem trước, KHÔNG ghi gì)"
+        type: boolean
+        default: false
+      refresh:
+        description: "Sau khi ghi xong, tự đồng bộ luôn lên R2?"
+        type: boolean
+        default: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cài dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install supabase boto3
+
+      - name: Chạy backfill (dry-run mặc định)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Secret riêng cho các script backfill 1-lần này — KHÁC với
+          # SUPABASE_SERVICE_ROLE_KEY (đang dùng cho việc khác), tránh đụng
+          # nhau. Value vẫn phải là service_role/secret key thật của
+          # Supabase (không phải publishable key).
+          SUPABASE_KEY: ${{ secrets.SUPABASE_PRI_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            ARGS="$ARGS --apply"
+          fi
+          if [ "${{ inputs.refresh }}" = "true" ]; then
+            ARGS="$ARGS --refresh"
+          fi
+          echo "Chạy: python scripts/backfill_multitoken_tiers.py $ARGS"
+          python scripts/backfill_multitoken_tiers.py $ARGS
