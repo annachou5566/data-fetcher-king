@@ -1,0 +1,57 @@
+name: Backfill scripts (1 lần)
+
+# 1 workflow DUY NHẤT cho mọi script backfill một-lần trong scripts/ —
+# chọn script muốn chạy ở ô "script" khi bấm "Run workflow", không cần
+# tạo thêm file .yml mới mỗi khi có thêm 1 script backfill nữa.
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Chạy script nào?"
+        type: choice
+        options:
+          - backfill_tier_common.py
+          - backfill_multitoken_tiers.py
+        default: backfill_tier_common.py
+      apply:
+        description: "Ghi thật vào Supabase? (false = chỉ xem trước, KHÔNG ghi gì)"
+        type: boolean
+        default: false
+      refresh:
+        description: "Sau khi ghi xong, tự đồng bộ luôn lên R2?"
+        type: boolean
+        default: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cài dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install supabase boto3
+
+      - name: Chạy ${{ inputs.script }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_PRI_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            ARGS="$ARGS --apply"
+          fi
+          if [ "${{ inputs.refresh }}" = "true" ]; then
+            ARGS="$ARGS --refresh"
+          fi
+          echo "Chạy: python scripts/${{ inputs.script }} $ARGS"
+          python scripts/${{ inputs.script }} $ARGS
