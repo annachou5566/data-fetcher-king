@@ -28,6 +28,12 @@ import sys
 import json
 from supabase import create_client
 
+# [MỚI] Script này nằm trong scripts/, còn storage.py nằm ở thư mục gốc
+# repo (ngang hàng với main.py) — nếu không thêm thư mục cha vào sys.path,
+# `from storage import refresh_r2_snapshot` bên dưới sẽ báo lỗi
+# "ModuleNotFoundError: No module named 'storage'".
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 def get_supabase():
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
