@@ -26,27 +26,8 @@ Cách chạy:
 import os
 import sys
 import json
+import requests
 from supabase import create_client
-
-
-def _add_storage_dir_to_path():
-    """[SỬA — BUG] Trước đây giả định storage.py nằm ở gốc repo — có thể
-    sai cấu trúc thư mục thật, gây lỗi ModuleNotFoundError khi chạy
-    --refresh. Giờ TỰ TÌM file storage.py nằm ở đâu trong repo, add đúng
-    thư mục chứa nó vào sys.path.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(here)
-    for root in (repo_root, here, os.getcwd()):
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__")]
-            if "storage.py" in filenames:
-                if dirpath not in sys.path:
-                    sys.path.insert(0, dirpath)
-                return
-
-
-_add_storage_dir_to_path()
 
 
 def get_supabase():
@@ -179,9 +160,16 @@ def main():
     print(f"\n✓ Đã sửa {updated}/{len(to_fix)} event trên Supabase")
 
     if do_refresh:
-        from storage import refresh_r2_snapshot
-        refresh_r2_snapshot()
-        print("✓ Đã refresh_r2_snapshot() — R2 (all.json/history.json) đã đồng bộ lại")
+        refresh_url = os.environ.get("REFRESH_URL")
+        if not refresh_url:
+            print("\n⚠️  Chưa set REFRESH_URL (secret/env) nên KHÔNG tự refresh được.")
+            print("   Tự mở https://<app-của-bạn>.onrender.com/refresh trên trình duyệt.")
+        else:
+            try:
+                r = requests.get(refresh_url, timeout=30)
+                print(f"✓ Đã gọi {refresh_url} → {r.status_code} {r.text[:200]}")
+            except Exception as e:
+                print(f"⚠️  Gọi REFRESH_URL lỗi: {e}")
     else:
         print("\nLƯU Ý: R2 (all.json/history.json) CHƯA được đồng bộ lại.")
         print("Chạy lại với --refresh, hoặc tự gọi endpoint GET /refresh trên app Render.")
