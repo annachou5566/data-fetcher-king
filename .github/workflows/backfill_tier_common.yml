@@ -44,7 +44,10 @@ jobs:
       - name: Chạy backfill (dry-run mặc định)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # [SỬA] Secret trên GitHub tên là SUPABASE_SERVICE_ROLE_KEY (không
+          # phải SUPABASE_KEY) — map lại đúng tên biến env mà script/
+          # storage.py đang dùng (os.environ["SUPABASE_KEY"]).
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           ARGS=""
           if [ "${{ inputs.apply }}" = "true" ]; then
