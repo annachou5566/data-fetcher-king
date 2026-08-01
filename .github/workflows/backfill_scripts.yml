@@ -39,12 +39,16 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
-          pip install supabase boto3
+          pip install supabase boto3 requests
 
       - name: Chạy ${{ inputs.script }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_PRI_KEY }}
+          # URL endpoint /refresh của app đang chạy thật trên Render — VD:
+          # https://ten-app-cua-ban.onrender.com/refresh — không phải
+          # secret nhạy cảm (chỉ là 1 URL public), nhưng để secret cho gọn.
+          REFRESH_URL: ${{ secrets.REFRESH_URL }}
         run: |
           ARGS=""
           if [ "${{ inputs.apply }}" = "true" ]; then
