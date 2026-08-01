@@ -43,7 +43,26 @@ def main():
     apply = "--apply" in sys.argv
     do_refresh = "--refresh" in sys.argv
 
+    # [MỚI] In ra ĐANG kết nối tới project Supabase nào (URL không nhạy
+    # cảm, an toàn để in ra log) — để đối chiếu trực tiếp với URL đang
+    # dùng thật trên Render. Nếu 2 cái khác nhau → đó chính là lý do
+    # "Tổng số event = 0" (đang hỏi nhầm project trống/khác).
+    supa_url = os.environ.get("SUPABASE_URL", "(chưa set)")
+    print(f"Đang kết nối Supabase project: {supa_url}")
+    key_preview = os.environ.get("SUPABASE_KEY", "")
+    print(f"SUPABASE_KEY length: {len(key_preview)} ký tự (service_role key thật thường dài ~200+ ký tự, bắt đầu bằng 'eyJ')")
+    print(f"SUPABASE_KEY preview: {key_preview[:15]}...{key_preview[-6:] if len(key_preview) > 21 else ''}\n")
+
     supabase = get_supabase()
+
+    # Sanity check thô trước — query 1 dòng bất kỳ, không lọc gì, để biết
+    # ngay là do kết nối/quyền hay do filter phía sau.
+    try:
+        probe = supabase.table("alpha_events").select("id", count="exact").limit(1).execute()
+        print(f"Sanity check: bảng alpha_events báo tổng cộng {probe.count} dòng (theo Supabase đếm)")
+    except Exception as ex:
+        print(f"⚠️  Sanity check LỖI khi query alpha_events: {ex}")
+        print("   → Rất có thể sai tên bảng, sai schema, hoặc SUPABASE_KEY không có quyền đọc bảng này.")
 
     # [SỬA — BUG] Filter .not_.is_("tokens_detail", "null") của PostgREST
     # trả về 0 kết quả dù DB thật sự có event tokens_detail (case ON) —
