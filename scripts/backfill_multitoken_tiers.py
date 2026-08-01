@@ -29,7 +29,27 @@ import sys
 import json
 from supabase import create_client
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def _add_alpha_parser_dir_to_path():
+    """[SỬA — BUG] Trước đây giả định alpha_parser.py nằm ở gốc repo
+    (dirname(dirname(__file__))) — sai cấu trúc thư mục thật, gây lỗi
+    "ModuleNotFoundError: No module named 'alpha_parser'". Giờ TỰ TÌM
+    file alpha_parser.py nằm ở đâu trong repo (quét từ gốc repo xuống),
+    add đúng thư mục chứa nó vào sys.path — không cần đoán vị trí nữa.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(here)  # scripts/ nằm ngay dưới gốc repo
+    for root in (repo_root, here, os.getcwd()):
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__")]
+            if "alpha_parser.py" in filenames:
+                if dirpath not in sys.path:
+                    sys.path.insert(0, dirpath)
+                return
+    print("⚠️  Không tìm thấy alpha_parser.py trong repo — import sẽ lỗi ngay sau đây.")
+
+
+_add_alpha_parser_dir_to_path()
 
 # Import ĐÚNG hàm regex đang chạy thật trong parser — không viết lại.
 from alpha_parser import _parse_multi_token_tiers
