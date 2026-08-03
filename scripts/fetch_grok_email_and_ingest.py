@@ -91,8 +91,30 @@ def main():
         print("THIẾU GMAIL_ADDRESS / GMAIL_APP_PASSWORD — chưa cấu hình, thoát an toàn (không phải lỗi, có thể user chưa setup xong).")
         sys.exit(0)
 
+    # ⚠️ CHẨN ĐOÁN AN TOÀN — không in secret thật, chỉ in ĐỘ DÀI và có/không
+    # khoảng trắng/newline lạ, để tự phát hiện 2 lỗi hay gặp nhất (secret rỗng
+    # do gõ sai tên, hoặc dính dấu cách/newline khi copy-paste) mà KHÔNG cần
+    # bạn dán secret thật cho tôi xem.
+    print(f"[chẩn đoán] GMAIL_ADDRESS: độ dài={len(GMAIL_ADDRESS)}, có khoảng trắng đầu/cuối={GMAIL_ADDRESS != GMAIL_ADDRESS.strip()}, có @gmail.com={'@gmail.com' in GMAIL_ADDRESS.lower()}")
+    print(f"[chẩn đoán] GMAIL_APP_PASSWORD: độ dài={len(GMAIL_APP_PASSWORD)} (App Password chuẩn Google = ĐÚNG 16 ký tự, không dấu cách), có dấu cách={' ' in GMAIL_APP_PASSWORD}, có khoảng trắng đầu/cuối={GMAIL_APP_PASSWORD != GMAIL_APP_PASSWORD.strip()}")
+
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
-    imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+    try:
+        imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+    except imaplib.IMAP4.error as e:
+        print(f"\n❌ LOGIN THẤT BẠI: {e}")
+        print("Nếu 2 dòng [chẩn đoán] ở trên đều bình thường (độ dài đúng, không")
+        print("dấu cách thừa) thì đây GẦN NHƯ CHẮC CHẮN là do Google chặn đăng")
+        print("nhập từ IP lạ (GitHub Actions) — không phải lỗi secret/code.")
+        print("Cách sửa: đăng nhập Gmail bằng trình duyệt (đúng tài khoản này),")
+        print("mở https://accounts.google.com/DisplayUnlockCaptcha , bấm")
+        print("'Continue' — việc này 'nới lỏng' chặn đăng nhập lạ trong ít phút,")
+        print("chạy lại workflow NGAY sau đó để test. Nếu vẫn lỗi sau bước này,")
+        print("khả năng cao đây là Google Workspace (không phải Gmail cá nhân)")
+        print("và admin đã tắt IMAP/less-secure-app ở cấp tổ chức — cần dùng")
+        print("Gmail cá nhân (@gmail.com) thay vì email công ty/trường học.")
+        sys.exit(1)
+
     imap.select("INBOX")
 
     criteria = ['UNSEEN', 'FROM', f'"{SENDER_FILTER}"']
