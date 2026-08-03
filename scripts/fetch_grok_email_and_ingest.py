@@ -34,9 +34,10 @@ from ingest_grok_snapshot import validate_fund, TRACKED_TICKERS  # tái dùng đ
 
 GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-# Lọc đúng email từ Grok automation — sửa lại cho khớp subject/sender thật
-# Grok gửi (kiểm tra hộp thư 1 lần đầu để biết chính xác, rồi điền vào đây).
-SENDER_FILTER = os.getenv("GROK_EMAIL_SENDER_FILTER", "grok.com")
+# Xác nhận thật 31/07/2026: email Grok automation gửi từ noreply@x.ai,
+# subject "Grayscale ETF Crypto Data Extraction JSON" — subject đã đủ đặc
+# trưng nên SUBJECT_FILTER để trống, chỉ lọc theo sender.
+SENDER_FILTER = os.getenv("GROK_EMAIL_SENDER_FILTER", "x.ai")
 SUBJECT_FILTER = os.getenv("GROK_EMAIL_SUBJECT_FILTER", "")  # để trống nếu không lọc theo subject
 
 
