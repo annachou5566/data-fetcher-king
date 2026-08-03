@@ -1,0 +1,35 @@
+name: Fetch Grok Grayscale snapshot from email (auto)
+
+# TỰ ĐỘNG HOÀN TOÀN — không cần bạn commit/đụng tay gì cả sau khi setup xong.
+# Chạy theo lịch, SAU giờ Grok Automation của bạn đã chạy xong + gửi email
+# (chỉnh giờ "cron" bên dưới cho khớp — để cách giờ Grok chạy ít nhất 15-30
+# phút, phòng email đến chậm).
+on:
+  schedule:
+    - cron: '30 7 * * *'   # 07:30 UTC hàng ngày — SỬA lại cho khớp giờ Grok automation của bạn (+ đệm 15-30 phút)
+  workflow_dispatch:        # vẫn giữ nút bấm tay để test lại khi cần
+
+jobs:
+  fetch-and-ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install boto3 cloudscraper beautifulsoup4 requests
+
+      - name: Fetch email + ingest
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python scripts/fetch_grok_email_and_ingest.py
