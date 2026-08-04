@@ -69,9 +69,15 @@ def to_date(raw_utc):
         return None
 
 def friendly_to_date(friendly):
-    """'29/06/2026' → '2026-06-29'"""
+    """'29/06/2026' → '2026-06-29'
+    Khi SBV đăng bản đính chính cùng ngày, friendlyUrlPath có hậu tố
+    '-1', '-2'... (vd '10/03/2026-2') để tránh trùng URL. Phải cắt bỏ
+    hậu tố này trước khi parse, nếu không năm sẽ bị lẫn số hậu tố
+    (vd '2026-2' thay vì '2026'), sinh ra ngày sai dạng '2026-2-03-10'.
+    """
     try:
         d, m, y = friendly.strip().split("/")
+        y = y.split("-")[0]  # bỏ hậu tố '-1' / '-2' nếu có
         return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
     except Exception:
         return None
@@ -107,8 +113,14 @@ def fetch_all_pages(session, url, parse_fn, label):
                 for item in items:
                     row = parse_fn(item)
                     if row and row.get("date"):
-                        all_rows[row["date"]] = row
-                        new += 1
+                        # Kết quả sort theo datePublished:desc, nên nếu 1 ngày có
+                        # bản đính chính (đăng sau) và bản gốc (đăng trước), bản
+                        # đính chính sẽ được gặp TRƯỚC trong vòng lặp này. Dùng
+                        # setdefault để giữ bản gặp đầu tiên (mới nhất / đã đính
+                        # chính), không để bản gốc cũ hơn ghi đè lên sau.
+                        if row["date"] not in all_rows:
+                            all_rows[row["date"]] = row
+                            new += 1
 
                 print(f"  📄 {label} page {page}/{last_page} → {new}/{len(items)} rows")
                 break  # thành công → thoát vòng retry, sang page tiếp theo
