@@ -38,7 +38,7 @@ HEADERS       = {
 
 MAX_RETRIES   = 5      # số lần thử lại khi bị "Connection closed abruptly"
 RETRY_SLEEP   = 3      # giây, tăng dần theo backoff
-PAGE_SLEEP    = 1.0    # giây nghỉ giữa các page (tránh bị chặn do gọi quá nhanh)
+PAGE_SLEEP    = 1.8    # giây nghỉ giữa các page (tránh bị chặn do gọi quá nhanh)
 
 def new_session():
     """Tạo session curl_cffi mới (dùng khi session cũ bị server đóng kết nối)."""
@@ -192,11 +192,20 @@ def parse_ref(item):
 
 # ── Save ────────────────────────────────────────────────────────────
 def save(r2, bucket, rows_by_date):
-    # Chặn các row có ngày ở TƯƠNG LAI (dữ liệu rác từ API) — mốc so sánh là hôm nay theo giờ VN (UTC+7)
-    today_ict = (datetime.now(timezone.utc) + timedelta(hours=7)).strftime("%Y-%m-%d")
-    bad = [d for d in list(rows_by_date.keys()) if d > today_ict]
+    # Chặn row có ngày SAI ĐỊNH DẠNG hoặc ở TƯƠNG LAI (dữ liệu rác từ API)
+    # Mốc so sánh là hôm nay theo giờ VN (UTC+7)
+    today_ict = (datetime.now(timezone.utc) + timedelta(hours=7)).date()
+    bad = []
+    for d in list(rows_by_date.keys()):
+        try:
+            d_date = datetime.strptime(d, "%Y-%m-%d").date()
+        except Exception:
+            bad.append(d)
+            continue
+        if d_date > today_ict:
+            bad.append(d)
     for d in bad:
-        print(f"  🗑️  Bỏ row ngày tương lai (dữ liệu rác): {d}")
+        print(f"  🗑️  Bỏ row không hợp lệ / ngày tương lai: {d}")
         del rows_by_date[d]
 
     all_rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
