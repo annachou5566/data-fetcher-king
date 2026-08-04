@@ -30,10 +30,19 @@ R2_KEY        = "sbv-data.json"
 URL_CENTRAL   = "https://sbv.gov.vn/o/headless-delivery/v1.0/content-structures/137473/structured-contents"
 URL_REF       = "https://sbv.gov.vn/o/headless-delivery/v1.0/content-structures/3450514/structured-contents"
 HEADERS       = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
     "Accept":          "application/json",
     "Accept-Language": "vi-VN,vi;q=0.9",
+    "Referer":         "https://sbv.gov.vn/",
 }
+
+MAX_RETRIES   = 5      # số lần thử lại khi bị "Connection closed abruptly"
+RETRY_SLEEP   = 3      # giây, tăng dần theo backoff
+PAGE_SLEEP    = 1.0    # giây nghỉ giữa các page (tránh bị chặn do gọi quá nhanh)
+
+def new_session():
+    """Tạo session curl_cffi mới (dùng khi session cũ bị server đóng kết nối)."""
+    return requests.Session(impersonate="chrome116")
 
 # ── R2 ─────────────────────────────────────────────────────────────
 def get_r2():
@@ -74,33 +83,47 @@ def fetch_all_pages(session, url, parse_fn, label):
     last_page = 1
 
     while page <= last_page:
-        try:
-            res = session.get(url, params={
-                "pageSize": 100, "page": page, "sort": "datePublished:desc",
-            }, timeout=20, headers=HEADERS)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                res = session.get(url, params={
+                    "pageSize": 100, "page": page, "sort": "datePublished:desc",
+                }, timeout=30, headers=HEADERS)
 
-            if res.status_code != 200:
-                print(f"  ⚠️  {label} page={page}: HTTP {res.status_code}")
-                break
+                if res.status_code != 200:
+                    print(f"  ⚠️  {label} page={page}: HTTP {res.status_code}")
+                    if attempt <= MAX_RETRIES:
+                        time.sleep(RETRY_SLEEP * attempt)
+                        session = new_session()
+                        continue
+                    return all_rows  # bỏ cuộc với API này, giữ data đã có
 
-            data      = res.json()
-            items     = data.get("items", [])
-            last_page = data.get("lastPage", 1)
+                data      = res.json()
+                items     = data.get("items", [])
+                last_page = data.get("lastPage", 1)
 
-            new = 0
-            for item in items:
-                row = parse_fn(item)
-                if row and row.get("date"):
-                    all_rows[row["date"]] = row
-                    new += 1
+                new = 0
+                for item in items:
+                    row = parse_fn(item)
+                    if row and row.get("date"):
+                        all_rows[row["date"]] = row
+                        new += 1
 
-            print(f"  📄 {label} page {page}/{last_page} → {new}/{len(items)} rows")
-            page += 1
-            time.sleep(0.3)
+                print(f"  📄 {label} page {page}/{last_page} → {new}/{len(items)} rows")
+                break  # thành công → thoát vòng retry, sang page tiếp theo
 
-        except Exception as e:
-            print(f"  ⚠️  {label} page={page}: {e}")
-            break
+            except Exception as e:
+                print(f"  ⚠️  {label} page={page} (thử {attempt}/{MAX_RETRIES}): {e}")
+                if attempt <= MAX_RETRIES:
+                    time.sleep(RETRY_SLEEP * attempt)
+                    session = new_session()  # kết nối cũ có thể đã bị server đóng, tạo session mới
+                    continue
+                print(f"  ❌ {label}: bỏ cuộc sau {MAX_RETRIES} lần thử, giữ {len(all_rows)} rows đã lấy được")
+                return all_rows
+
+        page += 1
+        time.sleep(PAGE_SLEEP)
 
     return all_rows
 
@@ -169,6 +192,13 @@ def parse_ref(item):
 
 # ── Save ────────────────────────────────────────────────────────────
 def save(r2, bucket, rows_by_date):
+    # Chặn các row có ngày ở TƯƠNG LAI (dữ liệu rác từ API) — mốc so sánh là hôm nay theo giờ VN (UTC+7)
+    today_ict = (datetime.now(timezone.utc) + timedelta(hours=7)).strftime("%Y-%m-%d")
+    bad = [d for d in list(rows_by_date.keys()) if d > today_ict]
+    for d in bad:
+        print(f"  🗑️  Bỏ row ngày tương lai (dữ liệu rác): {d}")
+        del rows_by_date[d]
+
     all_rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     payload  = {
         "v":       2,
@@ -188,7 +218,6 @@ def main():
     print("🏦 SBV Rate Bot — Trung tâm + Tham khảo")
     print(f"   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
-    session = requests.Session(impersonate="chrome116")
     r2, bucket = get_r2()
 
     # Load existing
@@ -198,7 +227,7 @@ def main():
 
     # ── Fetch Tỷ giá Trung tâm ──────────────────────────────────────
     print("\n📡 Tỷ giá TRUNG TÂM (structure 137473)...")
-    central_rows = fetch_all_pages(session, URL_CENTRAL, parse_central, "Central")
+    central_rows = fetch_all_pages(new_session(), URL_CENTRAL, parse_central, "Central")
     if not central_rows:
         print("  ❌ Không lấy được Trung tâm")
     else:
@@ -209,7 +238,7 @@ def main():
 
     # ── Fetch Tỷ giá Tham khảo ──────────────────────────────────────
     print("\n📡 Tỷ giá THAM KHẢO Cục QLNH (structure 3450514)...")
-    ref_rows = fetch_all_pages(session, URL_REF, parse_ref, "Ref")
+    ref_rows = fetch_all_pages(new_session(), URL_REF, parse_ref, "Ref")
     if not ref_rows:
         print("  ❌ Không lấy được Tham khảo")
     else:
