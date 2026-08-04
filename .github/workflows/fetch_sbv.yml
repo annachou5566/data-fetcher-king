@@ -11,7 +11,7 @@ permissions:
 jobs:
   sbv-daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 15      # Backfill ~25 pages lần đầu cần ~5 phút
+    timeout-minutes: 25      # Có retry + sleep giữa các page nên có thể chạy lâu hơn khi mạng chập chờn
 
     steps:
     - uses: actions/checkout@v4
