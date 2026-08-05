@@ -1,0 +1,146 @@
+name: Temporary audit Competition history prices
+
+on:
+  push:
+    branches:
+      - chatgpt/audit-competition-history-price
+    paths:
+      - '.github/workflows/tmp-audit-competition-history-price.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --disable-pip-version-check boto3 requests
+      - name: Read Supabase tournaments and R2 price snapshot
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          import boto3
+          import requests
+          from botocore.config import Config
+
+          required = [
+              'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ENDPOINT_URL',
+              'R2_BUCKET_NAME', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'
+          ]
+          missing_env = [name for name in required if not os.getenv(name)]
+          if missing_env:
+              raise SystemExit('missing required workflow secrets: ' + ','.join(missing_env))
+
+          supabase_url = os.environ['SUPABASE_URL'].rstrip('/')
+          service_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          response = requests.get(
+              supabase_url + '/rest/v1/tournaments',
+              params={'select': 'id,name,contract,data', 'order': 'id.asc'},
+              headers={'apikey': service_key, 'Authorization': 'Bearer ' + service_key},
+              timeout=45,
+          )
+          print('SUPABASE_STATUS', response.status_code)
+          response.raise_for_status()
+          rows = [row for row in response.json() if row.get('id') != -1]
+
+          r2 = boto3.client(
+              's3',
+              endpoint_url=os.environ['R2_ENDPOINT_URL'],
+              aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'],
+              config=Config(signature_version='s3v4'),
+          )
+          obj = r2.get_object(Bucket=os.environ['R2_BUCKET_NAME'], Key='competition-price-series.json')
+          snapshot = json.loads(obj['Body'].read().decode('utf-8'))
+          if not isinstance(snapshot, dict):
+              raise SystemExit('competition-price-series.json is not an object')
+          print('R2_LAST_MODIFIED', obj.get('LastModified'))
+          print('R2_CONTENT_LENGTH', obj.get('ContentLength'))
+
+          now = datetime.now(timezone.utc)
+          def data(row):
+              value = row.get('data')
+              return value if isinstance(value, dict) else {}
+          def ended(row):
+              meta = data(row)
+              end = meta.get('end') or meta.get('endDate')
+              if not end:
+                  return False
+              end_time = str(meta.get('endTime') or '23:59:59')
+              if len(end_time) == 5:
+                  end_time += ':00'
+              try:
+                  return datetime.fromisoformat(str(end)[:10] + 'T' + end_time[:8] + '+00:00') < now
+              except Exception:
+                  return str(end)[:10] < now.date().isoformat()
+
+          history = [row for row in rows if ended(row)]
+          selected = {'QAIT', 'UP', 'O', 'ZEST', 'BLUAI'}
+          print('AUDIT_SUMMARY', json.dumps({
+              'tournaments': len(rows),
+              'history': len(history),
+              'snapshotKeys': len(snapshot),
+          }))
+          print('SELECTED_HISTORY_BEGIN')
+          for row in history:
+              if str(row.get('name') or '').upper() not in selected:
+                  continue
+              series = snapshot.get(str(row['id'])) or snapshot.get(row['id']) or {}
+              points = series.get('points') if isinstance(series, dict) else []
+              if not isinstance(points, list):
+                  points = []
+              meta = data(row)
+              print(json.dumps({
+                  'id': row['id'],
+                  'name': row.get('name'),
+                  'start': meta.get('start'),
+                  'startTime': meta.get('startTime'),
+                  'end': meta.get('end'),
+                  'endTime': meta.get('endTime'),
+                  'alphaId': meta.get('alphaId'),
+                  'chainId': meta.get('chainId'),
+                  'contract': row.get('contract'),
+                  'seriesKeys': sorted(series.keys()) if isinstance(series, dict) else [],
+                  'pointCount': len(points),
+                  'points': points,
+              }, ensure_ascii=False, default=str))
+          print('SELECTED_HISTORY_END')
+
+          buckets = {'missing': [], 'sparse': [], 'rich': []}
+          for row in history:
+              series = snapshot.get(str(row['id'])) or snapshot.get(row['id']) or {}
+              points = series.get('points') if isinstance(series, dict) else []
+              count = len(points) if isinstance(points, list) else 0
+              item = {
+                  'id': row['id'],
+                  'name': row.get('name'),
+                  'start': data(row).get('start'),
+                  'end': data(row).get('end'),
+                  'points': count,
+              }
+              if count == 0:
+                  buckets['missing'].append(item)
+              elif count < 3:
+                  buckets['sparse'].append(item)
+              else:
+                  buckets['rich'].append(item)
+          print('COVERAGE_COUNTS', json.dumps({key: len(value) for key, value in buckets.items()}))
+          for key, values in buckets.items():
+              print(key.upper() + '_LATEST', json.dumps(values[-30:], ensure_ascii=False))
+          PY
