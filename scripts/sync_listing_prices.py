@@ -16,6 +16,7 @@ Env cần (đã có sẵn trong GitHub Secrets, dùng chung với fetch_alpha.py
 
 import json
 import os
+import re
 import time
 import threading
 import random
@@ -973,50 +974,6 @@ def _process_one(e, idx, total, is_first_occurrence=True):
     return e, result
 
 
-def assign_air_numbers(events):
-    """
-    [MỚI] Tính và LƯU THẲNG số thứ tự airdrop ("Air N") vào từng event,
-    thay vì để frontend tự đoán bằng cách đếm/group lại mỗi lần render.
-
-    Lý do làm ở backend, không phải frontend:
-    - Đây là nơi DUY NHẤT có đủ toàn bộ lịch sử (all.json = backfill cũ +
-      event realtime từ wa-listener gộp lại) để đếm chính xác "đây là lần
-      airdrop thứ mấy của token này" — wa-listener (storage.py) không đủ
-      thông tin để tự tính vì nó không biết các lần airdrop xảy ra TRƯỚC
-      khi nó tồn tại.
-    - Tính 1 lần, lưu vào data → mọi nơi đọc ra (frontend, API, export)
-      đều thấy cùng 1 con số, không lệch nhau do khác cách nhóm/parse.
-
-    Cách tính: nhóm theo symbol (viết hoa), loại "tge" ra khỏi phép đếm
-    (TGE là phát hành/bán riêng, không phải đợt airdrop — dùng chung logic
-    loại trừ với _first_occurrence_ids ở trên), sort theo event_time tăng
-    dần, đánh số 1,2,3... theo đúng thứ tự thời gian thật.
-
-    Idempotent + rẻ: luôn tính lại toàn bộ mỗi lần chạy (không cần cờ
-    chống chạy lại), vì đây chỉ là phép sort+đếm trong RAM, không tốn
-    request mạng nào.
-    """
-    groups = {}
-    for e in events:
-        event_type = (e.get("event_type") or e.get("type") or "").lower()
-        if event_type == "tge":
-            continue  # TGE không tính vào số thứ tự airdrop
-        sym = (e.get("symbol") or e.get("token") or "").upper()
-        if not sym:
-            continue
-        groups.setdefault(sym, []).append(e)
-
-    changed = 0
-    for sym, evs in groups.items():
-        evs.sort(key=lambda ev: str(ev.get("event_time") or ev.get("date") or ev.get("created_at") or ""))
-        for i, e in enumerate(evs, start=1):
-            if e.get("air_number") != i:
-                e["air_number"] = i
-                changed += 1
-
-    return changed
-
-
 def _first_occurrence_ids(events):
     """
     [MỚI] Trả về set id() của event là lần xuất hiện SỚM NHẤT (theo
@@ -1127,6 +1084,68 @@ def invalidate_multi_round_listing_prices(events):
             e["ath_since_listing_date"] = None
             invalidated += 1
     return invalidated
+
+
+def backfill_missing_event_time(events):
+    """
+    [MỚI] Vá lỗi event_time=null (xảy ra khi tầng wa-listener parse raw_text
+    không khớp regex, VD announcement GRVT viết "...trading starting on
+    July 30, 2026, at 12:00 (UTC)" thay vì dạng quen thuộc "...trade today
+    at 9:00 (UTC)"). Trước đây event thiếu event_time bị enrich_events()
+    ÂM THẦM loại khỏi todo (điều kiện `and (e.get("event_time") or
+    e.get("date"))`) — không log, không báo — nên listing_price/peak
+    không bao giờ được tính, frontend hiện "đang đồng bộ..." vĩnh viễn dù
+    chạy lại bao nhiêu lần.
+
+    Thử bóc tách event_time từ raw_text theo 2 dạng câu hay gặp:
+      A) "<Month> <D>, <YYYY>, at <H>:<MM> (UTC)"  (có ngày tháng rõ ràng)
+      B) "today at <H>:<MM> (UTC)"                 (dùng ngày của created_at)
+    Trả về (số event vá được, số event vẫn không parse nổi).
+    """
+    fixed, still_missing = 0, []
+    pat_explicit_date = re.compile(
+        r'([A-Z][a-z]+ \d{1,2},?\s+\d{4}),?\s+at\s+(\d{1,2}):(\d{2})\s*\(UTC\)'
+    )
+    pat_today = re.compile(r'\btoday at (\d{1,2}):(\d{2})\s*\(UTC\)', re.IGNORECASE)
+
+    for e in events:
+        if e.get("event_time") or e.get("date"):
+            continue
+        raw = e.get("raw_text") or ""
+        symbol = e.get("symbol") or e.get("token") or "?"
+
+        m = pat_explicit_date.search(raw)
+        if m:
+            date_str, hh, mm = m.group(1), int(m.group(2)), int(m.group(3))
+            try:
+                dt = datetime.strptime(date_str.replace(",", ""), "%B %d %Y")
+                dt = dt.replace(hour=hh, minute=mm)
+                e["event_time"] = dt.strftime("%Y-%m-%d %H:%M:00+00")
+                fixed += 1
+                print(f"  [event_time-fix] {symbol}: parse được từ raw_text -> {e['event_time']} "
+                      f"(regex dạng 'Month D, YYYY, at H:MM (UTC)')")
+                continue
+            except ValueError:
+                pass  # rơi xuống thử pattern B / đánh dấu still_missing bên dưới
+
+        m2 = pat_today.search(raw)
+        created = e.get("created_at") or ""
+        if m2 and len(created) >= 10:
+            hh, mm = int(m2.group(1)), int(m2.group(2))
+            e["event_time"] = f"{created[:10]} {hh:02d}:{mm:02d}:00+00"
+            fixed += 1
+            print(f"  [event_time-fix] {symbol}: parse được từ raw_text -> {e['event_time']} "
+                  f"(regex dạng 'today at H:MM (UTC)', lấy ngày theo created_at)")
+            continue
+
+        still_missing.append(symbol)
+
+    if still_missing:
+        print(f"  [event_time-fix] ⚠️  {len(still_missing)} event VẪN thiếu event_time, "
+              f"không tự parse được từ raw_text — sẽ tiếp tục bị bỏ qua cho tới khi sửa tay "
+              f"hoặc sửa parser gốc ở wa-listener: {', '.join(still_missing)}")
+
+    return fixed
 
 
 def enrich_events(events):
@@ -1544,6 +1563,11 @@ def main():
         print("⚠️  No events found — nothing to backfill.")
         return
 
+    ev_time_fixed = backfill_missing_event_time(all_events)
+    if ev_time_fixed:
+        print(f"  [event_time-fix] Đã tự vá event_time cho {ev_time_fixed} event từ raw_text "
+              f"— các event này giờ sẽ được đưa vào hàng chờ tính listing_price/peak bên dưới")
+
     print("⏳ Đối chiếu với danh sách token Alpha thật từ Binance...")
     status_map = fetch_alpha_token_status_map()
     global _ALPHA_STATUS_MAP
@@ -1619,23 +1643,7 @@ def main():
     #     ath_*,...), và không có bằng chứng có hệ thống khác cùng ghi
     #     đè 2 file này (khác hẳn upcoming/live — có bằng chứng rõ ràng
     #     wa-listener ghi liên tục).
-    air_number_changed = assign_air_numbers(all_events)
-    if air_number_changed:
-        print(f"   [air_number] Cập nhật số thứ tự airdrop (Air N) cho {air_number_changed} event ✓")
-
     history = [e for e in all_events if e.get("status") in ("ended", None) or e.get("status") not in ("upcoming", "live")]
-
-    # [MỚI] Sort theo thời gian MỚI NHẤT lên đầu. Cần thiết vì giờ
-    # wa-listener (storage.py) cũng append event realtime thẳng vào
-    # all.json (xem _upsert_ended_to_all_events) để script này tự nhận
-    # diện và enrich giá — nhưng nó append vào CUỐI mảng, không theo thứ
-    # tự ngày. Nếu không sort ở đây, mỗi lần script này chạy lại (theo
-    # lịch GitHub Actions) sẽ ghi đè mất thứ tự đã sort bởi wa-listener,
-    # khiến event mới lại rớt xuống cuối danh sách History trên frontend.
-    def _history_sort_key(ev):
-        ts = ev.get("event_time") or ev.get("created_at") or ""
-        return str(ts)
-    history.sort(key=_history_sort_key, reverse=True)
 
     upload_json(r2, "alpha-events/all.json",     all_events)
     upload_json(r2, "alpha-events/history.json", history)
