@@ -107,7 +107,11 @@ KEY_MAP = {
     "offline": "off", "listingCex": "cex",
     "onlineTge": "tge",
     "onlineAirdrop": "air",
-    "mul_point": "mp"
+    "mul_point": "mp",
+    # [SỬA] Cờ + volume thật cho nhóm token cổ phiếu tokenized (XOMon, VRTon...)
+    # ist = is_stock (1/0), rv = real_vol (volume thị trường chứng khoán gốc),
+    # tk = ticker mã chứng khoán gốc (XOM, VRT...) để hiển thị trong tooltip.
+    "is_stock": "ist", "real_vol": "rv", "stock_ticker": "tk"
 }
 
 def minify_token_data(token):
@@ -136,6 +140,13 @@ def minify_token_data(token):
     minified[KEY_MAP["listingCex"]]     = 1 if token.get("listingCex")    else 0
     minified[KEY_MAP["onlineTge"]]      = 1 if token.get("onlineTge")     else 0
     minified[KEY_MAP["onlineAirdrop"]]  = 1 if token.get("onlineAirdrop") else 0
+
+    # [SỬA] chỉ xuất field is_stock/real_vol/ticker khi token thật sự là tokenized-stock,
+    # tránh phình payload cho ~640 token Alpha bình thường không cần field này.
+    if token.get("is_stock"):
+        minified[KEY_MAP["is_stock"]]     = 1
+        minified[KEY_MAP["real_vol"]]     = int(token.get("real_vol", 0))
+        minified[KEY_MAP["stock_ticker"]] = token.get("stock_ticker", "")
 
     vol = token.get("volume", {})
     minified[KEY_MAP["volume"]] = {
@@ -304,6 +315,30 @@ def fetch_details_optimized(chain_id, contract_addr):
     d_market = max(d_total - d_limit, 0)
     return d_total, d_limit, d_market, chart_data, has_limit_vol
 
+
+def fetch_stock_chart_only(chain_id, contract_addr):
+    """
+    [MỚI] Dành riêng cho token cổ phiếu tokenized (stockState=true).
+    CHỈ gọi dataType=aggregate để lấy chart giá (giá trị thật, hợp lệ dù
+    volume=0) — KHÔNG gọi dataType=limit vì luôn trả lỗi -5101 "current
+    token not support limit data source" (đã kiểm chứng thực tế với TQQQon),
+    tránh lãng phí 1 request/token/lần chạy luôn-luôn-thất-bại.
+    """
+    if not API_AGG_KLINES: return []
+    no_lower_chains = ["CT_501", "CT_784"]
+    clean_addr = str(contract_addr)
+    if chain_id not in no_lower_chains:
+        clean_addr = clean_addr.lower()
+    url = f"{API_AGG_KLINES}?chainId={chain_id}&interval=1d&limit=30&tokenAddress={clean_addr}&dataType=aggregate"
+    try:
+        res = fetch_smart(url)
+        if res and res.get("data") and res["data"].get("klineInfos"):
+            k_infos = res["data"]["klineInfos"]
+            return [{"p": safe_float(k[4]), "v": safe_float(k[5])} for k in k_infos]
+    except Exception:
+        pass
+    return []
+
 # ─────────────────────────────────────────────
 # 7. PROCESS SINGLE TOKEN (logic giữ nguyên gốc, bỏ sleep)
 # ─────────────────────────────────────────────
@@ -319,9 +354,31 @@ def process_single_token(item):
     is_offline     = item.get("offline", False)
     is_listing_cex = item.get("listingCex", False)
 
+    # [SỬA] Token cổ phiếu/ETF tokenized (XOMon, VRTon, TQQQon...) — nhận diện qua
+    # field `stockState` thật từ chính token-list API (đáng tin hơn dò hậu tố "on"
+    # trong symbol). Nhóm này KHÔNG giao dịch qua Alpha DEX nên gọi agg-klines luôn
+    # trả volume=0 hoặc lỗi -5101 "not support limit data source" — bỏ qua hẳn,
+    # dùng thẳng rwaInfo.dynamicInfo.volume24h (volume thị trường chứng khoán thật)
+    # làm số phụ hiển thị tooltip, còn daily_total vẫn giữ volume on-chain Alpha
+    # (đúng bản chất "hoạt động trade trên Binance") theo yêu cầu hiển thị cả 2 số.
+    is_stock     = bool(item.get("stockState"))
+    real_vol     = 0.0
+    stock_ticker = ""
+    if is_stock:
+        rwa_info = item.get("rwaInfo") or {}
+        dyn_info = rwa_info.get("dynamicInfo") or {}
+        meta_info = rwa_info.get("metaInfo") or {}
+        real_vol     = safe_float(dyn_info.get("volume24h"))
+        stock_ticker = meta_info.get("ticker", "") or ""
+
     status           = "ALPHA"
     need_limit_check = False
     force_skip_fetch = False  # True → bỏ qua API call dù vol_rolling > 0
+
+    if is_stock:
+        # Token cổ phiếu tokenized: không có breakdown limit/onchain, không cần
+        # xác minh sống/chết qua klines (rwaInfo.openState đã cho biết đủ rồi).
+        force_skip_fetch = True
 
     if is_offline:
         if is_listing_cex or symbol in ACTIVE_SPOT_SYMBOLS:
@@ -356,7 +413,15 @@ def process_single_token(item):
     daily_total = daily_limit = daily_onchain = 0.0
     chart_data  = []
 
-    if should_fetch:
+    if is_stock:
+        # [SỬA] Không đi qua nhánh should_fetch bình thường (vốn gọi cả limit+aggregate).
+        # Lấy chart giá thật qua fetch_stock_chart_only (chỉ 1 request, không lỗi),
+        # daily_total = volume on-chain Alpha (đúng bản chất, đã có sẵn trong vol_rolling).
+        print(f"📈 {symbol} (stock)...", end=" ", flush=True)
+        chart_data  = fetch_stock_chart_only(chain_id, contract)
+        daily_total = vol_rolling
+        print("OK")
+    elif should_fetch:
         print(f"📡 {symbol}...", end=" ", flush=True)
         try:
             d_t, d_l, d_m, chart, has_limit = fetch_details_optimized(chain_id, contract)
@@ -394,6 +459,7 @@ def process_single_token(item):
         "icon": item.get("iconUrl"), "chain": item.get("chainName", ""),
         "chain_icon": item.get("chainIconUrl"), "contract": contract,
         "offline": is_offline, "listingCex": is_listing_cex, "status": status,
+        "is_stock": is_stock, "real_vol": real_vol, "stock_ticker": stock_ticker,
         "onlineTge":    item.get("onlineTge", False),
         "onlineAirdrop": item.get("onlineAirdrop", False),
         "mul_point":    safe_float(item.get("mulPoint")),
