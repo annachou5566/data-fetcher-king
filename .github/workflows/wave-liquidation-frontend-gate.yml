@@ -1,0 +1,96 @@
+name: Wave Liquidation Frontend Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/wave-liquidation-frontend-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    if: github.head_ref == 'chatgpt/wave-liq-coordinator-runner'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: a47eac02f11541e004abf43406e17425955cf18c
+      PREVIEW: https://chatgpt-liquidation-exchange-monitor.wave-alpha.pages.dev
+    steps:
+      - name: Fetch exact private Wave Alpha source
+        shell: bash
+        env:
+          WA_TOKEN: ${{ secrets.WAVE_ALPHA_REPO_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          [ -n "$WA_TOKEN" ] || { echo '::error::WAVE_ALPHA_REPO_TOKEN missing'; exit 10; }
+          mkdir -p wave-alpha
+          curl --fail --silent --show-error --location --retry 3 --max-time 60 \
+            -H "Authorization: Bearer $WA_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/annachou5566/wave-alpha/tarball/$SOURCE_SHA" \
+            -o /tmp/wave-alpha.tgz
+          tar -xzf /tmp/wave-alpha.tgz --strip-components=1 -C wave-alpha
+          echo "SOURCE_SHA=$SOURCE_SHA"
+
+      - name: Syntax and ownership contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check wave-alpha/public/js/liquidation/tab/exchange-constellation.js
+          node --check wave-alpha/public/js/overview-tab.js
+          node --check wave-alpha/functions/_middleware.js
+          node - <<'NODE'
+          const fs = require('fs');
+          const c = fs.readFileSync('wave-alpha/public/js/liquidation/tab/exchange-constellation.js','utf8');
+          const o = fs.readFileSync('wave-alpha/public/js/overview-tab.js','utf8');
+          const m = fs.readFileSync('wave-alpha/functions/_middleware.js','utf8');
+          const must = (ok,msg) => { if (!ok) throw new Error(msg); };
+          must(c.includes("const API = '/api/liquidations/exchanges'"),'canonical exchanges API missing');
+          must(c.includes('window=24h&symbol=ALL'),'fixed 24h/ALL source missing');
+          must(c.includes('cmlc-event-ring'),'side event ring missing');
+          must(c.includes("row.longCount"),'longCount consumer missing');
+          must(c.includes("row.shortCount"),'shortCount consumer missing');
+          must(c.includes("sideCountComplete"),'side completeness contract missing');
+          must(c.includes("const split = count > 10"),'10-node single orbit contract missing');
+          must(c.includes('WaveLiquidationEventStore'),'existing event store ownership missing');
+          must(!c.includes('new WebSocket('),'constellation opened a duplicate websocket');
+          must(!c.includes('setInterval(load, 20'),'unexpected aggressive poll');
+          must(o.includes("tab/layout-order.js?v=1"),'layout owner missing');
+          must(o.includes("tab/exchange-constellation.js?v=2"),'constellation v2 missing');
+          must(o.indexOf('tab/layout-order.js?v=1') < o.indexOf('tab/exchange-constellation.js?v=2'),'layout must settle before constellation');
+          must(o.indexOf('tab/event-store.js?v=1') < o.indexOf('tab/exchange-constellation.js?v=2'),'event store must load before constellation');
+          must(!o.includes('tab/pulse-matrix.js'),'option 1 must not load by default');
+          must(m.includes('/public/js/overview-tab.js?v=9'),'root cache bump missing');
+          console.log('FRONTEND_STATIC_GATE=PASS');
+          NODE
+
+      - name: Wait for exact branch preview
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          READY=0
+          for ATTEMPT in $(seq 1 24); do
+            if curl --fail --silent --show-error --max-time 20 "$PREVIEW/" -o /tmp/page.html; then
+              if grep -q '/public/js/overview-tab.js?v=9' /tmp/page.html; then
+                if curl --fail --silent --show-error --max-time 20 "$PREVIEW/public/js/overview-tab.js?v=9" -o /tmp/overview.js && grep -q "tab/exchange-constellation.js?v=2" /tmp/overview.js; then
+                  READY=1
+                  echo "PREVIEW_ASSET_GATE=PASS attempt=$ATTEMPT"
+                  break
+                fi
+              fi
+            fi
+            echo "PREVIEW_WAIT attempt=$ATTEMPT"
+            sleep 10
+          done
+          [ "$READY" = '1' ] || { echo '::error::Exact preview assets did not propagate'; exit 20; }
+
+      - name: Preview API side-count contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --retry 4 --max-time 25 "$PREVIEW/api/liquidations/exchanges?window=24h&symbol=ALL" -o /tmp/exchanges.json
+          jq -e '.error == null and .diagnostics.sideCountSchema == "long-short-count-v1" and (.all|has("longCount") and has("shortCount") and has("sideCountObserved") and has("sideCountComplete"))' /tmp/exchanges.json >/dev/null
+          jq -c '{storage,generatedAt,totalUsd:.all.liquidationUsd,totalEvents:.all.count,longCount:.all.longCount,shortCount:.all.shortCount,sideCountObserved:.all.sideCountObserved,sideCountComplete:.all.sideCountComplete,coverage:.all.sideCountCoverageRate,activeExchanges:([.exchanges[]|select(.hasEvents==true and (.liquidationUsd//0)>0)|.exchange])}' /tmp/exchanges.json
+          echo 'PREVIEW_SIDE_COUNT_GATE=PASS'
