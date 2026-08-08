@@ -122,27 +122,37 @@ jobs:
           "$WR" deploy --config wrangler.live.json --keep-vars --dry-run --outdir /tmp/wave-liq-live-dry
           echo 'LIVE_DRY_RUN_GATE=PASS'
           "$WR" deploy --config wrangler.live.json --keep-vars
-          sleep 8
 
           rollback() {
             echo '::warning::Post-deploy gate failed; rolling back only wave-alpha-liquidation-coordinator.'
             "$WR" rollback --config wrangler.live.json --message 'rollback side-count deployment: post-deploy gate failed' || true
           }
 
+          sleep 8
           POST="$(curl --fail --silent --show-error --retry 4 --max-time 20 "$COORDINATOR_URL/health")" || { rollback; exit 30; }
           printf '%s' "$POST" | jq -e '.ok == true and .trafficEnabled == true and .ingestReady == true and .adminReady == true' >/dev/null || { rollback; exit 31; }
           echo 'POST_HEALTH_GATE=PASS'
+          "$WR" deployments status --config wrangler.live.json
 
-          NOW_MS="$(($(date +%s)*1000))"
-          FROM_MS="$((NOW_MS-86400000))"
-          SNAP="$(curl --fail --silent --show-error --retry 4 --max-time 25 "$COORDINATOR_URL/snapshot?from=$FROM_MS&to=$NOW_MS")" || { rollback; exit 32; }
-          printf '%s' "$SNAP" | jq -e '
-            .ok == true and
-            (.buckets | type == "object") and
-            ([.buckets[] | select((.count // 0) > 0) | has("longCount") and has("shortCount") and has("sideCountObserved") and has("sideCountComplete")] | any)
-          ' >/dev/null || { rollback; exit 33; }
+          SCHEMA_OK=0
+          for ATTEMPT in $(seq 1 18); do
+            NOW_MS="$(($(date +%s)*1000))"
+            FROM_MS="$((NOW_MS-90000000))"
+            if curl --fail --silent --show-error --retry 2 --max-time 25 "$COORDINATOR_URL/snapshot?from=$FROM_MS&to=$NOW_MS" -o /tmp/liq-snapshot.json; then
+              SUMMARY="$(jq -c '{ok,bucketCount:(.buckets|length),nonzeroBuckets:([.buckets[]|select((.count//0)>0)]|length),sampleKeys:(([.buckets[]|select((.count//0)>0)|keys]|first)//([.buckets[]|keys]|first)//[]),updatedAt}' /tmp/liq-snapshot.json 2>/dev/null || echo '{"parse":"failed"}')"
+              echo "SCHEMA_ATTEMPT=$ATTEMPT $SUMMARY"
+              if jq -e '.ok == true and (.buckets|type == "object") and (.buckets|length > 0) and ([.buckets[] | has("longCount") and has("shortCount") and has("sideCountObserved") and has("sideCountComplete")] | any)' /tmp/liq-snapshot.json >/dev/null; then
+                SCHEMA_OK=1
+                break
+              fi
+            else
+              echo "SCHEMA_ATTEMPT=$ATTEMPT snapshot_read_failed"
+            fi
+            sleep 10
+          done
+
+          [ "$SCHEMA_OK" = '1' ] || { rollback; exit 33; }
           echo 'SIDE_COUNT_SCHEMA_GATE=PASS'
-
           "$WR" deployments status --config wrangler.live.json
           echo "DEPLOYED_SOURCE_SHA=$TARGET_SHA"
           echo 'LIQUIDATION_SIDE_COUNT_DEPLOY=PASS'
