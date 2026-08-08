@@ -6,7 +6,7 @@ on:
       source_sha:
         description: 'Exact wave-alpha source SHA to deploy'
         required: true
-        default: '6d6060545be942603920372888f07ca2a5f8152c'
+        default: 'cc9c2356930854fdb00097e72e75b4de2c61a8d5'
   pull_request:
     branches: [main]
     paths:
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      TARGET_SHA: ${{ github.event.inputs.source_sha || '6d6060545be942603920372888f07ca2a5f8152c' }}
+      TARGET_SHA: ${{ github.event.inputs.source_sha || 'cc9c2356930854fdb00097e72e75b4de2c61a8d5' }}
       COORDINATOR_URL: https://wave-alpha-liquidation-coordinator.wavealpha.workers.dev
 
     steps:
