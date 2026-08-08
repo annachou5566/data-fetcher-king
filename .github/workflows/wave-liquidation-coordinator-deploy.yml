@@ -29,6 +29,7 @@ jobs:
     env:
       TARGET_SHA: ${{ github.event.inputs.source_sha || 'cc9c2356930854fdb00097e72e75b4de2c61a8d5' }}
       COORDINATOR_URL: https://wave-alpha-liquidation-coordinator.wavealpha.workers.dev
+      LIQ_KV_NAMESPACE_ID: cb5b992f63c04bbebba684318b122dd0
 
     steps:
       - name: Validate exact source SHA
@@ -97,27 +98,16 @@ jobs:
           CF_TOKEN_4: ${{ secrets.CF_TOKEN }}
           CF_ACCOUNT_1: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CF_ACCOUNT_2: ${{ secrets.CF_ACCOUNT_ID }}
-          KV_ID_1: ${{ secrets.WAVE_LIQ_KV_ID }}
-          KV_ID_2: ${{ secrets.LIQ_KV_ID }}
         run: |
           set -Eeuo pipefail
           CF_TOKEN="${CF_TOKEN_1:-${CF_TOKEN_2:-${CF_TOKEN_3:-${CF_TOKEN_4:-}}}}"
           [ -n "$CF_TOKEN" ] || { echo '::error::Missing Cloudflare Workers token. Add repository secret CF_API_TOKEN or CLOUDFLARE_API_TOKEN.'; exit 20; }
-
           CF_ACCOUNT="${CF_ACCOUNT_1:-${CF_ACCOUNT_2:-}}"
-          if [ -z "$CF_ACCOUNT" ]; then
-            ACCOUNTS="$(curl --fail --silent --show-error --retry 3 --max-time 30 -H "Authorization: Bearer $CF_TOKEN" -H 'Content-Type: application/json' 'https://api.cloudflare.com/client/v4/accounts?per_page=50')"
-            COUNT="$(printf '%s' "$ACCOUNTS" | jq '.result | length')"
-            [ "$COUNT" = '1' ] || { echo '::error::Could not uniquely derive Cloudflare account. Add repository secret CF_ACCOUNT_ID.'; exit 21; }
-            CF_ACCOUNT="$(printf '%s' "$ACCOUNTS" | jq -r '.result[0].id')"
-          fi
+          [ -n "$CF_ACCOUNT" ] || { echo '::error::Missing Cloudflare account id. Add repository secret CF_ACCOUNT_ID.'; exit 21; }
 
-          KV_ID="${KV_ID_1:-${KV_ID_2:-}}"
-          if [ -z "$KV_ID" ]; then
-            KV_JSON="$(curl --fail --silent --show-error --retry 3 --max-time 30 -H "Authorization: Bearer $CF_TOKEN" -H 'Content-Type: application/json' "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces?per_page=100")"
-            KV_ID="$(printf '%s' "$KV_JSON" | jq -r '.result[] | select(.title == "liquidation-cache") | .id' | head -n1)"
-          fi
-          [ -n "$KV_ID" ] || { echo '::error::Could not derive liquidation-cache KV namespace. Add repository secret WAVE_LIQ_KV_ID.'; exit 22; }
+          VERIFY="$(curl --fail --silent --show-error --retry 2 --max-time 20 -H "Authorization: Bearer $CF_TOKEN" -H 'Content-Type: application/json' 'https://api.cloudflare.com/client/v4/user/tokens/verify')" || { echo '::error::CF_API_TOKEN is not a valid Cloudflare API token for the REST API.'; exit 22; }
+          printf '%s' "$VERIFY" | jq -e '.success == true and .result.status == "active"' >/dev/null || { echo '::error::CF_API_TOKEN is not active.'; exit 23; }
+          echo 'CLOUDFLARE_TOKEN_GATE=PASS'
 
           export CLOUDFLARE_API_TOKEN="$CF_TOKEN"
           export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT"
@@ -127,7 +117,7 @@ jobs:
           printf '%s' "$PRE" | jq -e '.ok == true and .trafficEnabled == true and .ingestReady == true and .adminReady == true' >/dev/null
           echo 'PRE_HEALTH_GATE=PASS'
 
-          CF_KV_ID="$KV_ID" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8"));p.keep_vars=true;p.vars={...(p.vars||{}),LIQ_TRAFFIC_ENABLED:"true"};p.kv_namespaces=[{binding:"LIQ_KV",id:process.env.CF_KV_ID}];fs.writeFileSync("wrangler.live.json",JSON.stringify(p,null,2));'
+          CF_KV_ID="$LIQ_KV_NAMESPACE_ID" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8"));p.keep_vars=true;p.vars={...(p.vars||{}),LIQ_TRAFFIC_ENABLED:"true"};p.kv_namespaces=[{binding:"LIQ_KV",id:process.env.CF_KV_ID}];fs.writeFileSync("wrangler.live.json",JSON.stringify(p,null,2));'
 
           "$WR" deploy --config wrangler.live.json --keep-vars --dry-run --outdir /tmp/wave-liq-live-dry
           echo 'LIVE_DRY_RUN_GATE=PASS'
