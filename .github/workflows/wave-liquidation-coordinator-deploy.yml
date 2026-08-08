@@ -6,7 +6,7 @@ on:
       source_sha:
         description: 'Exact wave-alpha source SHA to deploy'
         required: true
-        default: '1afce9dcc769789f2b92afa0c59e7ce41f921252'
+        default: '6d6060545be942603920372888f07ca2a5f8152c'
   pull_request:
     branches: [main]
     paths:
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      TARGET_SHA: ${{ github.event.inputs.source_sha || '1afce9dcc769789f2b92afa0c59e7ce41f921252' }}
+      TARGET_SHA: ${{ github.event.inputs.source_sha || '6d6060545be942603920372888f07ca2a5f8152c' }}
       COORDINATOR_URL: https://wave-alpha-liquidation-coordinator.wavealpha.workers.dev
 
     steps:
@@ -69,16 +69,23 @@ jobs:
           cache: npm
           cache-dependency-path: wave-alpha/workers/liquidation-coordinator/package-lock.json
 
-      - name: Install and test coordinator
+      - name: Install and test coordinator backend
         working-directory: wave-alpha/workers/liquidation-coordinator
         shell: bash
         run: |
           set -Eeuo pipefail
           npm ci --no-audit --no-fund
-          npm run test:contract
+          node --test \
+            test/contract.test.mjs \
+            test/snapshot.test.mjs \
+            test/admin.test.mjs \
+            test/ingest.test.mjs \
+            test/live-config.test.mjs \
+            test/public-snapshot.test.mjs \
+            test/pages-summary.test.mjs
           npm test
           ./node_modules/.bin/wrangler deploy --dry-run --outdir /tmp/wave-liq-dry
-          echo 'COORDINATOR_TEST_GATE=PASS'
+          echo 'COORDINATOR_BACKEND_TEST_GATE=PASS'
 
       - name: Deploy production coordinator with side counts
         working-directory: wave-alpha/workers/liquidation-coordinator
@@ -95,13 +102,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           CF_TOKEN="${CF_TOKEN_1:-${CF_TOKEN_2:-${CF_TOKEN_3:-${CF_TOKEN_4:-}}}}"
-          [ -n "$CF_TOKEN" ] || { echo '::error::Missing Cloudflare Workers token. Add repository secret CLOUDFLARE_API_TOKEN with Workers Scripts edit plus account/KV read access.'; exit 20; }
+          [ -n "$CF_TOKEN" ] || { echo '::error::Missing Cloudflare Workers token. Add repository secret CF_API_TOKEN or CLOUDFLARE_API_TOKEN.'; exit 20; }
 
           CF_ACCOUNT="${CF_ACCOUNT_1:-${CF_ACCOUNT_2:-}}"
           if [ -z "$CF_ACCOUNT" ]; then
             ACCOUNTS="$(curl --fail --silent --show-error --retry 3 --max-time 30 -H "Authorization: Bearer $CF_TOKEN" -H 'Content-Type: application/json' 'https://api.cloudflare.com/client/v4/accounts?per_page=50')"
             COUNT="$(printf '%s' "$ACCOUNTS" | jq '.result | length')"
-            [ "$COUNT" = '1' ] || { echo '::error::Could not uniquely derive Cloudflare account. Add repository secret CLOUDFLARE_ACCOUNT_ID.'; exit 21; }
+            [ "$COUNT" = '1' ] || { echo '::error::Could not uniquely derive Cloudflare account. Add repository secret CF_ACCOUNT_ID.'; exit 21; }
             CF_ACCOUNT="$(printf '%s' "$ACCOUNTS" | jq -r '.result[0].id')"
           fi
 
