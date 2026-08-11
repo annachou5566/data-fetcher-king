@@ -1,0 +1,23 @@
+name: Wave Hyperliquid 24h gap research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research_wave_hyperliquid_24h_gap.mjs'
+      - '.github/workflows/research-wave-hyperliquid-24h-gap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check scripts/research_wave_hyperliquid_24h_gap.mjs
+      - run: node scripts/research_wave_hyperliquid_24h_gap.mjs
