@@ -7,6 +7,7 @@ const RATE_WINDOW_MS = 61_000;
 const RATE_BUDGET_UNITS = 38;
 const HISTORY_INTERVAL = '1hour';
 const LOOKBACK_SEC = 24 * 60 * 60;
+const POSITIVE_CONTROL_SYMBOLS = ['BTCUSDT_PERP.A', 'ETHUSDT_PERP.A'];
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const round2 = value => Math.round((Number(value) || 0) * 100) / 100;
@@ -110,6 +111,60 @@ function histogram(rows, key) {
   return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 }
 
+function summarizeHistoryPayload(payload, requestedSymbols) {
+  if (!Array.isArray(payload)) throw new Error('unexpected liquidation-history contract');
+  const requested = new Set(requestedSymbols);
+  const returned = new Set();
+  const totals = new Map();
+  let points = 0;
+
+  for (const item of payload) {
+    const symbol = String(item?.symbol || '');
+    if (!symbol) continue;
+    returned.add(symbol);
+    let longUsd = 0;
+    let shortUsd = 0;
+    let symbolPoints = 0;
+    for (const row of Array.isArray(item?.history) ? item.history : []) {
+      const l = Number(row?.l);
+      const s = Number(row?.s);
+      if (Number.isFinite(l)) longUsd += l;
+      if (Number.isFinite(s)) shortUsd += s;
+      symbolPoints += 1;
+    }
+    points += symbolPoints;
+    totals.set(symbol, {
+      longUsd: round2(longUsd),
+      shortUsd: round2(shortUsd),
+      totalUsd: round2(longUsd + shortUsd),
+      points: symbolPoints,
+    });
+  }
+
+  const omitted = [...requested].filter(symbol => !returned.has(symbol));
+  const unexpected = [...returned].filter(symbol => !requested.has(symbol));
+  return {
+    requestedCount: requested.size,
+    returnedCount: [...returned].filter(symbol => requested.has(symbol)).length,
+    omittedCount: omitted.length,
+    omittedSample: omitted.slice(0, 10),
+    unexpectedCount: unexpected.length,
+    unexpectedSample: unexpected.slice(0, 10),
+    points,
+    totals,
+  };
+}
+
+async function requestHistory(symbols, from, to) {
+  return apiGet('/liquidation-history', {
+    symbols: symbols.join(','),
+    interval: HISTORY_INTERVAL,
+    from,
+    to,
+    convert_to_usd: 'true',
+  }, symbols.length, 1);
+}
+
 async function main() {
   const checkedAt = new Date().toISOString();
   let exchanges;
@@ -177,13 +232,42 @@ async function main() {
 
   const to = Math.floor(Date.now() / 1000);
   const from = to - LOOKBACK_SEC;
+
+  let control;
+  try {
+    const payload = await requestHistory(POSITIVE_CONTROL_SYMBOLS, from, to);
+    const parsed = summarizeHistoryPayload(payload, POSITIVE_CONTROL_SYMBOLS);
+    const totals = [...parsed.totals.entries()].map(([symbol, value]) => ({ symbol, ...value }));
+    control = {
+      symbols: POSITIVE_CONTROL_SYMBOLS,
+      requestedCount: parsed.requestedCount,
+      returnedCount: parsed.returnedCount,
+      omittedCount: parsed.omittedCount,
+      points: parsed.points,
+      totalUsd: round2(totals.reduce((sum, row) => sum + row.totalUsd, 0)),
+      rows: totals,
+      working: parsed.returnedCount > 0 && parsed.points > 0,
+    };
+  } catch (error) {
+    control = {
+      symbols: POSITIVE_CONTROL_SYMBOLS,
+      working: false,
+      qualification: error.message,
+      httpStatus: error.status || null,
+    };
+  }
+
   const totalsBySymbol = new Map();
-  let queried = 0;
+  let requestedCount = 0;
+  let returnedCount = 0;
+  let omittedCount = 0;
+  let unexpectedCount = 0;
   let points = 0;
   let nonEmptyMarkets = 0;
   let cursor = 0;
   let historyQualification = 'OK';
   let historyHttpStatus = null;
+  const omittedSamples = [];
 
   while (cursor < hyperliquidMarkets.length) {
     const now = Date.now();
@@ -191,56 +275,37 @@ async function main() {
       rateWindowStartedAt = now;
       usedUnits = 0;
     }
-    const available = Math.max(1, RATE_BUDGET_UNITS - usedUnits);
-    const batchSize = Math.min(20, available, hyperliquidMarkets.length - cursor);
+    const available = RATE_BUDGET_UNITS - usedUnits;
     if (available <= 0) {
-      await reserveUnits(1);
-      usedUnits -= 1;
+      await sleep(Math.max(1_000, RATE_WINDOW_MS - (now - rateWindowStartedAt) + 500));
       continue;
     }
+    const batchSize = Math.min(20, available, hyperliquidMarkets.length - cursor);
     const batch = hyperliquidMarkets.slice(cursor, cursor + batchSize);
+    const symbols = batch.map(row => row.symbol);
 
     let payload;
     try {
-      payload = await apiGet('/liquidation-history', {
-        symbols: batch.map(row => row.symbol).join(','),
-        interval: HISTORY_INTERVAL,
-        from,
-        to,
-        convert_to_usd: 'true',
-      }, batch.length, 1);
+      payload = await requestHistory(symbols, from, to);
     } catch (error) {
       historyQualification = error.message;
       historyHttpStatus = error.status || null;
       break;
     }
 
-    if (!Array.isArray(payload)) throw new Error('unexpected liquidation-history contract');
-    const returned = new Set();
-    for (const item of payload) {
-      const symbol = String(item?.symbol || '');
-      returned.add(symbol);
-      let longUsd = 0;
-      let shortUsd = 0;
-      let symbolPoints = 0;
-      for (const row of Array.isArray(item?.history) ? item.history : []) {
-        const l = Number(row?.l);
-        const s = Number(row?.s);
-        if (Number.isFinite(l)) longUsd += l;
-        if (Number.isFinite(s)) shortUsd += s;
-        symbolPoints += 1;
-      }
-      if (symbolPoints > 0) nonEmptyMarkets += 1;
-      points += symbolPoints;
-      totalsBySymbol.set(symbol, {
-        longUsd: round2(longUsd),
-        shortUsd: round2(shortUsd),
-        totalUsd: round2(longUsd + shortUsd),
-        points: symbolPoints,
-      });
+    const parsed = summarizeHistoryPayload(payload, symbols);
+    requestedCount += parsed.requestedCount;
+    returnedCount += parsed.returnedCount;
+    omittedCount += parsed.omittedCount;
+    unexpectedCount += parsed.unexpectedCount;
+    points += parsed.points;
+    omittedSamples.push(...parsed.omittedSample.slice(0, Math.max(0, 20 - omittedSamples.length)));
+
+    for (const [symbol, value] of parsed.totals.entries()) {
+      totalsBySymbol.set(symbol, value);
+      if (value.points > 0) nonEmptyMarkets += 1;
     }
 
-    queried += batch.length;
     cursor += batch.length;
   }
 
@@ -256,36 +321,53 @@ async function main() {
     .sort((a, b) => b.totalUsd - a.totalUsd)
     .slice(0, 10);
 
-  const completeSweep = historyQualification === 'OK' && queried === hyperliquidMarkets.length;
+  const allRequestsCompleted = historyQualification === 'OK' && requestedCount === hyperliquidMarkets.length;
+  const everyRequestedSymbolReturned = allRequestsCompleted && omittedCount === 0 && returnedCount === requestedCount;
+  const controlWorking = Boolean(control?.working);
+  let qualification;
+  if (!allRequestsCompleted) qualification = historyQualification;
+  else if (!controlWorking) qualification = 'POSITIVE_CONTROL_INCONCLUSIVE';
+  else if (returnedCount === 0 && omittedCount === requestedCount) qualification = 'HYPERLIQUID_SYMBOLS_OMITTED_WITH_WORKING_CONTROL';
+  else if (!everyRequestedSymbolReturned) qualification = 'PARTIAL_HYPERLIQUID_SYMBOL_RESPONSE';
+  else qualification = 'COMPLETE_RETURNED_SYMBOL_SWEEP';
+
   console.log(JSON.stringify({
     checkedAt,
     provider: 'Coinalyze',
     vantage: 'github-hosted-public-runner',
-    qualification: completeSweep ? 'COMPLETE_DISCOVERED_MARKET_SWEEP' : historyQualification,
+    qualification,
     historyHttpStatus,
     discovery,
+    positiveControl: control,
     history: {
       interval: HISTORY_INTERVAL,
       from,
       to,
       convertToUsd: true,
-      marketsQueried: queried,
       marketsDiscovered: hyperliquidMarkets.length,
+      requestedCount,
+      returnedCount,
+      omittedCount,
+      omittedSamples,
+      unexpectedCount,
       nonEmptyMarkets,
       points,
       longUsd: round2(totalLongUsd),
       shortUsd: round2(totalShortUsd),
       totalUsd: round2(totalLongUsd + totalShortUsd),
       topMarkets,
-      completeDiscoveredMarketSweep: completeSweep,
+      allRequestsCompleted,
+      everyRequestedSymbolReturned,
     },
     apiKeyPrinted: false,
     rawPayloadPrinted: false,
     productionEligible: false,
     aggregateEligible: false,
-    nextGate: completeSweep
-      ? 'Compare this discovered-market 24h total against independent benchmark at the same time; do not activate yet.'
-      : 'Do not infer provider quality from an incomplete or vantage-blocked sweep.',
+    nextGate: qualification === 'COMPLETE_RETURNED_SYMBOL_SWEEP'
+      ? 'Compare the 24h total against an independent same-time benchmark; do not activate yet.'
+      : qualification === 'HYPERLIQUID_SYMBOLS_OMITTED_WITH_WORKING_CONTROL'
+        ? 'Coinalyze liquidation-history is working for the positive control but does not expose usable Hyperliquid rows in this window; do not use as fallback.'
+        : 'Keep Coinalyze inconclusive/research-only; do not infer zero liquidation from omitted symbols.',
   }, null, 2));
 }
 
