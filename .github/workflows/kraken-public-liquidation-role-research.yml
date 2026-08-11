@@ -1,0 +1,24 @@
+name: Kraken public liquidation role research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research_kraken_public_liquidation_role.mjs'
+      - '.github/workflows/kraken-public-liquidation-role-research.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check scripts/research_kraken_public_liquidation_role.mjs
+      - name: Public first-party role probe
+        run: node scripts/research_kraken_public_liquidation_role.mjs
