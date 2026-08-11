@@ -1,0 +1,24 @@
+name: Deribit all-futures websocket research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research_deribit_all_futures_ws.mjs'
+      - '.github/workflows/deribit-all-futures-ws-research.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check scripts/research_deribit_all_futures_ws.mjs
+      - name: Public all-futures WebSocket probe
+        run: node scripts/research_deribit_all_futures_ws.mjs
