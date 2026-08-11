@@ -1,0 +1,24 @@
+name: Phase B Pacifica Backpack source audit
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research_phase_b_pacifica_backpack_audit.mjs'
+      - '.github/workflows/research-phase-b-pacifica-backpack-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check scripts/research_phase_b_pacifica_backpack_audit.mjs
+      - name: Read-only first-party Phase B audit
+        run: node scripts/research_phase_b_pacifica_backpack_audit.mjs
