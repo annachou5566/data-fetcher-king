@@ -6,6 +6,7 @@ on:
       - 'scripts/wave_alpha_phase_c_observer.mjs'
       - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
       - 'scripts/wave_alpha_public_health.mjs'
+      - 'scripts/wave_alpha_hyperliquid_fallback_probe.mjs'
       - '.github/workflows/wave-alpha-phase-c-evidence.yml'
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - 'scripts/wave_alpha_phase_c_observer.mjs'
       - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
       - 'scripts/wave_alpha_public_health.mjs'
+      - 'scripts/wave_alpha_hyperliquid_fallback_probe.mjs'
       - '.github/workflows/wave-alpha-phase-c-evidence.yml'
   workflow_dispatch:
   schedule:
@@ -41,8 +43,21 @@ jobs:
         run: |
           node --check scripts/wave_alpha_phase_c_observer.mjs
           node --check scripts/post_wave_alpha_phase_c_evidence.mjs
+          node --check scripts/wave_alpha_hyperliquid_fallback_probe.mjs
       - name: Bounded first-party observer
         run: node scripts/wave_alpha_phase_c_observer.mjs
+      - name: Hyperliquid third-party fallback qualification
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            UTC_HOUR="$(date -u +%H)"
+            if [[ "$UTC_HOUR" != "02" && "$UTC_HOUR" != "03" ]]; then
+              echo "hyperliquidFallbackProbe=SKIPPED_DAILY_CADENCE"
+              exit 0
+            fi
+          fi
+          node scripts/wave_alpha_hyperliquid_fallback_probe.mjs
       - name: Persist only novel public evidence
         if: github.event_name != 'pull_request'
         env:
