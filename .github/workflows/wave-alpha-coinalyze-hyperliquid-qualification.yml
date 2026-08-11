@@ -1,0 +1,31 @@
+name: Wave Alpha Coinalyze Hyperliquid qualification
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/wave_alpha_coinalyze_hyperliquid_qualification.mjs'
+      - '.github/workflows/wave-alpha-coinalyze-hyperliquid-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wave-alpha-coinalyze-hyperliquid-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check scripts/wave_alpha_coinalyze_hyperliquid_qualification.mjs
+      - name: Coinalyze Hyperliquid discovered-market sweep
+        env:
+          COINALYZE_API_KEY: ${{ secrets.COINALYZE_API_KEY }}
+        run: node scripts/wave_alpha_coinalyze_hyperliquid_qualification.mjs
