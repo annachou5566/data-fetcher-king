@@ -1,0 +1,25 @@
+name: Hyperliquid protocol vault liquidation research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research_hyperliquid_protocol_vault_liquidations.mjs'
+      - '.github/workflows/research-hyperliquid-protocol-vault-liquidations.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check scripts/research_hyperliquid_protocol_vault_liquidations.mjs
+      - name: Probe protocol-vault liquidation streams
+        run: node scripts/research_hyperliquid_protocol_vault_liquidations.mjs
