@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: wave-alpha-phase-c-evidence-${{ github.event_name }}
@@ -30,18 +29,18 @@ jobs:
   observe:
     runs-on: ubuntu-latest
     timeout-minutes: 4
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Syntax check
+      - name: Evidence syntax check
         run: |
           node --check scripts/wave_alpha_phase_c_observer.mjs
           node --check scripts/post_wave_alpha_phase_c_evidence.mjs
-          node --check scripts/wave_alpha_public_health.mjs
-      - name: Wave Alpha public runtime smoke
-        run: node scripts/wave_alpha_public_health.mjs
       - name: Bounded first-party observer
         run: node scripts/wave_alpha_phase_c_observer.mjs
       - name: Persist only novel public evidence
@@ -50,3 +49,18 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           WAVE_PHASE_C_ISSUE: '5'
         run: node scripts/post_wave_alpha_phase_c_evidence.mjs
+
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Health syntax check
+        run: node --check scripts/wave_alpha_public_health.mjs
+      - name: Wave Alpha public runtime smoke
+        run: node scripts/wave_alpha_public_health.mjs
