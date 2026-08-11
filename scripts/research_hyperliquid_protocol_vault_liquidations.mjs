@@ -87,11 +87,15 @@ async function fetchVaultTargets() {
   const targets = new Map();
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
-    const name = String(row.name || row.summary?.name || '').trim();
+    const summary = row.summary && typeof row.summary === 'object' ? row.summary : row;
+    const name = String(summary.name || '').trim();
     if (!candidateNames(name)) continue;
-    const address = String(row.vaultAddress || row.vault_address || row.address || '').trim().toLowerCase();
+    const address = String(
+      summary.vaultAddress || summary.vault_address || summary.address || '',
+    ).trim().toLowerCase();
     if (/^0x[0-9a-f]{40}$/.test(address)) targets.set(address, name || 'protocol-vault');
-    const children = row?.relationship?.data?.childAddresses;
+    const children = summary?.relationship?.data?.childAddresses
+      || summary?.relationship?.data?.child_addresses;
     if (Array.isArray(children)) {
       for (const child of children) {
         const value = String(child || '').trim().toLowerCase();
