@@ -1,6 +1,11 @@
 name: Wave Alpha Phase C evidence
 
 on:
+  pull_request:
+    paths:
+      - 'scripts/wave_alpha_phase_c_observer.mjs'
+      - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
+      - '.github/workflows/wave-alpha-phase-c-evidence.yml'
   push:
     branches: [main]
     paths:
@@ -16,7 +21,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: wave-alpha-phase-c-evidence
+  group: wave-alpha-phase-c-evidence-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -35,6 +40,7 @@ jobs:
       - name: Bounded first-party observer
         run: node scripts/wave_alpha_phase_c_observer.mjs
       - name: Persist only novel public evidence
+        if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WAVE_PHASE_C_ISSUE: '5'
