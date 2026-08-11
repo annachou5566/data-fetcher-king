@@ -2,16 +2,27 @@
 
 const BASE = 'https://test-klinechart.wave-alpha.pages.dev';
 const TIMEOUT_MS = 15_000;
+const nonce = Date.now();
 
 async function get(path) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const response = await fetch(BASE + path, {
+    const separator = path.includes('?') ? '&' : '?';
+    const response = await fetch(`${BASE}${path}${separator}audit=${nonce}`, {
       signal: controller.signal,
-      headers: { Accept: 'application/json', 'User-Agent': 'WaveAlphaResearch/1.0' },
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache',
+        'User-Agent': 'data-fetcher-king/wave-hyperliquid-gap',
+      },
     });
-    const body = await response.json();
+    const text = await response.text();
+    let body;
+    try { body = JSON.parse(text); }
+    catch {
+      throw new Error(`non-json ${response.status} ${response.headers.get('content-type') || ''} prefix=${JSON.stringify(text.slice(0, 40))}`);
+    }
     return { status: response.status, body };
   } finally {
     clearTimeout(timer);
@@ -41,9 +52,11 @@ const history = await get('/api/liquidations/history?range=1d&symbol=ALL&exchang
 const exchanges = await get('/api/liquidations/exchanges?window=24h&symbol=ALL');
 
 const historyTotal = sumRows(history.body?.rows);
-const exchangeRow = Array.isArray(exchanges.body?.exchanges)
-  ? exchanges.body.exchanges.find(row => row?.exchange === 'hyperliquid-perp')
-  : null;
+const exchangeRows = [
+  ...(Array.isArray(exchanges.body?.exchanges) ? exchanges.body.exchanges : []),
+  ...(Array.isArray(exchanges.body?.partialExchanges) ? exchanges.body.partialExchanges : []),
+];
+const exchangeRow = exchangeRows.find(row => row?.exchange === 'hyperliquid-perp') || null;
 
 console.log(`WAVE_HYPERLIQUID_24H_GAP=${JSON.stringify({
   checkedAt: new Date().toISOString(),
@@ -61,6 +74,8 @@ console.log(`WAVE_HYPERLIQUID_24H_GAP=${JSON.stringify({
     shortUsd: Number(exchangeRow.shortUsd) || 0,
     count: Number(exchangeRow.count) || 0,
     shareRate: Number(exchangeRow.shareRate) || 0,
+    aggregateEligible: exchangeRow.aggregateEligible ?? null,
+    coverageClass: exchangeRow.coverageClass ?? null,
   } : null,
   exchangesAllUsd: Number(exchanges.body?.all?.liquidationUsd) || 0,
   exchangesStorage: exchanges.body?.storage ?? null,
