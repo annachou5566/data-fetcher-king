@@ -5,12 +5,14 @@ on:
     paths:
       - 'scripts/wave_alpha_phase_c_observer.mjs'
       - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
+      - 'scripts/wave_alpha_public_health.mjs'
       - '.github/workflows/wave-alpha-phase-c-evidence.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/wave_alpha_phase_c_observer.mjs'
       - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
+      - 'scripts/wave_alpha_public_health.mjs'
       - '.github/workflows/wave-alpha-phase-c-evidence.yml'
   workflow_dispatch:
   schedule:
@@ -37,6 +39,9 @@ jobs:
         run: |
           node --check scripts/wave_alpha_phase_c_observer.mjs
           node --check scripts/post_wave_alpha_phase_c_evidence.mjs
+          node --check scripts/wave_alpha_public_health.mjs
+      - name: Wave Alpha public runtime smoke
+        run: node scripts/wave_alpha_public_health.mjs
       - name: Bounded first-party observer
         run: node scripts/wave_alpha_phase_c_observer.mjs
       - name: Persist only novel public evidence
