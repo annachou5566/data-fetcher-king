@@ -1,28 +1,15 @@
 name: Wave Alpha Phase C evidence
 
+# Phase C evidence is retired from automatic monitoring.
+# Keep this workflow only for explicit, bounded historical/manual investigation.
 on:
-  pull_request:
-    paths:
-      - 'scripts/wave_alpha_phase_c_observer.mjs'
-      - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
-      - 'scripts/wave_alpha_public_health.mjs'
-      - '.github/workflows/wave-alpha-phase-c-evidence.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'scripts/wave_alpha_phase_c_observer.mjs'
-      - 'scripts/post_wave_alpha_phase_c_evidence.mjs'
-      - 'scripts/wave_alpha_public_health.mjs'
-      - '.github/workflows/wave-alpha-phase-c-evidence.yml'
   workflow_dispatch:
-  schedule:
-    - cron: '37 */2 * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: wave-alpha-phase-c-evidence-${{ github.event_name }}
+  group: wave-alpha-phase-c-evidence-manual
   cancel-in-progress: false
 
 jobs:
@@ -44,7 +31,6 @@ jobs:
       - name: Bounded first-party observer
         run: node scripts/wave_alpha_phase_c_observer.mjs
       - name: Persist only novel public evidence
-        if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WAVE_PHASE_C_ISSUE: '5'
