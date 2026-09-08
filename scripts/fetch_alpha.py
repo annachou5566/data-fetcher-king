@@ -567,6 +567,13 @@ def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts, aid):
 
         if oldest_ts is None or oldest_ts <= y_start_ts:
             break
+
+        # Successful short page means Binance exhausted available historical
+        # candles before the requested endTime. Stop here instead of paging
+        # into pre-listing time for newly-listed tokens.
+        if len(rows) < 1000:
+            break
+
         if oldest_ts - 1 >= cursor_end:
             break
 
