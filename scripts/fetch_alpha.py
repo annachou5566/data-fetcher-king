@@ -775,12 +775,29 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
         )
 
     missing_total = sorted(expected_ids - set(tails_total))
-    missing_limit = sorted(expected_limit_ids - set(tails_limit))
-    if missing_total or missing_limit:
+    if missing_total:
         raise RuntimeError(
             "Tail coverage incomplete; không publish artifact. "
-            f"missing_total={len(missing_total)} "
-            f"missing_bsc_limit={len(missing_limit)}"
+            f"missing_total={len(missing_total)}"
+        )
+
+    covered_total_ids = set(tails_total)
+    supported_limit_ids = set(tails_limit)
+    classified_limit_ids = supported_limit_ids | unsupported_limit_ids
+
+    if supported_limit_ids & unsupported_limit_ids:
+        raise RuntimeError(
+            "Tail limit capability overlap; không publish artifact."
+        )
+    if classified_limit_ids != limit_applicable_ids:
+        raise RuntimeError(
+            "Tail limit capability incomplete; không publish artifact. "
+            f"applicable={len(limit_applicable_ids)} "
+            f"classified={len(classified_limit_ids)}"
+        )
+    if not classified_limit_ids.issubset(expected_ids):
+        raise RuntimeError(
+            "Tail limit capability outside total cohort; không publish artifact."
         )
 
     bad_total_shape = sorted(
@@ -788,7 +805,7 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
         if not isinstance(tails_total.get(aid), list) or len(tails_total[aid]) != 1440
     )
     bad_limit_shape = sorted(
-        aid for aid in expected_limit_ids
+        aid for aid in supported_limit_ids
         if not isinstance(tails_limit.get(aid), list) or len(tails_limit[aid]) != 1440
     )
     if bad_total_shape or bad_limit_shape:
@@ -798,13 +815,10 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
             f"bad_limit={len(bad_limit_shape)}"
         )
 
-    # Limit Daily is a BSC-specific contract. Do not publish unrelated limit
-    # series because that would make the persisted cohort ambiguous.
     tails_limit = {
         aid: tails_limit[aid]
-        for aid in sorted(expected_limit_ids)
+        for aid in sorted(supported_limit_ids)
     }
-    covered_limit_ids = set(tails_limit)
 
     def stable_hash(ids):
         return hashlib.sha256(
@@ -819,14 +833,26 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
         "window_end": datetime.utcfromtimestamp(y_end_ts / 1000).isoformat() + "Z",
         "generated_at": generated_at,
         "complete": True,
+
         "expected_token_count": len(expected_ids),
-        "covered_total_count": len(tails_total),
-        "expected_limit_token_count": len(expected_limit_ids),
-        "covered_limit_count": len(covered_limit_ids),
+        "covered_total_count": len(covered_total_ids),
         "expected_ids_hash": stable_hash(expected_ids),
-        "covered_total_ids_hash": stable_hash(set(tails_total)),
-        "expected_limit_ids_hash": stable_hash(expected_limit_ids),
-        "covered_limit_ids_hash": stable_hash(covered_limit_ids),
+        "covered_total_ids_hash": stable_hash(covered_total_ids),
+
+        "limit_applicable_token_count": len(limit_applicable_ids),
+        "classified_limit_token_count": len(classified_limit_ids),
+        "limit_applicable_ids_hash": stable_hash(limit_applicable_ids),
+        "classified_limit_ids_hash": stable_hash(classified_limit_ids),
+
+        "expected_limit_token_count": len(supported_limit_ids),
+        "covered_limit_count": len(supported_limit_ids),
+        "expected_limit_ids_hash": stable_hash(supported_limit_ids),
+        "covered_limit_ids_hash": stable_hash(supported_limit_ids),
+
+        "unsupported_limit_token_count": len(unsupported_limit_ids),
+        "unsupported_limit_ids": sorted(unsupported_limit_ids),
+        "unsupported_limit_ids_hash": stable_hash(unsupported_limit_ids),
+
         "total": tails_total,
         "limit": tails_limit,
     }
