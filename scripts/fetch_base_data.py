@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import urllib.parse
 from datetime import datetime
 import cloudscraper
 import boto3
@@ -16,7 +15,6 @@ R2_ENDPOINT = os.getenv("R2_ENDPOINT_URL")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET = os.getenv("R2_BUCKET_NAME")
-PROXY_WORKER_URL = os.getenv("PROXY_WORKER_URL")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ LỖI: Thiếu biến môi trường Supabase.")
@@ -33,23 +31,36 @@ session.headers.update({
 })
 
 def fetch_smart(target_url, retries=3):
-    is_render = "onrender.com" in (PROXY_WORKER_URL or "")
-    if not target_url: return None
-    for i in range(retries):
-        if PROXY_WORKER_URL:
-            try:
-                encoded_target = urllib.parse.quote(target_url, safe='')
-                proxy_final_url = f"{PROXY_WORKER_URL}?url={encoded_target}"
-                current_timeout = 60 if (is_render and i == 0) else 30
-                res = session.get(proxy_final_url, timeout=current_timeout)
-                if res.status_code == 200:
-                    return res.json()
-            except: pass
+    """Direct Binance fetch only. Không proxy/paid fallback."""
+    if not target_url:
+        return None
+
+    for attempt in range(retries):
+        retry_wait = 0
         try:
             res = session.get(target_url, timeout=15)
-            if res.status_code == 200: return res.json()
-        except: pass
-        time.sleep(1)
+        except Exception as exc:
+            print(f"⚠️ Direct request error: {exc}")
+            res = None
+
+        if res is not None:
+            if res.status_code == 200:
+                try:
+                    return res.json()
+                except Exception:
+                    return None
+            if res.status_code in (418, 429, 503):
+                retry_wait = 30
+                print(
+                    f"⚠️ Direct HTTP {res.status_code}; bounded retry "
+                    f"{attempt + 1}/{retries}"
+                )
+            else:
+                print(f"⚠️ Direct HTTP {res.status_code}; source unavailable")
+
+        if attempt < retries - 1:
+            time.sleep(retry_wait or 1)
+
     return None
 
 # [ĐÃ SỬA]: Tra bằng chain_id và contract thay vì alpha_id
@@ -63,6 +74,9 @@ def fetch_binance_history(chain_id, contract, start_ts):
         # 2. Gọi API Limit (Bao trọn USDT + USDC + BNB...)
         url_lim = f"https://www.binance.com/bapi/defi/v1/public/alpha-trade/agg-klines?chainId={chain_id}&interval=1d&limit=100&tokenAddress={contract}&dataType=limit"
         res_lim = fetch_smart(url_lim)
+
+        if res_tot is None or res_lim is None:
+            raise RuntimeError("Binance base-history source unavailable")
         
         history_total = []
         history_limit = []
@@ -90,7 +104,7 @@ def fetch_binance_history(chain_id, contract, start_ts):
         return history_total, history_limit
     except Exception as e:
         print(f"Error fetching {contract}: {e}")
-        return [], []
+        return None, None
 
 def main():
     print(">>> BẮT ĐẦU TẠO BASE DATA CHO NODE.JS (ACTIVE ONLY) <<<")
@@ -101,6 +115,7 @@ def main():
     
     export_data = {}
     count_active = 0
+    failed_active = []
 
     for t in all_recs:
         try:
@@ -138,6 +153,9 @@ def main():
 
             # [ĐÃ SỬA]: Gọi hàm với chain_id và contract
             hist_total, hist_limit = fetch_binance_history(chain_id, contract, start_ts)
+            if hist_total is None or hist_limit is None:
+                failed_active.append(alpha_id)
+                continue
             
             export_data[alpha_id] = {
                 "base_total_vol": sum(item['vol'] for item in hist_total),
@@ -150,6 +168,16 @@ def main():
             
         except Exception as e:
             print(f"Lỗi tại {t.get('name')}: {e}")
+            failed_active.append(str(t.get("id") or t.get("name") or "unknown"))
+
+    if failed_active:
+        raise RuntimeError(
+            f"Base data incomplete for {len(set(failed_active))} active tournaments; "
+            "không publish partial artifact."
+        )
+
+    if not export_data:
+        raise RuntimeError("Base data rỗng; không publish artifact.")
 
     s3.put_object(
         Bucket=R2_BUCKET,
