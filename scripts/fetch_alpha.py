@@ -584,12 +584,12 @@ def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts, aid):
 
 
 def _tail_clean_addr(t):
-    chain_id = t.get("chainId")
-    contract = t.get("contractAddress")
-    clean_addr = str(contract)
-    if chain_id not in ["CT_501", "CT_784"]:
-        clean_addr = clean_addr.lower()
-    return clean_addr
+    contract = str(t.get("contractAddress"))
+    # Lowercase only canonical EVM 0x-hex addresses. Preserve non-EVM
+    # case-sensitive addresses such as TRON/Base58 (CT_195).
+    if re.fullmatch(r"0x[0-9a-fA-F]+", contract):
+        return contract.lower()
+    return contract
 
 
 def _offline_tail_alive(t):
