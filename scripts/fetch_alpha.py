@@ -477,6 +477,8 @@ def _parse_tail_klines_response(res, aid, data_type):
     code = str(res.get("code") or "")
     if code == "-5101":
         return "unsupported", []
+    if code == "-5095":
+        return "invalid_address", []
     if code and code != "000000":
         raise RuntimeError(f"Tail business code {code}: {aid}:{data_type}")
 
@@ -516,6 +518,10 @@ def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts, aid):
 
         if page_capability == "unsupported":
             return "unsupported", []
+        if page_capability == "invalid_address":
+            raise RuntimeError(
+                f"Tail invalid address for active fetch: {aid}:{data_type}"
+            )
 
         # Explicit successful empty result means no rows for this window.
         if not rows:
@@ -571,6 +577,8 @@ def _offline_tail_alive(t):
     )
     if capability == "unsupported":
         return False, "limit-unsupported"
+    if capability == "invalid_address":
+        return False, "bad-token-address"
 
     latest = safe_float(rows[-1][5]) if rows else 0.0
     previous = safe_float(rows[-2][5]) if len(rows) > 1 else 0.0
@@ -608,6 +616,7 @@ def _build_live_tail_cohort(raw_tokens):
     revived = []
     excluded_offline = 0
     unsupported_offline = 0
+    invalid_address_offline = 0
     worker_errors = []
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(pending)))) as executor:
@@ -625,6 +634,8 @@ def _build_live_tail_cohort(raw_tokens):
                     excluded_offline += 1
                     if reason == "limit-unsupported":
                         unsupported_offline += 1
+                    elif reason == "bad-token-address":
+                        invalid_address_offline += 1
             except Exception as exc:
                 worker_errors.append(
                     f"{t.get('alphaId')}: {exc}"
@@ -645,6 +656,7 @@ def _build_live_tail_cohort(raw_tokens):
         f"offline_probed={len(pending)} revived={len(revived)} "
         f"offline_excluded={excluded_offline} "
         f"offline_unsupported={unsupported_offline} "
+        f"offline_bad_address={invalid_address_offline} "
         f"spot_excluded={excluded_spot}"
     )
     return cohort
