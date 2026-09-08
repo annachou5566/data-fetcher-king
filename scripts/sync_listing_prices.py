@@ -9,8 +9,8 @@ endpoint /api/v3/klines công khai chỉ có token đã spot-listed.
 Idempotent: chỉ fetch những event CHƯA có listing_price. Chạy lại bao
 nhiêu lần cũng an toàn, không tốn thêm request cho token đã xử lý.
 
-Env cần (đã có sẵn trong GitHub Secrets, dùng chung với fetch_alpha.py):
-  BINANCE_INTERNAL_KLINES_API, PROXY_WORKER_URL,
+Env cần:
+  BINANCE_INTERNAL_KLINES_API,
   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL, R2_BUCKET_NAME
 """
 
@@ -610,7 +610,7 @@ def _download_vision_zip(url, retries=2):
     Tải trực tiếp 1 file zip klines từ Binance Vision.
     Đây là file TĨNH trên CDN (S3), KHÔNG phải REST API — nên:
       - KHÔNG bị Binance chặn geo (451) như /api/v3/klines
-      - KHÔNG cần proxy qua Render → KHÔNG tốn bandwidth Render
+      - KHÔNG cần proxy trung gian
       - KHÔNG cần x-api-key
     Trả về bytes nếu có, None nếu file chưa được publish (404, bình thường
     với dữ liệu quá mới — ví dụ hôm nay/tháng này) hoặc lỗi mạng.
@@ -704,15 +704,15 @@ def _binance_vision_monthly_klines(symbol, interval, year_month):
 def _try_vision_klines(symbol, interval, start_ms, limit):
     """
     Cố lấy klines từ Binance Vision trước. Trả None nếu không đủ dữ liệu
-    (ví dụ khoảng thời gian quá mới, file chưa publish) để caller fallback
-    sang proxy Render.
+    (ví dụ khoảng thời gian quá mới, file chưa publish); caller sẽ dùng
+    direct-source behavior đã định nghĩa, không dùng proxy/paid fallback.
     """
     if start_ms is None:
         return None  # Vision cần biết đúng ngày/tháng — không hỗ trợ kiểu "N nến gần nhất tính từ giờ"
     if start_ms <= 0:
         # Trick "startTime=0 → nến sớm nhất" chỉ REST API Binance hỗ trợ,
         # Vision không có cách tương đương (không muốn dò từ 1970) → bỏ
-        # qua Vision, để caller fallback thẳng qua proxy Render.
+        # qua Vision; caller tự xử lý trạng thái unavailable.
         return None
 
     start_dt = datetime.utcfromtimestamp(start_ms / 1000)
@@ -754,13 +754,9 @@ def _binance_public_klines(symbol, interval, start_ms=None, limit=1000, retries=
     """
     Lấy klines public Binance cho {symbol}USDT.
 
-    [SỬA] KHÔNG còn dùng Render nữa — chỉ dùng Binance Vision
-    (data.binance.vision, file tĩnh trên CDN). Lý do bỏ hẳn Render:
-      - Binance ban theo IP. Render dùng IP chia sẻ (shared pool) — chỉ
-        cần 1-2 request "xui" trúng lúc Binance đang nhạy cảm là dính 418,
-        và ban đó ảnh hưởng LUÔN service Render khác (kể cả fetch_alpha.py
-        cùng chạy trên đó).
-      - Vision đã đủ dùng cho gần như mọi trường hợp thực tế (dữ liệu quá
+    Chỉ dùng Binance Vision (data.binance.vision, file tĩnh trên CDN).
+    Không dùng proxy/paid fallback. Vision đủ dùng cho gần như mọi trường
+    hợp thực tế (dữ liệu quá
         khứ tại ngày listing luôn có sẵn từ lâu, trừ token vừa list trong
         vài giờ/ngày gần nhất — trường hợp đó đơn giản là chưa có dữ liệu
         để tính, trả None và tự động thử lại ở lần chạy sau khi Vision đã
@@ -848,9 +844,7 @@ def fetch_spot_listing_date(symbol, since_date_str=None):
     Lấy NGÀY THẬT token bắt đầu có lệnh khớp trên Binance spot — không đoán,
     không phụ thuộc cron job, không cần tra CMC/CoinGecko.
 
-    [SỬA] KHÔNG còn dùng mẹo "startTime=0 → nến cũ nhất" nữa — đó là hành
-    vi riêng của REST API Binance, phải đi qua Render nên có rủi ro bị
-    Binance ban IP (đã dính thật ở lần chạy trước). Thay bằng: dò các file
+    Không còn dùng mẹo "startTime=0 → nến cũ nhất" nữa. Thay bằng: dò các file
     THÁNG (1d) trên Binance Vision, bắt đầu từ tháng token được list Alpha
     (since_date_str, nếu có) tiến dần về sau — vì ngày spot-listing luôn
     SAU ngày Alpha-listing nên không cần dò từ gốc lịch sử Binance (2017).
