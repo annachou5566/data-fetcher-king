@@ -3,7 +3,7 @@ import os
 import time
 import threading
 import random
-import urllib.parse
+import hashlib
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
@@ -30,15 +30,9 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_ENDPOINT_URL      = os.getenv("R2_ENDPOINT_URL")
 R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME")
 
-PROXY_WORKER_URL = os.getenv("PROXY_WORKER_URL")
 API_AGG_TICKER   = os.getenv("BINANCE_INTERNAL_AGG_API")
 API_AGG_KLINES   = os.getenv("BINANCE_INTERNAL_KLINES_API")
 API_PUBLIC_SPOT  = "https://api.binance.com/api/v3/exchangeInfo"
-
-# [BẢO MẬT] Render backend (alpha-realtime.onrender.com) yêu cầu header
-# x-api-key khớp với API_SECRET_KEY trên Render, nếu không sẽ trả 401
-# cho MỌI request (trừ "/" và "/health"). GitHub Actions cần secret này.
-RENDER_API_KEY = os.getenv("RENDER_API_KEY")
 
 ACTIVE_SPOT_SYMBOLS = set()
 OLD_DATA_MAP        = {}
@@ -68,12 +62,6 @@ def get_session():
             "Origin":  "https://www.binance.com",
             "Accept":  "application/json",
         })
-        # [BẢO MẬT] Gắn x-api-key cho MỌI request của session này, để
-        # mọi lệnh gọi qua PROXY_WORKER_URL (Render) đều qua được middleware
-        # bảo mật, kể cả các hàm tự viết riêng như _binance_public_klines()
-        # trong sync_listing_prices.py — vì chúng đều tái sử dụng session này.
-        if RENDER_API_KEY:
-            s.headers.update({"x-api-key": RENDER_API_KEY})
         _thread_local.session = s
     return _thread_local.session
 
@@ -81,9 +69,8 @@ def get_session():
 # 3. R2 CLIENT
 # ─────────────────────────────────────────────
 def get_r2_client():
-    if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
-        print("⚠️ Thiếu R2 Credentials! Kiểm tra GitHub Secrets.")
-        return None
+    if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY or not R2_ENDPOINT_URL or not R2_BUCKET_NAME:
+        raise RuntimeError("Thiếu cấu hình R2 bắt buộc; fail closed.")
     return boto3.client(
         's3',
         endpoint_url=R2_ENDPOINT_URL,
@@ -159,89 +146,63 @@ def minify_token_data(token):
     return minified
 
 # ─────────────────────────────────────────────
-# 5. FETCH SMART — có Semaphore + Jitter + 429 Backoff
+# 5. FETCH SMART — DIRECT BINANCE ONLY
 # ─────────────────────────────────────────────
-# [SỬA] Cờ cấp module: khi Binance trả 418 (auto-ban IP) cho Render, dừng
-# ngay lệnh gọi PROXY (không phải toàn bộ fetch_smart — vẫn còn nhánh gọi
-# thẳng Binance không qua proxy) cho phần còn lại của lần chạy này, để
-# không kéo dài thời gian ban. Binance ban theo IP, nên nếu script
-# sync_listing_prices.py chạy song song và cũng dính 418, IP Render đó
-# coi như đang bị ban chung — cờ này giúp fetch_alpha.py không góp phần
-# kéo dài ban đó thêm.
-_proxy_banned = False
-
 
 def fetch_smart(target_url, retries=3):
     """
-    Gọi Binance internal API qua proxy.
-    - Semaphore giới hạn đồng thời tối đa MAX_CONCURRENT requests
-    - Jitter 0.3–0.8s trước mỗi request → trông giống human traffic
-    - 429/503 → sleep 30s rồi retry (tránh bị ban IP proxy)
-    - 418 → Binance đã ban IP Render rồi, dừng gọi proxy hẳn (không retry)
+    Gọi trực tiếp Binance, không qua proxy/Render.
+    - Semaphore giới hạn đồng thời tối đa MAX_CONCURRENT requests.
+    - Jitter nhỏ để tránh burst.
+    - 418/429/503 retry có giới hạn; hết retry trả None để caller fail closed.
+    - Không có paid/proxy fallback.
     """
-    global _proxy_banned
-
     if not target_url or "None" in target_url:
         return None
 
-    is_render = "onrender.com" in (PROXY_WORKER_URL or "")
-    session   = get_session()
+    session = get_session()
 
     for attempt in range(retries):
-        # Acquire semaphore: nếu đã có 4 threads đang gọi API, thread này đợi
+        retry_wait = 0
         with _request_semaphore:
-            # Jitter: thêm delay ngẫu nhiên 0.3–0.8s để tránh burst đồng loạt
             time.sleep(random.uniform(0.3, 0.8))
-
-            # --- Thử qua Proxy trước (bỏ qua nếu đã biết đang bị ban) ---
-            if PROXY_WORKER_URL and not _proxy_banned:
-                try:
-                    encoded    = urllib.parse.quote(target_url, safe='')
-                    proxy_url  = f"{PROXY_WORKER_URL}?url={encoded}"
-                    timeout    = 60 if (is_render and attempt == 0) else 30
-                    res        = session.get(proxy_url, timeout=timeout)
-
-                    if res.status_code == 200:
-                        data = res.json()
-                        if isinstance(data, dict):
-                            if "symbols" in data:            return data
-                            if data.get("code") == "000000": return data
-
-                    elif res.status_code == 418:
-                        print(f"\n⚠️ HTTP 418 — Binance đã BAN IP Render, dừng gọi proxy cho phần còn lại của lần chạy này", flush=True)
-                        _proxy_banned = True
-
-                    elif res.status_code in (429, 503):
-                        # Rate-limit hoặc overload: dừng toàn bộ 30s
-                        print(f"\n⚠️ HTTP {res.status_code} — đang nghỉ 30s để tránh ban...", flush=True)
-                        time.sleep(30)
-                        continue  # retry ngay sau khi hết 30s
-
-                    elif res.status_code == 502:
-                        time.sleep(2)  # proxy tạm lỗi, thử lại nhanh
-
-                except Exception:
-                    pass
-
-            # --- Fallback: gọi thẳng Binance không qua proxy ---
             try:
                 res = session.get(target_url, timeout=15)
+            except Exception as exc:
+                print(f"\n⚠️ Direct request error: {exc}", flush=True)
+                res = None
+
+            if res is not None:
                 if res.status_code == 200:
-                    data = res.json()
-                    if "symbols" in data:            return data
-                    if data.get("code") == "000000": return data
+                    try:
+                        data = res.json()
+                    except Exception:
+                        data = None
+                    if isinstance(data, dict):
+                        if "symbols" in data:
+                            return data
+                        if data.get("code") == "000000":
+                            return data
+                        # Một số public Binance endpoints trả JSON object không có code wrapper.
+                        return data
 
-                elif res.status_code in (429, 503):
-                    print(f"\n⚠️ Direct HTTP {res.status_code} — đang nghỉ 30s...", flush=True)
-                    time.sleep(30)
-                    continue
+                elif res.status_code in (418, 429, 503):
+                    retry_wait = 30
+                    print(
+                        f"\n⚠️ Direct HTTP {res.status_code} — bounded retry "
+                        f"{attempt + 1}/{retries}",
+                        flush=True,
+                    )
+                elif res.status_code == 502:
+                    retry_wait = 2
+                else:
+                    print(
+                        f"\n⚠️ Direct HTTP {res.status_code} — source unavailable",
+                        flush=True,
+                    )
 
-            except Exception:
-                pass
-
-        # Delay nhỏ giữa các lần retry (ngoài semaphore để không block slot)
         if attempt < retries - 1:
-            time.sleep(1)
+            time.sleep(retry_wait or 1)
 
     return None
 
@@ -606,37 +567,66 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
     yesterday_str = yesterday_dt.strftime('%Y-%m-%d')
     force_tails   = os.getenv("FORCE_TAILS", "false").lower() == "true"
 
-    # [SỬA] Ranh giới chính xác 00:00:00.000 -> 23:59:59.999 UTC của "hôm qua"
+    # Ranh giới chính xác 00:00:00.000 -> 23:59:59.999 UTC của ngày trước.
     y_day_start = yesterday_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     y_start_ts  = int(y_day_start.timestamp() * 1000)
     y_end_ts    = y_start_ts + (24 * 60 * 60 * 1000) - 1
 
+    # Chỉ skip khi HEAD chứng minh đúng schema + đúng boundary + complete.
     try:
         head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json')
-        if not force_tails and head['LastModified'].strftime('%Y-%m-%d') == today_str:
-            print("\n⏭️ tails_cache.json hôm nay đã có. Bỏ qua.")
-            print("   (Set FORCE_TAILS=true để chạy lại thủ công)")
-            return
+        meta = head.get('Metadata') or {}
+        already_complete = (
+            meta.get('wa-schema') == '2'
+            and meta.get('boundary-date') == yesterday_str
+            and meta.get('complete') == 'true'
+        )
+        if not force_tails and already_complete:
+            print("\n⏭️ tails_cache.json v2 đã complete cho đúng UTC boundary; bỏ qua.")
+            return {"uploaded": False, "skipped": True, "boundary_date": yesterday_str}
     except Exception:
         pass
 
-    alive_aids   = {r["id"] for r in results if r.get("status") in ["ALPHA", "PRE_DELISTED"]}
-    valid_tokens = [t for t in raw_tokens if t.get("alphaId") in alive_aids]
-    total_count  = len(valid_tokens)
+    alive_aids = {
+        r["id"] for r in results
+        if r.get("status") in ["ALPHA", "PRE_DELISTED"] and r.get("id")
+    }
+    valid_tokens = [
+        t for t in raw_tokens
+        if t.get("alphaId") in alive_aids and t.get("contractAddress")
+    ]
+    if not valid_tokens:
+        raise RuntimeError("Tail cohort rỗng; không publish artifact.")
 
-    print(f"\n🦊 Bắt đầu cắt Đuôi 5m — {total_count} tokens alive (parallel, concurrent={MAX_CONCURRENT})")
+    expected_ids = {str(t.get("alphaId")) for t in valid_tokens}
+    expected_limit_ids = {
+        str(t.get("alphaId")) for t in valid_tokens
+        if str(t.get("chainId")) == "56"
+    }
+    total_count = len(valid_tokens)
+
+    print(
+        f"\n🦊 Bắt đầu tạo Tails v2 — {total_count} tokens alive "
+        f"(parallel, concurrent={MAX_CONCURRENT})"
+    )
 
     tails_total = {}
     tails_limit = {}
     completed   = [0]
+    worker_errors = []
     _lock       = threading.Lock()
 
     def worker_wrapper(t):
-        aid, symbol, t_total, t_limit = _fetch_tail_single(t, yesterday_str, y_start_ts, y_end_ts)
+        aid, symbol, t_total, t_limit = _fetch_tail_single(
+            t, yesterday_str, y_start_ts, y_end_ts
+        )
         with _lock:
             completed[0] += 1
-            status = "OK" if (t_total is not None or t_limit is not None) else "SKIP"
-            print(f"   [{completed[0]}/{total_count}] Cắt đuôi {symbol}... {status}", flush=True)
+            status = "OK" if t_total is not None else "UNAVAILABLE"
+            print(
+                f"   [{completed[0]}/{total_count}] Tail {symbol}... {status}",
+                flush=True,
+            )
         return aid, t_total, t_limit
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -645,23 +635,92 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
             try:
                 aid, t_total, t_limit = future.result()
                 if aid:
-                    if t_total is not None: tails_total[aid] = t_total
-                    if t_limit is not None: tails_limit[aid] = t_limit
-            except Exception as e:
-                print(f"⚠️ Tail worker error: {e}")
+                    aid = str(aid)
+                    if t_total is not None:
+                        tails_total[aid] = t_total
+                    if t_limit is not None:
+                        tails_limit[aid] = t_limit
+            except Exception as exc:
+                worker_errors.append(str(exc))
 
-    print("☁️ Đang Upload Tails lên R2...")
-    json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
-    try:
-        r2_client.put_object(
-            Bucket=R2_BUCKET_NAME,
-            Key='tails_cache.json',
-            Body=json_str.encode('utf-8'),
-            ContentType='application/json'
+    if worker_errors:
+        raise RuntimeError(
+            f"Tail worker errors: {len(worker_errors)}; không publish artifact."
         )
-        print("✅ Đã lưu tails_cache.json thành công!")
-    except Exception as e:
-        print(f"❌ Upload Tails Failed: {e}")
+
+    missing_total = sorted(expected_ids - set(tails_total))
+    missing_limit = sorted(expected_limit_ids - set(tails_limit))
+    if missing_total or missing_limit:
+        raise RuntimeError(
+            "Tail coverage incomplete; không publish artifact. "
+            f"missing_total={len(missing_total)} "
+            f"missing_bsc_limit={len(missing_limit)}"
+        )
+
+    def stable_hash(ids):
+        return hashlib.sha256(
+            "\n".join(sorted(ids)).encode("utf-8")
+        ).hexdigest()
+
+    generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    payload = {
+        "schema_version": 2,
+        "boundary_date": yesterday_str,
+        "window_start": datetime.utcfromtimestamp(y_start_ts / 1000).isoformat() + "Z",
+        "window_end": datetime.utcfromtimestamp(y_end_ts / 1000).isoformat() + "Z",
+        "generated_at": generated_at,
+        "complete": True,
+        "expected_token_count": len(expected_ids),
+        "covered_total_count": len(tails_total),
+        "expected_limit_token_count": len(expected_limit_ids),
+        "covered_limit_count": len(expected_limit_ids),
+        "expected_ids_hash": stable_hash(expected_ids),
+        "covered_total_ids_hash": stable_hash(set(tails_total)),
+        "expected_limit_ids_hash": stable_hash(expected_limit_ids),
+        "covered_limit_ids_hash": stable_hash(expected_limit_ids),
+        "total": tails_total,
+        "limit": tails_limit,
+    }
+
+    body = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    payload_sha256 = hashlib.sha256(body).hexdigest()
+
+    print("☁️ Uploading validated Tails v2 to R2...")
+    r2_client.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key='tails_cache.json',
+        Body=body,
+        ContentType='application/json',
+        Metadata={
+            'wa-schema': '2',
+            'boundary-date': yesterday_str,
+            'complete': 'true',
+            'payload-sha256': payload_sha256,
+        },
+    )
+
+    # Bounded read-after-write verification without downloading the large body.
+    head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json')
+    meta = head.get('Metadata') or {}
+    if (
+        meta.get('wa-schema') != '2'
+        or meta.get('boundary-date') != yesterday_str
+        or meta.get('complete') != 'true'
+        or meta.get('payload-sha256') != payload_sha256
+        or int(head.get('ContentLength') or -1) != len(body)
+    ):
+        raise RuntimeError("Tail R2 postcondition mismatch after PUT.")
+
+    print(
+        f"✅ tails_cache.json v2 complete: boundary={yesterday_str}, "
+        f"tokens={len(expected_ids)}"
+    )
+    return {
+        "uploaded": True,
+        "skipped": False,
+        "boundary_date": yesterday_str,
+        "payload_sha256": payload_sha256,
+    }
 
 # ─────────────────────────────────────────────
 # 9. HÀM CHÍNH
@@ -675,14 +734,9 @@ def fetch_data():
 
     print(f"⚙️  RUN_MODE={RUN_MODE}  workers={MAX_WORKERS}  concurrent={MAX_CONCURRENT}")
     print(f"   Rate: ~{MAX_CONCURRENT} req / 1.2s avg ≈ {MAX_CONCURRENT * 50:.0f} req/phút (an toàn)")
-    print(f"🔑 RENDER_API_KEY configured: {bool(RENDER_API_KEY)}")
-    if not RENDER_API_KEY:
-        print("⚠️  RENDER_API_KEY rỗng — mọi request qua PROXY_WORKER_URL (Render) "
-              "sẽ bị middleware bảo mật trả 401. Thêm secret RENDER_API_KEY trong "
-              "GitHub Actions và khai báo trong workflow YAML.")
+    print("🌐 Upstream mode: direct Binance only; no Render/proxy fallback.")
 
     r2 = get_r2_client()
-    if not r2: return
 
     results       = []
     target_tokens = []
@@ -700,8 +754,7 @@ def fetch_data():
         except Exception:
             raw_res = None
         if not raw_res:
-            print("FAILED")
-            return
+            raise RuntimeError("Không lấy được Alpha ticker source; fail closed.")
 
         raw_data      = raw_res.get("data", [])
         target_tokens = sorted(raw_data, key=lambda x: safe_float(x.get("volume24h")), reverse=True)
@@ -709,14 +762,24 @@ def fetch_data():
 
         print(f"🚀 Processing {len(target_tokens)} tokens (parallel, {MAX_WORKERS} workers, {MAX_CONCURRENT} concurrent HTTP)...")
 
+        worker_errors = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = [executor.submit(process_single_token, t) for t in target_tokens]
             for future in as_completed(futures):
                 try:
                     r = future.result()
-                    if r: results.append(r)
+                    if r:
+                        results.append(r)
                 except Exception as e:
+                    worker_errors.append(str(e))
                     print(f"⚠️ Token worker error: {e}")
+
+        if worker_errors:
+            raise RuntimeError(
+                f"Market token workers failed: {len(worker_errors)}; không publish partial artifact."
+            )
+        if not results:
+            raise RuntimeError("Market result rỗng; không publish artifact.")
 
         results.sort(key=lambda x: x["volume"]["daily_total"], reverse=True)
 
@@ -754,6 +817,7 @@ def fetch_data():
             print(f"✅ Uploaded history/{today_str}.json")
         except Exception as e:
             print(f"❌ R2 Upload Failed: {e}")
+            raise
 
     # ═══════════════════════════════════════════════
     # PHASE 2: TAILS (tails_update hoặc full)
@@ -771,9 +835,9 @@ def fetch_data():
                     target_tokens = raw_res.get("data", [])
                     print(f"Done ({len(target_tokens)})")
                 else:
-                    print("FAILED"); return
+                    raise RuntimeError("Không lấy được Alpha ticker source cho tails.")
             except Exception as e:
-                print(f"FAILED: {e}"); return
+                raise RuntimeError(f"Tail source unavailable: {e}") from e
 
             # Dùng status từ cache (không re-fetch market data)
             for t in target_tokens:
