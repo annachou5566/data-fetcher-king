@@ -489,14 +489,45 @@ def _parse_tail_klines_response(res, aid, data_type):
     return "supported", data.get("klineInfos") or []
 
 
+def _fetch_tail_response_with_contract_retry(url, aid, data_type, attempts=2):
+    """
+    Retry only transient malformed-success/source envelopes. Explicit Binance
+    business codes (-5101/-5095/other non-000000) are not retried or coerced.
+    Persistent malformed responses still fail closed.
+    """
+    last_exc = None
+    for attempt in range(max(1, attempts)):
+        res = fetch_smart(url, retries=1)
+        try:
+            return _parse_tail_klines_response(res, aid, data_type)
+        except RuntimeError as exc:
+            message = str(exc)
+            retryable = (
+                message.startswith("Tail source unavailable:")
+                or message.startswith("Tail kline contract invalid:")
+            )
+            if not retryable:
+                raise
+            last_exc = exc
+            if attempt < max(1, attempts) - 1:
+                time.sleep(0.3)
+                continue
+            raise
+
+    raise last_exc or RuntimeError(
+        f"Tail contract retry exhausted: {aid}:{data_type}"
+    )
+
+
 def _fetch_klines_page(base_url, data_type, end_ts, aid):
     """
     Chỉ dùng endTime để phân trang. Phân biệt explicit -5101 unsupported với
     source unavailable/malformed; missing không bao giờ bị ép thành zero.
     """
     url = f"{base_url}&dataType={data_type}&endTime={end_ts}"
-    res = fetch_smart(url, retries=1)
-    return _parse_tail_klines_response(res, aid, data_type)
+    return _fetch_tail_response_with_contract_retry(
+        url, aid, data_type, attempts=2
+    )
 
 
 def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts, aid):
@@ -571,9 +602,8 @@ def _offline_tail_alive(t):
         f"&interval=1d&limit=30&tokenAddress={_tail_clean_addr(t)}"
         f"&dataType=limit"
     )
-    res = fetch_smart(url, retries=2)
-    capability, rows = _parse_tail_klines_response(
-        res, aid, "limit-liveness"
+    capability, rows = _fetch_tail_response_with_contract_retry(
+        url, aid, "limit-liveness", attempts=2
     )
     if capability == "unsupported":
         return False, "limit-unsupported"
