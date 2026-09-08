@@ -588,17 +588,33 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
         pass
 
     alive_aids = {
-        r["id"] for r in results
+        str(r["id"]) for r in results
         if r.get("status") in ["ALPHA", "PRE_DELISTED"] and r.get("id")
     }
-    valid_tokens = [
+    candidate_tokens = [
         t for t in raw_tokens
-        if t.get("alphaId") in alive_aids and t.get("contractAddress")
+        if t.get("alphaId") is not None and str(t.get("alphaId")) in alive_aids
     ]
-    if not valid_tokens:
+    if not candidate_tokens:
         raise RuntimeError("Tail cohort rỗng; không publish artifact.")
 
-    expected_ids = {str(t.get("alphaId")) for t in valid_tokens}
+    candidate_ids = [str(t.get("alphaId")) for t in candidate_tokens]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise RuntimeError("Tail cohort có duplicate alphaId; không publish artifact.")
+
+    missing_identity = [
+        str(t.get("alphaId"))
+        for t in candidate_tokens
+        if not t.get("contractAddress") or t.get("chainId") in (None, "")
+    ]
+    if missing_identity:
+        raise RuntimeError(
+            f"Tail cohort thiếu contract/chainId cho {len(missing_identity)} token; "
+            "không publish artifact."
+        )
+
+    valid_tokens = candidate_tokens
+    expected_ids = set(candidate_ids)
     expected_limit_ids = {
         str(t.get("alphaId")) for t in valid_tokens
         if str(t.get("chainId")) == "56"
@@ -657,6 +673,29 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
             f"missing_bsc_limit={len(missing_limit)}"
         )
 
+    bad_total_shape = sorted(
+        aid for aid in expected_ids
+        if not isinstance(tails_total.get(aid), list) or len(tails_total[aid]) != 1440
+    )
+    bad_limit_shape = sorted(
+        aid for aid in expected_limit_ids
+        if not isinstance(tails_limit.get(aid), list) or len(tails_limit[aid]) != 1440
+    )
+    if bad_total_shape or bad_limit_shape:
+        raise RuntimeError(
+            "Tail series shape invalid; không publish artifact. "
+            f"bad_total={len(bad_total_shape)} "
+            f"bad_limit={len(bad_limit_shape)}"
+        )
+
+    # Limit Daily is a BSC-specific contract. Do not publish unrelated limit
+    # series because that would make the persisted cohort ambiguous.
+    tails_limit = {
+        aid: tails_limit[aid]
+        for aid in sorted(expected_limit_ids)
+    }
+    covered_limit_ids = set(tails_limit)
+
     def stable_hash(ids):
         return hashlib.sha256(
             "\n".join(sorted(ids)).encode("utf-8")
@@ -673,11 +712,11 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
         "expected_token_count": len(expected_ids),
         "covered_total_count": len(tails_total),
         "expected_limit_token_count": len(expected_limit_ids),
-        "covered_limit_count": len(expected_limit_ids),
+        "covered_limit_count": len(covered_limit_ids),
         "expected_ids_hash": stable_hash(expected_ids),
         "covered_total_ids_hash": stable_hash(set(tails_total)),
         "expected_limit_ids_hash": stable_hash(expected_limit_ids),
-        "covered_limit_ids_hash": stable_hash(expected_limit_ids),
+        "covered_limit_ids_hash": stable_hash(covered_limit_ids),
         "total": tails_total,
         "limit": tails_limit,
     }
