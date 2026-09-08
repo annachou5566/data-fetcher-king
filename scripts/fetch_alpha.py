@@ -712,35 +712,13 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
     except Exception:
         pass
 
-    alive_aids = {
-        str(r["id"]) for r in results
-        if r.get("status") in ["ALPHA", "PRE_DELISTED"] and r.get("id")
+    # Live Binance state owns the tail cohort. Do not let stale market-data
+    # status keep an offline token alive or hide a newly-online token.
+    valid_tokens = _build_live_tail_cohort(raw_tokens)
+    expected_ids = {
+        str(t.get("alphaId")) for t in valid_tokens
     }
-    candidate_tokens = [
-        t for t in raw_tokens
-        if t.get("alphaId") is not None and str(t.get("alphaId")) in alive_aids
-    ]
-    if not candidate_tokens:
-        raise RuntimeError("Tail cohort rỗng; không publish artifact.")
-
-    candidate_ids = [str(t.get("alphaId")) for t in candidate_tokens]
-    if len(candidate_ids) != len(set(candidate_ids)):
-        raise RuntimeError("Tail cohort có duplicate alphaId; không publish artifact.")
-
-    missing_identity = [
-        str(t.get("alphaId"))
-        for t in candidate_tokens
-        if not t.get("contractAddress") or t.get("chainId") in (None, "")
-    ]
-    if missing_identity:
-        raise RuntimeError(
-            f"Tail cohort thiếu contract/chainId cho {len(missing_identity)} token; "
-            "không publish artifact."
-        )
-
-    valid_tokens = candidate_tokens
-    expected_ids = set(candidate_ids)
-    expected_limit_ids = {
+    limit_applicable_ids = {
         str(t.get("alphaId")) for t in valid_tokens
         if str(t.get("chainId")) == "56"
     }
@@ -753,34 +731,41 @@ def generate_and_upload_tails(r2_client, raw_tokens, results):
 
     tails_total = {}
     tails_limit = {}
+    unsupported_limit_ids = set()
     completed   = [0]
     worker_errors = []
     _lock       = threading.Lock()
 
     def worker_wrapper(t):
-        aid, symbol, t_total, t_limit = _fetch_tail_single(
+        aid, symbol, t_total, t_limit, limit_capability = _fetch_tail_single(
             t, yesterday_str, y_start_ts, y_end_ts
         )
         with _lock:
             completed[0] += 1
-            status = "OK" if t_total is not None else "UNAVAILABLE"
             print(
-                f"   [{completed[0]}/{total_count}] Tail {symbol}... {status}",
+                f"   [{completed[0]}/{total_count}] Tail {symbol}... "
+                f"OK limit={limit_capability}",
                 flush=True,
             )
-        return aid, t_total, t_limit
+        return aid, t_total, t_limit, limit_capability
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(worker_wrapper, t) for t in valid_tokens]
         for future in as_completed(futures):
             try:
-                aid, t_total, t_limit = future.result()
+                aid, t_total, t_limit, limit_capability = future.result()
                 if aid:
                     aid = str(aid)
                     if t_total is not None:
                         tails_total[aid] = t_total
-                    if t_limit is not None:
+                    if limit_capability == "supported":
+                        if t_limit is None:
+                            raise RuntimeError(
+                                f"Supported limit tail missing series: {aid}"
+                            )
                         tails_limit[aid] = t_limit
+                    elif limit_capability == "unsupported":
+                        unsupported_limit_ids.add(aid)
             except Exception as exc:
                 worker_errors.append(str(exc))
 
