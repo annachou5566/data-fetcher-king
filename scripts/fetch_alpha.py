@@ -151,7 +151,7 @@ def minify_token_data(token):
 
 def fetch_smart(target_url, retries=3):
     """
-    Gọi trực tiếp Binance, không qua proxy/Render.
+    Gọi trực tiếp Binance, không qua proxy trung gian.
     - Semaphore giới hạn đồng thời tối đa MAX_CONCURRENT requests.
     - Jitter nhỏ để tránh burst.
     - 418/429/503 retry có giới hạn; hết retry trả None để caller fail closed.
@@ -734,7 +734,7 @@ def fetch_data():
 
     print(f"⚙️  RUN_MODE={RUN_MODE}  workers={MAX_WORKERS}  concurrent={MAX_CONCURRENT}")
     print(f"   Rate: ~{MAX_CONCURRENT} req / 1.2s avg ≈ {MAX_CONCURRENT * 50:.0f} req/phút (an toàn)")
-    print("🌐 Upstream mode: direct Binance only; no Render/proxy fallback.")
+    print("🌐 Upstream mode: direct Binance only; no proxy/paid fallback.")
 
     r2 = get_r2_client()
 
