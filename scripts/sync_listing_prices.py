@@ -20,7 +20,6 @@ import re
 import time
 import threading
 import random
-import urllib.parse
 import requests
 import zipfile
 import io
@@ -33,7 +32,7 @@ from botocore.config import Config
 
 load_dotenv()
 
-# Tái sử dụng fetch_smart() + get_session() đã có sẵn (proxy, retry, jitter, 429-backoff)
+# Tái sử dụng fetch_smart() + get_session() direct-Binance, bounded retry/jitter.
 import fetch_alpha as fa
 
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "4"))
@@ -1298,56 +1297,37 @@ FUTURES_SYMBOLS_CACHE_MAX_AGE_SEC = 24 * 3600  # 1 ngày — Futures hiếm khi 
 
 def fetch_futures_symbols(r2):
     """
-    Lấy danh sách symbol ĐANG có hợp đồng Futures (USDT-M) trên Binance —
-    dùng để trả lời câu hỏi "token có lên Future không".
+    Trạng thái Futures là optional enrichment, không được kéo theo một proxy/
+    paid fallback riêng.
 
-    [SỬA] fapi.binance.com/fapi/v1/exchangeInfo bị Binance chặn 451 với
-    IP GitHub Actions (xác nhận qua log thật). data.binance.vision cũng
-    không dùng được (web app JS, không phải REST/XML tĩnh).
-
-    → Dùng lại route CÓ SẴN trên Render: GET /api/futures-tickers (vốn
-    để hiện bảng ticker Futures ở frontend) — Render gọi fapi.binance.com
-    bằng IP KHÔNG bị chặn, và response ticker/24hr đã sẵn danh sách MỌI
-    symbol Futures đang giao dịch (mỗi symbol 1 dòng), không cần route
-    exchangeInfo riêng → KHÔNG cần sửa/deploy lại Render.
-
-    [QUAN TRỌNG — tiết kiệm bandwidth Render] response ticker/24hr vẫn
-    nặng ~100-150KB. Futures gần như không đổi theo ngày, nên KHÔNG gọi
-    mỗi lần chạy (mỗi 30 phút = ~430MB/tháng nếu dùng exchangeInfo, vẫn
-    đáng kể dù nhẹ hơn) — cache kết quả trong R2, chỉi gọi lại Render nếu
-    cache cũ hơn 24h. Giảm xuống còn ~1 lần/ngày, không đáng kể.
+    GitHub-hosted runner đã từng bị Binance Futures chặn 451. Trong giai đoạn
+    chuyển owner sang Oracle, chỉ dùng cache R2 nếu còn fresh <= 24h. Nếu cache
+    stale/missing thì trả set rỗng để apply_alpha_status() GIỮ NGUYÊN field
+    futures_listed hiện hữu, không suy diễn "không có Futures".
     """
     cached = _load_json_dict(r2, FUTURES_SYMBOLS_CACHE_KEY)
     now = time.time()
+
     if cached and isinstance(cached, dict) and cached.get("symbols"):
         age = now - cached.get("ts", 0)
         if age < FUTURES_SYMBOLS_CACHE_MAX_AGE_SEC:
-            print(f"  [futures] dùng cache R2 (mới {age/3600:.1f}h trước, {len(cached['symbols'])} symbol) — không gọi Render")
+            print(
+                f"  [futures] dùng cache R2 fresh "
+                f"({age/3600:.1f}h, {len(cached['symbols'])} symbols)"
+            )
             return set(cached["symbols"])
 
-    if not fa.PROXY_WORKER_URL:
-        print("  [warn] fetch_futures_symbols: PROXY_WORKER_URL rỗng, không gọi được Render — coi như chưa biết")
-        return set(cached["symbols"]) if cached and cached.get("symbols") else set()
+        print(
+            f"  [futures] cache stale ({age/3600:.1f}h); "
+            "preserve existing futures_listed until Oracle owner refreshes it."
+        )
+        return set()
 
-    parsed = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
-    url = f"{parsed.scheme}://{parsed.netloc}/api/futures-tickers"
-    try:
-        session = fa.get_session()  # có sẵn header x-api-key cho middleware bảo mật Render
-        res = session.get(url, timeout=20)
-        if res.status_code != 200:
-            print(f"  [warn] fetch_futures_symbols (qua Render): HTTP {res.status_code}")
-            return set(cached["symbols"]) if cached and cached.get("symbols") else set()
-        data = res.json()
-        if not isinstance(data, list):
-            print("  [warn] fetch_futures_symbols: response không phải list")
-            return set(cached["symbols"]) if cached and cached.get("symbols") else set()
-        out = {t["symbol"].upper() for t in data if isinstance(t, dict) and t.get("symbol", "").upper().endswith("USDT")}
-        if out:
-            _upload_json_dict(r2, FUTURES_SYMBOLS_CACHE_KEY, {"ts": now, "symbols": sorted(out)})
-        return out
-    except Exception as ex:
-        print(f"  [warn] fetch_futures_symbols (qua Render) lỗi: {ex}")
-        return set(cached["symbols"]) if cached and cached.get("symbols") else set()
+    print(
+        "  [futures] cache unavailable; preserve existing futures_listed. "
+        "No proxy/paid fallback."
+    )
+    return set()
 
 
 ALPHA_TOKEN_LIST_URL = "https://www.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list"
@@ -1549,10 +1529,9 @@ def apply_alpha_status(events, status_map, futures_symbols=None):
 
 def main():
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
-    print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}  (chỉ dùng cho Alpha aggregator API — klines public đã chuyển hẳn sang Binance Vision, KHÔNG còn qua Render)")
+    print("🌐 Alpha aggregator mode: direct Binance only; no proxy/paid fallback.")
     if DEBUG:
         print(f"   API_AGG_KLINES = {API_AGG_KLINES}")
-        print(f"   PROXY_WORKER_URL = {fa.PROXY_WORKER_URL}")
 
     r2 = get_r2()
     print("⏳ Loading alpha-events/all.json from R2...")
