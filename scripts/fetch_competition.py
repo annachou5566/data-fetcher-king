@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import urllib.parse
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import cloudscraper
@@ -18,14 +17,12 @@ R2_ENDPOINT_URL      = os.getenv("R2_ENDPOINT_URL")
 R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME")
 SUPABASE_URL         = os.getenv("SUPABASE_URL")
 SUPABASE_KEY         = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-PROXY_WORKER_URL     = os.getenv("PROXY_WORKER_URL")
 API_AGG_KLINES       = os.getenv("BINANCE_INTERNAL_KLINES_API")
 
 # --- R2 CLIENT ---
 def get_r2_client():
-    if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
-        print("⚠️ Thiếu R2 Credentials!")
-        return None
+    if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY or not R2_ENDPOINT_URL or not R2_BUCKET_NAME:
+        raise RuntimeError("Thiếu cấu hình R2 bắt buộc; fail closed.")
     return boto3.client(
         's3',
         endpoint_url=R2_ENDPOINT_URL,
@@ -41,24 +38,36 @@ session.headers.update({
 })
 
 def fetch_smart(target_url, retries=3):
-    is_render = "onrender.com" in (PROXY_WORKER_URL or "")
-    if not target_url: return None
-    for i in range(retries):
-        if PROXY_WORKER_URL:
-            try:
-                encoded = urllib.parse.quote(target_url, safe='')
-                proxy_url = f"{PROXY_WORKER_URL}?url={encoded}"
-                timeout = 60 if (is_render and i == 0) else 30
-                res = session.get(proxy_url, timeout=timeout)
-                if res.status_code == 200:
-                    data = res.json()
-                    if isinstance(data, dict): return data
-            except: pass
+    """Direct Binance fetch only; no proxy or paid fallback."""
+    if not target_url:
+        return None
+
+    for attempt in range(retries):
+        retry_wait = 0
         try:
             res = session.get(target_url, timeout=15)
-            if res.status_code == 200: return res.json()
-        except: pass
-        time.sleep(1)
+        except Exception as exc:
+            print(f"⚠️ Direct request error: {exc}")
+            res = None
+
+        if res is not None:
+            if res.status_code == 200:
+                try:
+                    return res.json()
+                except Exception:
+                    return None
+            if res.status_code in (418, 429, 503):
+                retry_wait = 30
+                print(
+                    f"⚠️ Direct HTTP {res.status_code}; bounded retry "
+                    f"{attempt + 1}/{retries}"
+                )
+            else:
+                print(f"⚠️ Direct HTTP {res.status_code}; source unavailable")
+
+        if attempt < retries - 1:
+            time.sleep(retry_wait or 1)
+
     return None
 
 def safe_float(v):
@@ -66,7 +75,7 @@ def safe_float(v):
     except: return 0.0
 
 def upload_r2(r2, key, obj):
-    """Upload JSON object lên R2. Trả về True nếu thành công."""
+    """Upload JSON object lên R2; lỗi ghi là fatal."""
     try:
         r2.put_object(
             Bucket=R2_BUCKET_NAME, Key=key,
@@ -77,7 +86,7 @@ def upload_r2(r2, key, obj):
         return True
     except Exception as e:
         print(f"   ❌ R2 upload '{key}' error: {e}")
-        return False
+        raise
 
 # ═══════════════════════════════════════════════════════════════
 # PHASE 1 — SLOW JOB (giữ nguyên logic cũ, chỉ refactor gọn hơn)
@@ -85,8 +94,7 @@ def upload_r2(r2, key, obj):
 
 def get_active_tournaments():
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("⚠️ Thiếu cấu hình Supabase!")
-        return []
+        raise RuntimeError("Thiếu cấu hình Supabase; fail closed.")
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -96,8 +104,7 @@ def get_active_tournaments():
         url = f"{SUPABASE_URL}/rest/v1/tournaments?select=id,name,contract,data"
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code != 200:
-            print(f"❌ Supabase Error: {res.status_code} - {res.text}")
-            return []
+            raise RuntimeError(f"Supabase Error: HTTP {res.status_code}")
         data = res.json()
         active_list = []
         lookback_date = datetime.now().strftime("%Y-%m-%d")
@@ -127,8 +134,7 @@ def get_active_tournaments():
                         print(f"⚠️ {name}: Thiếu chainId")
         return active_list
     except Exception as e:
-        print(f"❌ get_active_tournaments: {e}")
-        return []
+        raise RuntimeError(f"Supabase tournaments unavailable: {e}") from e
 
 
 def fetch_limit_history(token_info):
@@ -386,7 +392,6 @@ def main():
     job_start = time.time()
 
     r2 = get_r2_client()
-    if not r2: return
 
     # Lấy danh sách token MỘT LẦN — dùng chung cho cả 2 phase
     print("⏳ Lấy danh sách giải từ Supabase...", end=" ")
@@ -394,7 +399,7 @@ def main():
     print(f"OK ({len(target_tokens)} giải)")
 
     if not target_tokens:
-        print("❌ Không tìm thấy giải nào. Kiểm tra lại DB Supabase.")
+        print("ℹ️ Không có giải active; không tạo second-owner work.")
         return
 
     # Phase 1: slow job (giữ nguyên như cũ)
