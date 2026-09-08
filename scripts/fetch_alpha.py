@@ -470,35 +470,54 @@ def build_suffix_sum(klines, yesterday_str):
         arr[i]       = round(running_sum, 2)
     return arr
 
-def _fetch_klines_page(base_url, data_type, end_ts):
+def _parse_tail_klines_response(res, aid, data_type):
+    if not isinstance(res, dict):
+        raise RuntimeError(f"Tail source unavailable: {aid}:{data_type}")
+
+    code = str(res.get("code") or "")
+    if code == "-5101":
+        return "unsupported", []
+    if code and code != "000000":
+        raise RuntimeError(f"Tail business code {code}: {aid}:{data_type}")
+
+    data = res.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("klineInfos"), list):
+        raise RuntimeError(f"Tail kline contract invalid: {aid}:{data_type}")
+
+    return "supported", data.get("klineInfos") or []
+
+
+def _fetch_klines_page(base_url, data_type, end_ts, aid):
     """
-    [SỬA] CHỈ dùng endTime để phân trang (đã kiểm chứng thực tế: trả về N nến
-    GẦN NHẤT tính lùi từ endTime, ghép trang liền mạch không trùng/hở).
-    KHÔNG dùng thêm startTime ở đây vì hành vi API khi có CẢ HAI tham số cùng
-    lúc (trên 1 khoảng dài hơn cap) chưa được kiểm chứng — có thể API ưu tiên
-    trả về từ startTime tiến lên thay vì lùi từ endTime, làm sai logic dừng
-    vòng lặp bên dưới. An toàn hơn: chỉ lùi theo endTime, lọc theo ngày sau.
+    Chỉ dùng endTime để phân trang. Phân biệt explicit -5101 unsupported với
+    source unavailable/malformed; missing không bao giờ bị ép thành zero.
     """
     url = f"{base_url}&dataType={data_type}&endTime={end_ts}"
     res = fetch_smart(url, retries=1)
-    if res and "data" in res and "klineInfos" in res["data"]:
-        return res["data"].get("klineInfos") or []
-    return []
+    return _parse_tail_klines_response(res, aid, data_type)
 
 
-def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts):
-    """
-    Phân trang lùi dần bằng endTime (cơ chế đã kiểm chứng thực tế) cho tới khi
-    nến cũ nhất trong trang <= y_start_ts (đã phủ hết "hôm qua") hoặc API hết
-    dữ liệu. build_suffix_sum() sẽ tự lọc lại đúng ngày, nên dư thừa không sao.
-    """
+def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts, aid):
     all_rows = {}
     cursor_end = y_end_ts
     guard = 0
+    capability = None
 
     while cursor_end > y_start_ts and guard < 10:
         guard += 1
-        rows = _fetch_klines_page(base_url, data_type, cursor_end)
+        page_capability, rows = _fetch_klines_page(
+            base_url, data_type, cursor_end, aid
+        )
+        if capability and page_capability != capability:
+            raise RuntimeError(
+                f"Tail capability drift: {aid}:{data_type}"
+            )
+        capability = page_capability
+
+        if page_capability == "unsupported":
+            return "unsupported", []
+
+        # Explicit successful empty result means no rows for this window.
         if not rows:
             break
 
@@ -517,49 +536,155 @@ def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts):
         cursor_end = oldest_ts - 1
         time.sleep(0.2)
 
-    return list(all_rows.values())
+    return capability or "supported", list(all_rows.values())
 
 
-def _fetch_tail_single(t, yesterday_str, y_start_ts, y_end_ts):
-    """
-    Worker function cho 1 token tails — throttle nằm trong fetch_smart.
-    [SỬA] interval=1m (chính xác từng phút, không nội suy) + startTime/endTime
-    cố định đúng ranh giới "hôm qua" (00:00:00.000 -> 23:59:59.999 UTC), có
-    phân trang lùi dần để không phụ thuộc vào giới hạn limit thật của endpoint
-    (chưa được xác nhận chắc chắn là 1000 hay 1500 cho endpoint agg-klines này).
-    """
-    aid      = t.get("alphaId")
+def _tail_clean_addr(t):
     chain_id = t.get("chainId")
     contract = t.get("contractAddress")
-
-    if not aid or not contract:
-        return aid, t.get("symbol"), None, None
-
     clean_addr = str(contract)
     if chain_id not in ["CT_501", "CT_784"]:
         clean_addr = clean_addr.lower()
+    return clean_addr
+
+
+def _offline_tail_alive(t):
+    """
+    Mirror process_single_token PRE_DELISTED liveness rule with current Binance
+    first-party limit data. -5101 or no positive recent limit volume => exclude.
+    Transport/business ambiguity raises and fails the whole artifact.
+    """
+    aid = str(t.get("alphaId") or "")
+    chain_id = t.get("chainId")
+    contract = t.get("contractAddress")
+    if not aid or not contract or chain_id in (None, ""):
+        raise RuntimeError(f"Offline tail identity invalid: {aid or 'UNKNOWN'}")
+
+    url = (
+        f"{API_AGG_KLINES}?chainId={chain_id}"
+        f"&interval=1d&limit=30&tokenAddress={_tail_clean_addr(t)}"
+        f"&dataType=limit"
+    )
+    res = fetch_smart(url, retries=2)
+    capability, rows = _parse_tail_klines_response(
+        res, aid, "limit-liveness"
+    )
+    if capability == "unsupported":
+        return False, "limit-unsupported"
+
+    latest = safe_float(rows[-1][5]) if rows else 0.0
+    previous = safe_float(rows[-2][5]) if len(rows) > 1 else 0.0
+    alive = latest > 0 or previous > 0
+    return alive, "positive-limit-volume" if alive else "no-recent-limit-volume"
+
+
+def _build_live_tail_cohort(raw_tokens):
+    online = []
+    pending = []
+    excluded_spot = 0
+    seen = set()
+
+    for t in raw_tokens:
+        aid = str(t.get("alphaId") or "")
+        if not aid:
+            continue
+        if aid in seen:
+            raise RuntimeError(f"Tail cohort duplicate alphaId: {aid}")
+        seen.add(aid)
+
+        if not t.get("contractAddress") or t.get("chainId") in (None, ""):
+            raise RuntimeError(f"Tail cohort missing identity: {aid}")
+
+        if not bool(t.get("offline", False)):
+            online.append(t)
+            continue
+
+        if bool(t.get("listingCex", False)):
+            excluded_spot += 1
+            continue
+
+        pending.append(t)
+
+    revived = []
+    excluded_offline = 0
+    unsupported_offline = 0
+    worker_errors = []
+
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(pending)))) as executor:
+        futures = {
+            executor.submit(_offline_tail_alive, t): t
+            for t in pending
+        }
+        for future in as_completed(futures):
+            t = futures[future]
+            try:
+                alive, reason = future.result()
+                if alive:
+                    revived.append(t)
+                else:
+                    excluded_offline += 1
+                    if reason == "limit-unsupported":
+                        unsupported_offline += 1
+            except Exception as exc:
+                worker_errors.append(
+                    f"{t.get('alphaId')}: {exc}"
+                )
+
+    if worker_errors:
+        raise RuntimeError(
+            f"Offline tail liveness errors: {len(worker_errors)}; "
+            "không publish artifact."
+        )
+
+    cohort = online + revived
+    if not cohort:
+        raise RuntimeError("Tail cohort rỗng; không publish artifact.")
+
+    print(
+        f"TAILS_COHORT live={len(cohort)} online={len(online)} "
+        f"offline_probed={len(pending)} revived={len(revived)} "
+        f"offline_excluded={excluded_offline} "
+        f"offline_unsupported={unsupported_offline} "
+        f"spot_excluded={excluded_spot}"
+    )
+    return cohort
+
+
+def _fetch_tail_single(t, yesterday_str, y_start_ts, y_end_ts):
+    aid      = str(t.get("alphaId") or "")
+    chain_id = t.get("chainId")
+    contract = t.get("contractAddress")
+
+    if not aid or not contract or chain_id in (None, ""):
+        raise RuntimeError(f"Tail identity invalid: {aid or 'UNKNOWN'}")
 
     base_url = (
         f"{API_AGG_KLINES}?chainId={chain_id}"
-        f"&interval=1m&limit=1000&tokenAddress={clean_addr}"
+        f"&interval=1m&limit=1000&tokenAddress={_tail_clean_addr(t)}"
     )
-    t_total = t_limit = None
 
-    try:
-        rows_tot = _fetch_full_day_klines(base_url, "aggregate", y_start_ts, y_end_ts)
-        if rows_tot:
-            t_total = build_suffix_sum(rows_tot, yesterday_str)
-    except Exception:
-        pass
+    total_capability, rows_tot = _fetch_full_day_klines(
+        base_url, "aggregate", y_start_ts, y_end_ts, aid
+    )
+    if total_capability != "supported":
+        raise RuntimeError(f"Aggregate tail unsupported: {aid}")
+    # build_suffix_sum([]) is an explicit all-zero 1440 series only because
+    # the source response itself was successful and structurally valid.
+    t_total = build_suffix_sum(rows_tot, yesterday_str)
 
-    try:
-        rows_lim = _fetch_full_day_klines(base_url, "limit", y_start_ts, y_end_ts)
-        if rows_lim:
-            t_limit = build_suffix_sum(rows_lim, yesterday_str)
-    except Exception:
-        pass
+    limit_applicable = str(chain_id) == "56"
+    if not limit_applicable:
+        return aid, t.get("symbol"), t_total, None, "not_applicable"
 
-    return aid, t.get("symbol"), t_total, t_limit
+    limit_capability, rows_lim = _fetch_full_day_klines(
+        base_url, "limit", y_start_ts, y_end_ts, aid
+    )
+    if limit_capability == "unsupported":
+        return aid, t.get("symbol"), t_total, None, "unsupported"
+
+    t_limit = build_suffix_sum(rows_lim, yesterday_str)
+    return aid, t.get("symbol"), t_total, t_limit, "supported"
+
 
 def generate_and_upload_tails(r2_client, raw_tokens, results):
     today_str     = datetime.utcnow().strftime('%Y-%m-%d')
