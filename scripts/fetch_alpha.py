@@ -4,7 +4,7 @@ import time
 import threading
 import random
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import requests
@@ -17,8 +17,8 @@ from botocore.config import Config
 # ─────────────────────────────────────────────
 load_dotenv()
 
-# RUN_MODE: "market_data" | "tails_update" | "full"
-RUN_MODE = os.getenv("RUN_MODE", "full")
+# RUN_MODE: market_data only. Alpha Tails moved to the canonical Oracle writer.
+RUN_MODE = os.getenv("RUN_MODE", "market_data")
 
 # MAX_WORKERS  : số thread xử lý token song song (nên > MAX_CONCURRENT để thread luôn sẵn sàng)
 # MAX_CONCURRENT: số HTTP request đồng thời tới Binance (đây là van an toàn thực sự)
@@ -481,189 +481,6 @@ def process_single_token(item):
     }
 
 # ─────────────────────────────────────────────
-# 8. TAILS (giữ nguyên logic gốc, thêm parallel)
-# ─────────────────────────────────────────────
-def build_suffix_sum(klines, yesterday_str):
-    """
-    [SỬA] Nến 1m -> mỗi nến đúng 1 phút, KHÔNG còn chia đều 5 phút như bản cũ
-    (bản cũ dùng nến 5m rồi chia vol/5 cho từng phút -> sai vì volume không
-    phân bố đều trong 5 phút, gây lệch dailyTot = rolling24h - tail).
-    """
-    arr        = [0.0] * 1440
-    minute_map = [0.0] * 1440
-    if not klines: return arr
-
-    for k in klines:
-        try:
-            dt = datetime.utcfromtimestamp(int(k[0]) / 1000.0)
-            if dt.strftime('%Y-%m-%d') == yesterday_str:
-                minute = dt.hour * 60 + dt.minute
-                if 0 <= minute < 1440:
-                    minute_map[minute] += float(k[5] or 0)
-        except Exception:
-            pass
-
-    running_sum = 0.0
-    for i in range(1439, -1, -1):
-        running_sum += minute_map[i]
-        arr[i]       = round(running_sum, 2)
-    return arr
-
-def _fetch_klines_page(base_url, data_type, end_ts):
-    """
-    [SỬA] CHỈ dùng endTime để phân trang (đã kiểm chứng thực tế: trả về N nến
-    GẦN NHẤT tính lùi từ endTime, ghép trang liền mạch không trùng/hở).
-    KHÔNG dùng thêm startTime ở đây vì hành vi API khi có CẢ HAI tham số cùng
-    lúc (trên 1 khoảng dài hơn cap) chưa được kiểm chứng — có thể API ưu tiên
-    trả về từ startTime tiến lên thay vì lùi từ endTime, làm sai logic dừng
-    vòng lặp bên dưới. An toàn hơn: chỉ lùi theo endTime, lọc theo ngày sau.
-    """
-    url = f"{base_url}&dataType={data_type}&endTime={end_ts}"
-    res = fetch_smart(url, retries=1)
-    if res and "data" in res and "klineInfos" in res["data"]:
-        return res["data"].get("klineInfos") or []
-    return []
-
-
-def _fetch_full_day_klines(base_url, data_type, y_start_ts, y_end_ts):
-    """
-    Phân trang lùi dần bằng endTime (cơ chế đã kiểm chứng thực tế) cho tới khi
-    nến cũ nhất trong trang <= y_start_ts (đã phủ hết "hôm qua") hoặc API hết
-    dữ liệu. build_suffix_sum() sẽ tự lọc lại đúng ngày, nên dư thừa không sao.
-    """
-    all_rows = {}
-    cursor_end = y_end_ts
-    guard = 0
-
-    while cursor_end > y_start_ts and guard < 10:
-        guard += 1
-        rows = _fetch_klines_page(base_url, data_type, cursor_end)
-        if not rows:
-            break
-
-        oldest_ts = None
-        for k in rows:
-            k_ts = int(k[0])
-            all_rows[k_ts] = k
-            if oldest_ts is None or k_ts < oldest_ts:
-                oldest_ts = k_ts
-
-        if oldest_ts is None or oldest_ts <= y_start_ts:
-            break
-        if oldest_ts - 1 >= cursor_end:
-            break
-
-        cursor_end = oldest_ts - 1
-        time.sleep(0.2)
-
-    return list(all_rows.values())
-
-
-def _fetch_tail_single(t, yesterday_str, y_start_ts, y_end_ts):
-    """
-    Worker function cho 1 token tails — throttle nằm trong fetch_smart.
-    [SỬA] interval=1m (chính xác từng phút, không nội suy) + startTime/endTime
-    cố định đúng ranh giới "hôm qua" (00:00:00.000 -> 23:59:59.999 UTC), có
-    phân trang lùi dần để không phụ thuộc vào giới hạn limit thật của endpoint
-    (chưa được xác nhận chắc chắn là 1000 hay 1500 cho endpoint agg-klines này).
-    """
-    aid      = t.get("alphaId")
-    chain_id = t.get("chainId")
-    contract = t.get("contractAddress")
-
-    if not aid or not contract:
-        return aid, t.get("symbol"), None, None
-
-    clean_addr = str(contract)
-    if chain_id not in ["CT_501", "CT_784"]:
-        clean_addr = clean_addr.lower()
-
-    base_url = (
-        f"{API_AGG_KLINES}?chainId={chain_id}"
-        f"&interval=1m&limit=1000&tokenAddress={clean_addr}"
-    )
-    t_total = t_limit = None
-
-    try:
-        rows_tot = _fetch_full_day_klines(base_url, "aggregate", y_start_ts, y_end_ts)
-        if rows_tot:
-            t_total = build_suffix_sum(rows_tot, yesterday_str)
-    except Exception:
-        pass
-
-    try:
-        rows_lim = _fetch_full_day_klines(base_url, "limit", y_start_ts, y_end_ts)
-        if rows_lim:
-            t_limit = build_suffix_sum(rows_lim, yesterday_str)
-    except Exception:
-        pass
-
-    return aid, t.get("symbol"), t_total, t_limit
-
-def generate_and_upload_tails(r2_client, raw_tokens, results):
-    today_str     = datetime.utcnow().strftime('%Y-%m-%d')
-    yesterday_dt  = datetime.utcnow() - timedelta(days=1)
-    yesterday_str = yesterday_dt.strftime('%Y-%m-%d')
-    force_tails   = os.getenv("FORCE_TAILS", "false").lower() == "true"
-
-    # [SỬA] Ranh giới chính xác 00:00:00.000 -> 23:59:59.999 UTC của "hôm qua"
-    y_day_start = yesterday_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    y_start_ts  = int(y_day_start.timestamp() * 1000)
-    y_end_ts    = y_start_ts + (24 * 60 * 60 * 1000) - 1
-
-    try:
-        head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key='tails_cache.json')
-        if not force_tails and head['LastModified'].strftime('%Y-%m-%d') == today_str:
-            print("\n⏭️ tails_cache.json hôm nay đã có. Bỏ qua.")
-            print("   (Set FORCE_TAILS=true để chạy lại thủ công)")
-            return
-    except Exception:
-        pass
-
-    alive_aids   = {r["id"] for r in results if r.get("status") in ["ALPHA", "PRE_DELISTED"]}
-    valid_tokens = [t for t in raw_tokens if t.get("alphaId") in alive_aids]
-    total_count  = len(valid_tokens)
-
-    print(f"\n🦊 Bắt đầu cắt Đuôi 5m — {total_count} tokens alive (parallel, concurrent={MAX_CONCURRENT})")
-
-    tails_total = {}
-    tails_limit = {}
-    completed   = [0]
-    _lock       = threading.Lock()
-
-    def worker_wrapper(t):
-        aid, symbol, t_total, t_limit = _fetch_tail_single(t, yesterday_str, y_start_ts, y_end_ts)
-        with _lock:
-            completed[0] += 1
-            status = "OK" if (t_total is not None or t_limit is not None) else "SKIP"
-            print(f"   [{completed[0]}/{total_count}] Cắt đuôi {symbol}... {status}", flush=True)
-        return aid, t_total, t_limit
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(worker_wrapper, t) for t in valid_tokens]
-        for future in as_completed(futures):
-            try:
-                aid, t_total, t_limit = future.result()
-                if aid:
-                    if t_total is not None: tails_total[aid] = t_total
-                    if t_limit is not None: tails_limit[aid] = t_limit
-            except Exception as e:
-                print(f"⚠️ Tail worker error: {e}")
-
-    print("☁️ Đang Upload Tails lên R2...")
-    json_str = json.dumps({"total": tails_total, "limit": tails_limit}, separators=(',', ':'))
-    try:
-        r2_client.put_object(
-            Bucket=R2_BUCKET_NAME,
-            Key='tails_cache.json',
-            Body=json_str.encode('utf-8'),
-            ContentType='application/json'
-        )
-        print("✅ Đã lưu tails_cache.json thành công!")
-    except Exception as e:
-        print(f"❌ Upload Tails Failed: {e}")
-
-# ─────────────────────────────────────────────
 # 9. HÀM CHÍNH
 # ─────────────────────────────────────────────
 def fetch_data():
@@ -674,6 +491,10 @@ def fetch_data():
     _request_semaphore = threading.Semaphore(MAX_CONCURRENT)
 
     print(f"⚙️  RUN_MODE={RUN_MODE}  workers={MAX_WORKERS}  concurrent={MAX_CONCURRENT}")
+    if RUN_MODE != "market_data":
+        raise RuntimeError(
+            f"Unsupported RUN_MODE={RUN_MODE!r}; Alpha Tails is owned by the Oracle v2 writer"
+        )
     print(f"   Rate: ~{MAX_CONCURRENT} req / 1.2s avg ≈ {MAX_CONCURRENT * 50:.0f} req/phút (an toàn)")
     print(f"🔑 RENDER_API_KEY configured: {bool(RENDER_API_KEY)}")
     if not RENDER_API_KEY:
@@ -690,7 +511,7 @@ def fetch_data():
     # ═══════════════════════════════════════════════
     # PHASE 1: MARKET DATA
     # ═══════════════════════════════════════════════
-    if RUN_MODE in ("full", "market_data"):
+    if RUN_MODE == "market_data":
         OLD_DATA_MAP        = load_old_data_from_r2(r2)
         ACTIVE_SPOT_SYMBOLS = get_active_spot_symbols()
 
@@ -755,36 +576,7 @@ def fetch_data():
         except Exception as e:
             print(f"❌ R2 Upload Failed: {e}")
 
-    # ═══════════════════════════════════════════════
-    # PHASE 2: TAILS (tails_update hoặc full)
-    # ═══════════════════════════════════════════════
-    if RUN_MODE in ("full", "tails_update"):
-
-        # Nếu chạy riêng tails_update: load danh sách token + status từ R2 cache
-        if RUN_MODE == "tails_update":
-            OLD_DATA_MAP = load_old_data_from_r2(r2)
-
-            print("⏳ Lấy danh sách token cho tails...", end=" ", flush=True)
-            try:
-                raw_res = fetch_smart(API_AGG_TICKER)
-                if raw_res:
-                    target_tokens = raw_res.get("data", [])
-                    print(f"Done ({len(target_tokens)})")
-                else:
-                    print("FAILED"); return
-            except Exception as e:
-                print(f"FAILED: {e}"); return
-
-            # Dùng status từ cache (không re-fetch market data)
-            for t in target_tokens:
-                aid = t.get("alphaId")
-                if not aid: continue
-                cached_status = OLD_DATA_MAP.get(aid, {}).get(KEY_MAP["status"], "ALPHA")
-                results.append({"id": aid, "status": cached_status})
-
-        generate_and_upload_tails(r2, target_tokens, results)
-
-    mode_label = {"full": "FULL", "market_data": "MARKET DATA", "tails_update": "TAILS"}.get(RUN_MODE, RUN_MODE)
+    mode_label = "MARKET DATA"
     print(f"🏁 DONE [{mode_label}]! Total: {time.time() - start:.1f}s")
 
 if __name__ == "__main__":
