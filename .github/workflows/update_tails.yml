@@ -1,8 +1,6 @@
 name: Update Tails Cache (Daily)
 
 on:
-  schedule:
-    - cron: '15 0 * * *'  # 00:15 UTC = 07:15 Việt Nam, chạy mỗi ngày
   workflow_dispatch:
     inputs:
       force_tails:
