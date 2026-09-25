@@ -1,15 +1,16 @@
-name: Alpha History Gap Apply One Shot
+name: Sync Alpha History Dry Run
 
 on:
   push:
     branches:
       - chatgpt/alpha-history-merge-backfill-2026-09-25
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  apply:
+  dry-run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -26,33 +27,10 @@ jobs:
       - name: Unit tests
         run: python -m unittest scripts/test_sync_alpha_history_merge.py
 
-      - name: Exact pre-apply R2 guard
+      - name: R2 merge dry-run
         env:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: |
-          python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 12 | tee /tmp/alpha-history-plan.log
-          grep -Fq "[current] all=431 history=431 " /tmp/alpha-history-plan.log
-          grep -Fq "[gap] current_history_max=2026-08-10T09:00:00+00:00" /tmp/alpha-history-plan.log
-          grep -Fq "[gap] source_after_seam=13 " /tmp/alpha-history-plan.log
-          grep -Fq "[plan] ALL existing=431 merged=443 matched=0 added=12 " /tmp/alpha-history-plan.log
-          grep -Fq "[plan] HISTORY existing=431 merged=443 matched=0 added=12 " /tmp/alpha-history-plan.log
-          grep -Fq "ALL_suspicious_near_duplicates=0" /tmp/alpha-history-plan.log
-          grep -Fq "HISTORY_suspicious_near_duplicates=0" /tmp/alpha-history-plan.log
-          grep -Fq "[digest] current_all=bd49b2c7f31b73795cd819f28171b8a6477628f252d8b1c70d43204d404fd7ed" /tmp/alpha-history-plan.log
-          grep -Fq "[digest] current_history=bd49b2c7f31b73795cd819f28171b8a6477628f252d8b1c70d43204d404fd7ed" /tmp/alpha-history-plan.log
-          grep -Fq "[mutation] NONE" /tmp/alpha-history-plan.log
-
-      - name: Apply exact approved 12-row gap
-        env:
-          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: |
-          python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 12 --apply | tee /tmp/alpha-history-apply.log
-          grep -Fq "[postcheck] all=443 history=443" /tmp/alpha-history-apply.log
-          grep -Fq "[mutation] R2_ALL_AND_HISTORY" /tmp/alpha-history-apply.log
-          grep -Fq "[done] merge-preserving Alpha History import PASS" /tmp/alpha-history-apply.log
+        run: python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 100
