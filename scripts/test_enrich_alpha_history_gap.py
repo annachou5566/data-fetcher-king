@@ -111,6 +111,55 @@ class GapPriceTests(unittest.TestCase):
         self.assertNotIn("enrich_spot_listing_prices(", src)
 
 
+    def test_render_klines_route_forwards_end_time_and_normalizes_rows(self):
+        old_proxy = getattr(lp.fa, "PROXY_WORKER_URL", None)
+        old_get_session = getattr(lp.fa, "get_session", None)
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+            def json(self):
+                return [{
+                    "time": 1788505200,
+                    "open": 0.030,
+                    "high": 0.032,
+                    "low": 0.029,
+                    "close": 0.031,
+                    "volume": 123.0,
+                }]
+
+        class FakeSession:
+            def get(self, url, params=None, timeout=None):
+                captured["url"] = url
+                captured["params"] = dict(params or {})
+                captured["timeout"] = timeout
+                return FakeResponse()
+
+        try:
+            lp.fa.PROXY_WORKER_URL = "https://alpha-realtime.onrender.com/proxy"
+            lp.fa.get_session = lambda: FakeSession()
+            rows = lp.fetch_alpha_agg_klines_render(
+                "8453",
+                "0x001aad84c21a5cd4d696c56d44866e9703c43f77",
+                "5m",
+                limit=1000,
+                end_ms=1788566399999,
+            )
+            self.assertIsNotNone(rows)
+            self.assertEqual(captured["url"], "https://alpha-realtime.onrender.com/api/klines")
+            self.assertEqual(captured["params"]["chainId"], "8453")
+            self.assertEqual(captured["params"]["endTime"], 1788566399999)
+            self.assertEqual(captured["params"]["interval"], "5m")
+            self.assertEqual(rows[0][0], 1788505200000)
+            self.assertEqual(float(rows[0][4]), 0.031)
+        finally:
+            lp.fa.PROXY_WORKER_URL = old_proxy
+            if old_get_session is None:
+                if hasattr(lp.fa, "get_session"):
+                    delattr(lp.fa, "get_session")
+            else:
+                lp.fa.get_session = old_get_session
+
     def test_agg_historical_fallback_anchors_with_end_time(self):
         old_api = lp.API_AGG_KLINES
         old_fetch = getattr(lp.fa, "fetch_smart", None)
