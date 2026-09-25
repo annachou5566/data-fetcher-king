@@ -211,51 +211,28 @@ def _is_missing(value):
 
 
 def merge_existing(existing, incoming):
-    """Preserve canonical row; fill only missing base metadata."""
-    out = deepcopy(existing)
-
-    for key in BASE_FILL_FIELDS:
-        if _is_missing(out.get(key)) and not _is_missing(incoming.get(key)):
-            out[key] = incoming[key]
-
-    # Boolean list-state may improve from false -> true, but never true -> false.
-    for key in ("spot_listed", "futures_listed", "completed", "pretge"):
-        if incoming.get(key) is True:
-            out[key] = True
-        elif key not in out:
-            out[key] = bool(incoming.get(key))
-
-    # Never import a synthetic current status over a canonical one.
-    if _is_missing(out.get("status")):
-        out["status"] = incoming.get("status")
-
-    # Explicit guard: downstream-owned enrichment from existing must survive.
-    for key in ENRICHMENT_FIELDS:
-        if key in existing:
-            out[key] = existing[key]
-
-    return out
+    """Strict append-only policy: a matched canonical row is byte/logically preserved."""
+    return deepcopy(existing)
 
 
 def _dedupe_existing(rows, label):
     out = []
-    by_key = {}
+    seen = set()
     collisions = []
 
     for row in rows:
         key = event_identity(row)
-        if key in by_key:
+        if key in seen:
             collisions.append(key)
-            # Preserve first canonical row; only fill missing metadata from later duplicate.
-            idx = by_key[key]
-            out[idx] = merge_existing(out[idx], row)
-        else:
-            by_key[key] = len(out)
-            out.append(deepcopy(row))
+            continue
+        seen.add(key)
+        out.append(deepcopy(row))
 
     if collisions:
-        print(f"[guard] {label}: collapsed {len(collisions)} duplicate identity rows")
-    return out, set(collisions)
+        raise RuntimeError(
+            f"fatal: {label} contains {len(collisions)} duplicate canonical identities"
+        )
+    return out, set()
 
 
 def merge_catalog(existing_rows, source_events, *, require_ended=False):
@@ -319,6 +296,70 @@ def merge_catalog(existing_rows, source_events, *, require_ended=False):
     }
     return merged, stats, added_rows
 
+
+
+def _contract_chain_key(event):
+    contract = _norm_contract(event.get("contract_address") or event.get("contract"))
+    chain = _norm_text(event.get("chain_id") or event.get("chainId") or "56")
+    return (contract, chain) if contract else None
+
+
+def _parse_event_dt(event):
+    raw = _norm_text(event.get("event_time") or event.get("date"))
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def report_near_duplicates(label, existing_rows, added_rows, hours=36):
+    """
+    Read-only review aid. Same contract+chain with a nearby timestamp but a
+    different exact identity is suspicious and must be reviewed before apply.
+    Repeated rounds separated by days/weeks remain visible but are not flagged.
+    """
+    by_contract = {}
+    for row in existing_rows:
+        key = _contract_chain_key(row)
+        if key:
+            by_contract.setdefault(key, []).append(row)
+
+    suspicious = 0
+    contract_matches = 0
+    for row in added_rows:
+        key = _contract_chain_key(row)
+        candidates = by_contract.get(key, []) if key else []
+        if not candidates:
+            continue
+        contract_matches += 1
+        new_dt = _parse_event_dt(row)
+        for old in candidates:
+            old_dt = _parse_event_dt(old)
+            delta_h = None
+            if new_dt and old_dt:
+                delta_h = abs((new_dt - old_dt).total_seconds()) / 3600.0
+            is_suspicious = delta_h is not None and delta_h <= hours
+            if is_suspicious:
+                suspicious += 1
+            print(
+                f"[review] {label} CONTRACT_MATCH "
+                f"new={row.get('symbol') or ''}@{row.get('event_time') or ''} "
+                f"old={old.get('symbol') or old.get('token') or ''}@"
+                f"{old.get('event_time') or old.get('date') or ''} "
+                f"delta_hours={delta_h if delta_h is not None else 'NA'} "
+                f"suspicious={'YES' if is_suspicious else 'NO'}"
+            )
+
+    print(
+        f"[review] {label}_contract_matches={contract_matches} "
+        f"{label}_suspicious_near_duplicates={suspicious}"
+    )
+    return suspicious
 
 def get_r2():
     required = (
@@ -449,6 +490,16 @@ def main():
     print("[plan] HISTORY " + " ".join(f"{k}={v}" for k, v in history_stats.items()))
     print_added("ALL", added_all)
     print_added("HISTORY", added_history)
+
+    suspicious_all = report_near_duplicates("ALL", current_all, added_all)
+    suspicious_history = report_near_duplicates(
+        "HISTORY", current_history, added_history
+    )
+    if suspicious_all or suspicious_history:
+        raise RuntimeError(
+            f"suspicious near-duplicate guard: all={suspicious_all} "
+            f"history={suspicious_history}"
+        )
 
     if all_stats["added"] > args.max_add or history_stats["added"] > args.max_add:
         raise RuntimeError(
