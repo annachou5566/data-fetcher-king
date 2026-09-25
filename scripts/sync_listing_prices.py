@@ -321,6 +321,80 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
         return None
 
 
+def fetch_alpha_agg_klines_render(chain_id, contract, interval, limit=1000, end_ms=None):
+    """
+    Read-only historical Alpha DEX klines through our protected Render API.
+
+    alpha-realtime-bot owns /api/klines and calls Binance agg-klines directly
+    from Render. The route preserves Binance's verified endTime-only historical
+    semantics and avoids relying on GitHub-hosted direct/proxy access to the
+    internal endpoint.
+
+    Returns Binance-style rows:
+      [open_time_ms, open, high, low, close, volume, close_time_ms]
+    or None when unavailable.
+    """
+    if not fa.PROXY_WORKER_URL or not chain_id or not contract:
+        return None
+
+    try:
+        parsed = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
+        if not parsed.scheme or not parsed.netloc:
+            return None
+        url = f"{parsed.scheme}://{parsed.netloc}/api/klines"
+        params = {
+            "chainId": str(chain_id),
+            "contract": str(contract),
+            "interval": str(interval),
+            "limit": max(1, min(int(limit), 1000)),
+        }
+        if end_ms is not None:
+            params["endTime"] = int(end_ms)
+
+        session = fa.get_session()
+        res = session.get(url, params=params, timeout=30)
+        if res.status_code != 200:
+            if DEBUG:
+                print(f"[debug] Render /api/klines HTTP {res.status_code}", end=" ")
+            return None
+
+        data = res.json()
+        if not isinstance(data, list) or not data:
+            return None
+
+        rows = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ts = int(float(item.get("time")))
+                if ts < 100_000_000_000:
+                    ts *= 1000
+                open_p = float(item.get("open"))
+                high_p = float(item.get("high"))
+                low_p = float(item.get("low"))
+                close_p = float(item.get("close"))
+                volume = float(item.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+            rows.append([
+                ts,
+                str(open_p),
+                str(high_p),
+                str(low_p),
+                str(close_p),
+                str(volume),
+                ts,
+            ])
+
+        rows.sort(key=lambda row: int(row[0]))
+        return rows or None
+    except Exception as ex:
+        if DEBUG:
+            print(f"[debug] Render /api/klines exception: {ex}", end=" ")
+        return None
+
+
 CLAIM_WINDOW_MINUTES = 5
 """
 [MỚI] Độ dài cửa sổ tính "giá lúc claim" — CHỈ tính VWAP trong N phút đầu
