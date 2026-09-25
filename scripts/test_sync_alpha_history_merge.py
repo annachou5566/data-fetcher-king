@@ -60,13 +60,14 @@ class AlphaHistoryMergeTests(unittest.TestCase):
         b = event(event_time="2026-09-21T18:00:00+00:00", phase=2)
         self.assertNotEqual(mod.event_identity(a), mod.event_identity(b))
 
-    def test_existing_enrichment_is_preserved(self):
+    def test_existing_canonical_row_is_strictly_preserved(self):
         existing = event(
             project_name="",
             listing_price={"vwap": 1.23, "max_since": {"price": 2.0}},
             spot_listing_price={"vwap": 1.80},
             air_number=7,
             completed=True,
+            spot_listed=False,
         )
         incoming = event(
             project_name="Filled Name",
@@ -76,11 +77,8 @@ class AlphaHistoryMergeTests(unittest.TestCase):
             spot_listed=True,
         )
         merged = mod.merge_existing(existing, incoming)
-        self.assertEqual(merged["project_name"], "Filled Name")
-        self.assertEqual(merged["listing_price"], existing["listing_price"])
-        self.assertEqual(merged["spot_listing_price"], existing["spot_listing_price"])
-        self.assertEqual(merged["air_number"], 7)
-        self.assertTrue(merged["spot_listed"])
+        self.assertEqual(merged, existing)
+        self.assertIsNot(merged, existing)
 
     def test_all_accepts_completed_event_even_if_not_ended(self):
         existing = []
@@ -120,6 +118,27 @@ class AlphaHistoryMergeTests(unittest.TestCase):
         self.assertGreaterEqual(len(merged), len(existing))
         self.assertEqual(stats["existing"], 2)
         self.assertEqual(stats["added"], 1)
+
+    def test_near_duplicate_detection_flags_same_contract_with_nearby_time(self):
+        existing = [
+            event(
+                symbol="ABC",
+                contract_address="0x1234",
+                event_time="2026-09-20T18:00:00+00:00",
+            )
+        ]
+        added = [
+            event(
+                symbol="ABC",
+                contract_address="0x1234",
+                event_time="2026-09-20T19:00:00+00:00",
+                phase=2,
+            )
+        ]
+        self.assertEqual(
+            mod.report_near_duplicates("TEST", existing, added, hours=36),
+            1,
+        )
 
     def test_source_has_no_competition_dependency(self):
         source = MODULE_PATH.read_text(encoding="utf-8").lower()
