@@ -258,9 +258,12 @@ def _dedupe_existing(rows, label):
     return out, set(collisions)
 
 
-def merge_catalog(existing_rows, source_events):
+def merge_catalog(existing_rows, source_events, *, require_ended=False):
     """
-    Merge completed source events into an existing canonical collection.
+    Merge eligible source events into an existing canonical collection.
+
+    all.json eligibility: completed=true.
+    history.json eligibility: completed=true AND status=ended.
 
     Returns (merged, stats, added_rows). Existing rows are never removed.
     """
@@ -273,9 +276,14 @@ def merge_catalog(existing_rows, source_events):
     source_duplicate_keys = set()
     seen_source = set()
 
+    skipped_not_ended = 0
+
     for incoming in source_events:
         if not incoming.get("completed"):
             skipped_incomplete += 1
+            continue
+        if require_ended and incoming.get("status") != "ended":
+            skipped_not_ended += 1
             continue
 
         key = event_identity(incoming)
@@ -305,6 +313,7 @@ def merge_catalog(existing_rows, source_events):
         "matched": matched,
         "added": len(added_rows),
         "skipped_incomplete": skipped_incomplete,
+        "skipped_not_ended": skipped_not_ended,
         "existing_identity_collisions": len(existing_collisions),
         "source_duplicate_identities": len(source_duplicate_keys),
     }
@@ -419,9 +428,11 @@ def main():
         f"all_bytes={len(current_all_raw)} history_bytes={len(current_history_raw)}"
     )
 
-    merged_all, all_stats, added_all = merge_catalog(current_all, source_events)
+    merged_all, all_stats, added_all = merge_catalog(
+        current_all, source_events, require_ended=False
+    )
     merged_history, history_stats, added_history = merge_catalog(
-        current_history, source_events
+        current_history, source_events, require_ended=True
     )
 
     print("[plan] ALL " + " ".join(f"{k}={v}" for k, v in all_stats.items()))
