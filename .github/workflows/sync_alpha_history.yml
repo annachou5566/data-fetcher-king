@@ -37,7 +37,7 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 100
 
-      - name: Targeted price enrichment dry-run
+      - name: CP targeted price qualification dry-run
         env:
           MAX_CONCURRENT: "4"
           BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
@@ -48,4 +48,10 @@ jobs:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         working-directory: scripts
-        run: python enrich_alpha_history_gap.py --workers 4
+        run: |
+          python enrich_alpha_history_gap.py --workers 1 --cp-only --require-data | tee /tmp/cp-price-dry-run.log
+          grep -Fq "[result] CP 2026-09-04T07:00:00+00:00 PASS" /tmp/cp-price-dry-run.log
+          grep -Fq "[guard] non_target_rows_unchanged=PASS" /tmp/cp-price-dry-run.log
+          grep -Fq "[guard] other_11_targets_unchanged=PASS" /tmp/cp-price-dry-run.log
+          grep -Fq "[guard] target_field_scope=PASS" /tmp/cp-price-dry-run.log
+          grep -Fq "[mutation] NONE" /tmp/cp-price-dry-run.log
