@@ -321,6 +321,62 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
         return None
 
 
+
+ALPHA_AGG_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/agg-klines"
+
+
+def fetch_alpha_agg_klines_direct(chain_id, contract, interval, limit=1000, end_ms=None):
+    """
+    Bounded read-only call to Binance Alpha aggregate klines.
+
+    Repository evidence already established that this endpoint ignores
+    startTime for historical reads but honors endTime. Keep this helper
+    endTime-only so an unhealthy Render proxy cannot prevent a direct
+    Binance historical read from being attempted.
+    """
+    if not chain_id or not contract:
+        return None
+
+    params = {
+        "chainId": str(chain_id),
+        "interval": str(interval),
+        "limit": max(1, min(int(limit), 1000)),
+        "tokenAddress": str(contract),
+        "dataType": "aggregate",
+    }
+    if end_ms is not None:
+        params["endTime"] = int(end_ms)
+
+    try:
+        res = requests.get(
+            ALPHA_AGG_KLINES_URL,
+            params=params,
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+                "client-type": "web",
+            },
+        )
+        if res.status_code != 200:
+            if DEBUG:
+                print(f"[debug] direct Binance agg-klines HTTP {res.status_code}", end=" ")
+            return None
+
+        payload = res.json()
+        if payload.get("code") != "000000":
+            if DEBUG:
+                print(f"[debug] direct Binance agg-klines code={payload.get('code')}", end=" ")
+            return None
+
+        rows = (payload.get("data") or {}).get("klineInfos")
+        return rows if isinstance(rows, list) and rows else None
+    except Exception as ex:
+        if DEBUG:
+            print(f"[debug] direct Binance agg-klines exception: {ex}", end=" ")
+        return None
+
+
+
 def fetch_alpha_agg_klines_render(chain_id, contract, interval, limit=1000, end_ms=None):
     """
     Read-only historical Alpha DEX klines through our protected Render API.
@@ -597,12 +653,16 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             if API_AGG_KLINES else None
         )
 
-        # 1) Nến ngày — primary path qua protected Render /api/klines,
-        # nơi backend gọi Binance trực tiếp và hỗ trợ endTime. Chỉ fallback
-        # về API_AGG_KLINES cũ nếu Render route tạm không khả dụng.
-        k_day = fetch_alpha_agg_klines_render(
+        # 1) Nến ngày — gọi Binance trực tiếp trước. Render là fallback,
+        # không phải dependency bắt buộc: nếu Render 503 thì vẫn phải thử
+        # Binance thay vì để proxy chặn mất direct path.
+        k_day = fetch_alpha_agg_klines_direct(
             cid, clean_addr, "1d", limit=1000, end_ms=target_day_end_ms
         )
+        if not k_day:
+            k_day = fetch_alpha_agg_klines_render(
+                cid, clean_addr, "1d", limit=1000, end_ms=target_day_end_ms
+            )
         if not k_day and base:
             day_url = f"{base}&interval=1d&limit=1000"
             if target_day_end_ms is not None:
@@ -648,9 +708,13 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         try:
             day_start_ms = int(day_match[0])
             day_end_ms   = day_start_ms + 86400000 - 1
-            k_hourly = fetch_alpha_agg_klines_render(
+            k_hourly = fetch_alpha_agg_klines_direct(
                 cid, clean_addr, "5m", limit=1000, end_ms=day_end_ms
             )
+            if not k_hourly:
+                k_hourly = fetch_alpha_agg_klines_render(
+                    cid, clean_addr, "5m", limit=1000, end_ms=day_end_ms
+                )
             if not k_hourly and base:
                 hourly_url = f"{base}&interval=5m&limit=1000&endTime={day_end_ms}"
                 res_hourly = fa.fetch_smart(hourly_url, retries=1)
@@ -685,9 +749,13 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         # fail-soft về k_day chứ không làm mất listing_price đã qualify.
         k_max = k_day
         try:
-            recent_rows = fetch_alpha_agg_klines_render(
+            recent_rows = fetch_alpha_agg_klines_direct(
                 cid, clean_addr, "1d", limit=1000
             )
+            if not recent_rows:
+                recent_rows = fetch_alpha_agg_klines_render(
+                    cid, clean_addr, "1d", limit=1000
+                )
             if not recent_rows and base:
                 recent_url = f"{base}&interval=1d&limit=1000"
                 res_recent = fa.fetch_smart(recent_url, retries=1)
