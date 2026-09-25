@@ -25,7 +25,7 @@ import os
 import sys
 import urllib.request
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from botocore.config import Config
 
 try:
@@ -150,10 +150,21 @@ def map_event(source, prices, now=None):
 
     now = now or datetime.now(timezone.utc)
     try:
-        dt = datetime.strptime(
-            f"{date_str}T{time_str}:00", "%Y-%m-%dT%H:%M:%S"
-        ).replace(tzinfo=timezone.utc)
-        event_iso = dt.isoformat()
+        # data/airdrops.json stores its human-readable event clock in UTC+8.
+        # Canonical Alpha History stores UTC. Existing canonical rows prove
+        # this consistently (e.g. 17:00 source -> 09:00 UTC).
+        if _norm_text(source.get("time")):
+            source_tz = timezone(timedelta(hours=8))
+            dt_local = datetime.strptime(
+                f"{date_str}T{time_str}:00", "%Y-%m-%dT%H:%M:%S"
+            ).replace(tzinfo=source_tz)
+            dt = dt_local.astimezone(timezone.utc)
+            event_iso = dt.isoformat()
+        else:
+            # Do not invent a midnight timezone shift for date-only records.
+            event_iso = date_str
+            dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
         delta = (dt - now).total_seconds()
         if delta > 3600:
             status = "upcoming"
