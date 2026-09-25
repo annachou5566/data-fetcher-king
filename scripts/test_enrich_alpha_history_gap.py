@@ -111,6 +111,54 @@ class GapPriceTests(unittest.TestCase):
         self.assertNotIn("enrich_spot_listing_prices(", src)
 
 
+    def test_direct_agg_klines_forwards_end_time(self):
+        old_get = getattr(lp.requests, "get", None)
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+            def json(self):
+                return {
+                    "code": "000000",
+                    "data": {
+                        "klineInfos": [[
+                            1788508800000, "0.03", "0.04", "0.02",
+                            "0.031", "100", 1788595199999
+                        ]]
+                    },
+                }
+
+        def fake_get(url, params=None, timeout=None, headers=None):
+            captured["url"] = url
+            captured["params"] = dict(params or {})
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        try:
+            lp.requests.get = fake_get
+            rows = lp.fetch_alpha_agg_klines_direct(
+                "8453",
+                "0x001aad84c21a5cd4d696c56d44866e9703c43f77",
+                "1d",
+                limit=1000,
+                end_ms=1788566399999,
+            )
+            self.assertIsNotNone(rows)
+            self.assertEqual(captured["url"], lp.ALPHA_AGG_KLINES_URL)
+            self.assertEqual(captured["params"]["chainId"], "8453")
+            self.assertEqual(
+                captured["params"]["tokenAddress"],
+                "0x001aad84c21a5cd4d696c56d44866e9703c43f77",
+            )
+            self.assertEqual(captured["params"]["endTime"], 1788566399999)
+            self.assertNotIn("startTime", captured["params"])
+        finally:
+            if old_get is None:
+                if hasattr(lp.requests, "get"):
+                    delattr(lp.requests, "get")
+            else:
+                lp.requests.get = old_get
+
     def test_render_klines_route_forwards_end_time_and_normalizes_rows(self):
         old_proxy = getattr(lp.fa, "PROXY_WORKER_URL", None)
         old_get_session = getattr(lp.fa, "get_session", None)
