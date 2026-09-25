@@ -501,19 +501,17 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
 
     fail_reason = "không có chain nào để thử (chain_id/contract rỗng?)"
 
-    # [SỬA] BUG THẬT: không truyền startTime thì API (giống mọi API kiểu
-    # Binance klines) mặc định trả về N nến GẦN NHẤT TÍNH TỪ BÂY GIỜ, chứ
-    # không phải N nến kể từ ngày event. Với event càng cũ, cửa sổ trả về
-    # càng không chạm tới được ngày cần tìm — đúng như log thực tế cho
-    # thấy: token trả về đều đặn ~270-320 nến (không phải 1000 như đã xin)
-    # và luôn KHÔNG khớp ngày với các event quá 300 ngày trước. Neo
-    # startTime vào target_date_str (trừ đệm vài ngày) để cửa sổ trả về
-    # LUÔN bao trùm đúng ngày cần tìm, bất kể event cũ bao lâu.
+    # [SỬA 2026-09-25] API agg-klines nội bộ đã được kiểm chứng ở
+    # fetch_alpha.py: startTime có thể bị bỏ qua, còn endTime hoạt động ổn
+    # định để neo cửa sổ lịch sử/phân trang lùi. Vì vậy historical fallback
+    # TUYỆT ĐỐI không dùng startTime làm evidence gate nữa. Neo endTime vào
+    # cuối đúng ngày cần tìm để limit luôn phủ được ngày event, kể cả với
+    # interval nhỏ như 5m (limit=1000 chỉ ~3.47 ngày).
     try:
         target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
     except (ValueError, TypeError):
         target_ms = None
-    day_start_ms = target_ms - 5 * 86400000 if target_ms is not None else None  # đệm 5 ngày trước
+    target_day_end_ms = target_ms + 86400000 - 1 if target_ms is not None else None
 
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
@@ -521,8 +519,8 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
 
         # 1) Nến ngày — luôn cần để có open/close + xác định đúng ngày
         day_url = f"{base}&interval=1d&limit=1000"
-        if day_start_ms is not None:
-            day_url += f"&startTime={day_start_ms}"
+        if target_day_end_ms is not None:
+            day_url += f"&endTime={target_day_end_ms}"
         try:
             res_day = fa.fetch_smart(day_url, retries=2)
         except Exception as ex:
@@ -566,8 +564,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         try:
             day_start_ms = int(day_match[0])
             day_end_ms   = day_start_ms + 86400000 - 1
-            hour_start_ms = day_start_ms - 86400000  # đệm 1 ngày trước cho chắc
-            hourly_url = f"{base}&interval=5m&limit=1000&startTime={hour_start_ms}"
+            hourly_url = f"{base}&interval=5m&limit=1000&endTime={day_end_ms}"
             res_hourly = fa.fetch_smart(hourly_url, retries=1)
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
@@ -591,12 +588,29 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             pass
 
         ref_price = vwap if vwap is not None else close_price
+
+        # k_day ở trên được neo endTime vào ngày event để đảm bảo tìm đúng
+        # historical candle, nên không thể đồng thời đại diện cho giai đoạn
+        # SAU event tới hiện tại. Lấy thêm một bounded daily window gần nhất
+        # để tính max_since. Với event gần đây (như CP 2026-09-04) cửa sổ
+        # mặc định chứa toàn bộ giai đoạn hold; nếu read này lỗi thì vẫn
+        # fail-soft về k_day chứ không làm mất listing_price đã qualify.
+        k_max = k_day
+        try:
+            recent_url = f"{base}&interval=1d&limit=1000"
+            res_recent = fa.fetch_smart(recent_url, retries=1)
+            recent_rows = (res_recent or {}).get("data", {}).get("klineInfos") if res_recent else None
+            if recent_rows:
+                k_max = recent_rows
+        except Exception:
+            pass
+
         return {
-            "vwap":  vwap if vwap is not None else close_price,  # fallback: dùng close nếu không có 1h data
+            "vwap":  vwap if vwap is not None else close_price,
             "open":  open_price,
             "close": close_price,
             "date":  actual_date,
-            "max_since": _max_price_since(k_day, actual_date, ref_price=ref_price),
+            "max_since": _max_price_since(k_max, actual_date, ref_price=ref_price),
         }
 
     _fail_reason_local.value = f"[official: {official_note}] {fail_reason}"
