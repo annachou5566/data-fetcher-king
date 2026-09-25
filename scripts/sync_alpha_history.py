@@ -372,6 +372,44 @@ def report_near_duplicates(label, existing_rows, added_rows, hours=36):
     )
     return suspicious
 
+
+def max_event_dt(rows):
+    values = [_parse_event_dt(row) for row in rows]
+    values = [value for value in values if value is not None]
+    return max(values) if values else None
+
+
+def source_after_history_seam(source_events, current_history):
+    """
+    Prospective gap-only import. Historical canonical rows are intentionally
+    frozen because legacy imports used mixed clock conventions. Only catalog
+    events strictly newer than the current canonical History max are eligible.
+    """
+    seam = max_event_dt(current_history)
+    if seam is None:
+        raise RuntimeError("fatal: cannot determine current History seam")
+
+    eligible = []
+    skipped_old = 0
+    skipped_unparseable = 0
+    for event in source_events:
+        dt = _parse_event_dt(event)
+        if dt is None:
+            skipped_unparseable += 1
+            continue
+        if dt <= seam:
+            skipped_old += 1
+            continue
+        eligible.append(event)
+
+    print(f"[gap] current_history_max={seam.isoformat()}")
+    print(
+        f"[gap] source_after_seam={len(eligible)} "
+        f"source_at_or_before_seam={skipped_old} "
+        f"source_unparseable={skipped_unparseable}"
+    )
+    return eligible, seam
+
 def get_r2():
     required = (
         "R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID",
@@ -490,11 +528,15 @@ def main():
             "repair canonical ownership before merge"
         )
 
+    gap_events, seam = source_after_history_seam(
+        source_events, current_history
+    )
+
     merged_all, all_stats, added_all = merge_catalog(
-        current_all, source_events, require_ended=False
+        current_all, gap_events, require_ended=False
     )
     merged_history, history_stats, added_history = merge_catalog(
-        current_history, source_events, require_ended=True
+        current_history, gap_events, require_ended=True
     )
 
     print("[plan] ALL " + " ".join(f"{k}={v}" for k, v in all_stats.items()))
