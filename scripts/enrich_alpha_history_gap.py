@@ -253,8 +253,11 @@ def main():
         print("[mutation] NONE")
         return
 
-    if filled == 0:
-        raise RuntimeError("refusing apply: zero targets have listing_price")
+    if filled != len(APPLY_TARGETS):
+        raise RuntimeError(
+            f"refusing apply: qualified target count changed "
+            f"filled={filled} expected={len(APPLY_TARGETS)}"
+        )
 
     lp.upload_json(r2, ALL_KEY, all_rows)
     lp.upload_json(r2, HISTORY_KEY, history_rows)
