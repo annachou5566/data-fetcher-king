@@ -139,6 +139,35 @@ class AlphaHistoryMergeTests(unittest.TestCase):
         self.assertEqual(mapped["event_time"], "2026-07-10T09:00:00+00:00")
         self.assertEqual(mapped["status"], "ended")
 
+    def test_gap_only_filters_out_legacy_rows_at_or_before_history_seam(self):
+        history = [
+            event(
+                symbol="DOS",
+                contract_address="0xdos",
+                event_time="2026-08-10T09:00:00+00:00",
+            )
+        ]
+        source_events = [
+            event(
+                symbol="OLD",
+                contract_address="0xold",
+                event_time="2026-08-10T08:59:00+00:00",
+            ),
+            event(
+                symbol="SAME",
+                contract_address="0xsame",
+                event_time="2026-08-10T09:00:00+00:00",
+            ),
+            event(
+                symbol="NEW",
+                contract_address="0xnew",
+                event_time="2026-08-14T13:00:00+00:00",
+            ),
+        ]
+        eligible, seam = mod.source_after_history_seam(source_events, history)
+        self.assertEqual(seam.isoformat(), "2026-08-10T09:00:00+00:00")
+        self.assertEqual([x["symbol"] for x in eligible], ["NEW"])
+
     def test_near_duplicate_detection_flags_same_contract_with_nearby_time(self):
         existing = [
             event(
