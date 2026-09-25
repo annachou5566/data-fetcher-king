@@ -1,19 +1,16 @@
-name: Alpha History Targeted Price Apply One Shot
+name: Sync Alpha History Dry Run
 
 on:
   push:
     branches:
       - chatgpt/alpha-history-merge-backfill-2026-09-25
-
-concurrency:
-  group: sync-listing-prices
-  cancel-in-progress: false
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  apply:
+  dry-run:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -32,33 +29,15 @@ jobs:
           python -m unittest scripts/test_sync_alpha_history_merge.py
           python -m unittest scripts/test_enrich_alpha_history_gap.py
 
-      - name: Exact pre-apply targeted price guard
+      - name: R2 merge dry-run
         env:
-          MAX_CONCURRENT: "4"
-          BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
-          PROXY_WORKER_URL: ${{ secrets.PROXY_WORKER_URL }}
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        working-directory: scripts
-        run: |
-          python enrich_alpha_history_gap.py --workers 4 | tee /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] targets_all=12 targets_history=12" /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] old_all_rows=431 old_history_rows=431" /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] old_all_digest=16f9795ff0c56478209c8a7f8e9aa76fe903c7851c749b77212e970cb73de0fd" /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] old_history_digest=16f9795ff0c56478209c8a7f8e9aa76fe903c7851c749b77212e970cb73de0fd" /tmp/alpha-history-price-plan.log
-          grep -Fq "[skip] CP excluded_by_owner_approval" /tmp/alpha-history-price-plan.log
-          grep -Fq "[result] CP 2026-09-04T07:00:00+00:00 EXCLUDED_NO_DATA" /tmp/alpha-history-price-plan.log
-          grep -Fq "[plan] target_total=12 apply_targets=11 enriched_or_existing=11 no_data=0" /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] non_target_rows_unchanged=PASS" /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] target_field_scope=PASS" /tmp/alpha-history-price-plan.log
-          grep -Fq "[guard] cp_untouched=PASS" /tmp/alpha-history-price-plan.log
-          test "$(grep -c '^\[result\].* PASS ' /tmp/alpha-history-price-plan.log)" -eq 11
-          grep -Fq "[mutation] NONE" /tmp/alpha-history-price-plan.log
+        run: python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 100
 
-      - name: Apply exact approved 11 target price fields
+      - name: Targeted price enrichment dry-run
         env:
           MAX_CONCURRENT: "4"
           BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
@@ -69,11 +48,4 @@ jobs:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         working-directory: scripts
-        run: |
-          python enrich_alpha_history_gap.py --workers 4 --apply | tee /tmp/alpha-history-price-apply.log
-          grep -Fq "[postcheck] all=443 history=443" /tmp/alpha-history-price-apply.log
-          grep -Fq "[postcheck] approved_target_listing_price=11/11" /tmp/alpha-history-price-apply.log
-          grep -Fq "[postcheck] cp_untouched=PASS" /tmp/alpha-history-price-apply.log
-          grep -Fq "[postcheck] non_target_rows_unchanged=PASS" /tmp/alpha-history-price-apply.log
-          grep -Fq "[mutation] TARGETED_11_PRICE_FIELDS" /tmp/alpha-history-price-apply.log
-          grep -Fq "[done] targeted Alpha History price enrichment PASS" /tmp/alpha-history-price-apply.log
+        run: python enrich_alpha_history_gap.py --workers 4
