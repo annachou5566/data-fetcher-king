@@ -53,6 +53,19 @@ def target_row():
     }
 
 
+def all_target_rows():
+    rows = []
+    for symbol, event_time, contract in sorted(gap.TARGETS):
+        rows.append({
+            "symbol": symbol,
+            "event_time": event_time,
+            "contract_address": contract,
+            "project_name": symbol,
+            "listing_price": None,
+        })
+    return rows
+
+
 class GapPriceTests(unittest.TestCase):
     def test_target_set_is_exactly_12(self):
         self.assertEqual(len(gap.TARGETS), 12)
@@ -74,12 +87,12 @@ class GapPriceTests(unittest.TestCase):
         self.assertTrue(changed_keys.issubset(set(gap.ALLOWED_TARGET_FIELDS)))
 
     def test_non_target_guard_detects_change(self):
-        t = target_row()
+        targets = all_target_rows()
         other = {"symbol": "OLD", "event_time": "2026-01-01T00:00:00+00:00", "contract_address": "0xold", "x": 1}
-        before = [copy.deepcopy(t), copy.deepcopy(other)]
-        after = [copy.deepcopy(t), copy.deepcopy(other)]
+        before = [copy.deepcopy(x) for x in targets] + [copy.deepcopy(other)]
+        after = [copy.deepcopy(x) for x in targets] + [copy.deepcopy(other)]
         self.assertTrue(gap.verify_non_target_unchanged(before, after))
-        after[1]["x"] = 2
+        after[-1]["x"] = 2
         self.assertFalse(gap.verify_non_target_unchanged(before, after))
 
     def test_target_scope_rejects_unapproved_field_change(self):
