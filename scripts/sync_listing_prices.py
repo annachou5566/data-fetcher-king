@@ -321,6 +321,80 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
         return None
 
 
+def fetch_alpha_agg_klines_render(chain_id, contract, interval, limit=1000, end_ms=None):
+    """
+    Read-only historical Alpha DEX klines through our protected Render API.
+
+    alpha-realtime-bot owns /api/klines and calls Binance agg-klines directly
+    from Render. The route preserves Binance's verified endTime-only historical
+    semantics and avoids relying on GitHub-hosted direct/proxy access to the
+    internal endpoint.
+
+    Returns Binance-style rows:
+      [open_time_ms, open, high, low, close, volume, close_time_ms]
+    or None when unavailable.
+    """
+    if not fa.PROXY_WORKER_URL or not chain_id or not contract:
+        return None
+
+    try:
+        parsed = urllib.parse.urlparse(fa.PROXY_WORKER_URL)
+        if not parsed.scheme or not parsed.netloc:
+            return None
+        url = f"{parsed.scheme}://{parsed.netloc}/api/klines"
+        params = {
+            "chainId": str(chain_id),
+            "contract": str(contract),
+            "interval": str(interval),
+            "limit": max(1, min(int(limit), 1000)),
+        }
+        if end_ms is not None:
+            params["endTime"] = int(end_ms)
+
+        session = fa.get_session()
+        res = session.get(url, params=params, timeout=30)
+        if res.status_code != 200:
+            if DEBUG:
+                print(f"[debug] Render /api/klines HTTP {res.status_code}", end=" ")
+            return None
+
+        data = res.json()
+        if not isinstance(data, list) or not data:
+            return None
+
+        rows = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ts = int(float(item.get("time")))
+                if ts < 100_000_000_000:
+                    ts *= 1000
+                open_p = float(item.get("open"))
+                high_p = float(item.get("high"))
+                low_p = float(item.get("low"))
+                close_p = float(item.get("close"))
+                volume = float(item.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+            rows.append([
+                ts,
+                str(open_p),
+                str(high_p),
+                str(low_p),
+                str(close_p),
+                str(volume),
+                ts,
+            ])
+
+        rows.sort(key=lambda row: int(row[0]))
+        return rows or None
+    except Exception as ex:
+        if DEBUG:
+            print(f"[debug] Render /api/klines exception: {ex}", end=" ")
+        return None
+
+
 CLAIM_WINDOW_MINUTES = 5
 """
 [MỚI] Độ dài cửa sổ tính "giá lúc claim" — CHỈ tính VWAP trong N phút đầu
@@ -485,8 +559,11 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             official_note = f"API chính thức lỗi: {ex}"
             if DEBUG: print(f"[debug] {official_note}", end=" ")
 
-    if not API_AGG_KLINES:
-        _fail_reason_local.value = f"[official: {official_note}] API_AGG_KLINES secret rỗng/chưa truyền vào script"
+    if not API_AGG_KLINES and not fa.PROXY_WORKER_URL:
+        _fail_reason_local.value = (
+            f"[official: {official_note}] không có Render API base "
+            "và API_AGG_KLINES secret cũng rỗng"
+        )
         if DEBUG: print(f"[debug] {_fail_reason_local.value}", end=" ")
         return None
     if not chain_id or not contract:
@@ -515,28 +592,35 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
 
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
-        base = f"{API_AGG_KLINES}?chainId={cid}&tokenAddress={clean_addr}&dataType=aggregate"
+        base = (
+            f"{API_AGG_KLINES}?chainId={cid}&tokenAddress={clean_addr}&dataType=aggregate"
+            if API_AGG_KLINES else None
+        )
 
-        # 1) Nến ngày — luôn cần để có open/close + xác định đúng ngày
-        day_url = f"{base}&interval=1d&limit=1000"
-        if target_day_end_ms is not None:
-            day_url += f"&endTime={target_day_end_ms}"
-        try:
-            res_day = fa.fetch_smart(day_url, retries=2)
-        except Exception as ex:
-            fail_reason = f"fetch_smart exception (1d, chain={cid}): {ex}"
-            if DEBUG: print(f"[debug] {fail_reason}", end=" ")
-            res_day = None
+        # 1) Nến ngày — primary path qua protected Render /api/klines,
+        # nơi backend gọi Binance trực tiếp và hỗ trợ endTime. Chỉ fallback
+        # về API_AGG_KLINES cũ nếu Render route tạm không khả dụng.
+        k_day = fetch_alpha_agg_klines_render(
+            cid, clean_addr, "1d", limit=1000, end_ms=target_day_end_ms
+        )
+        if not k_day and base:
+            day_url = f"{base}&interval=1d&limit=1000"
+            if target_day_end_ms is not None:
+                day_url += f"&endTime={target_day_end_ms}"
+            try:
+                res_day = fa.fetch_smart(day_url, retries=2)
+                k_day = (res_day or {}).get("data", {}).get("klineInfos") if res_day else None
+            except Exception as ex:
+                fail_reason = f"fetch_smart exception (1d, chain={cid}): {ex}"
+                if DEBUG: print(f"[debug] {fail_reason}", end=" ")
+                k_day = None
 
-        if res_day is None:
-            fail_reason = f"API aggregator không trả dữ liệu (1d, chain={cid}) — proxy lỗi, hoặc token/contract không được API nhận diện"
-            if DEBUG: print(f"[debug] fetch_smart trả None (1d, chain={cid}) — proxy/secret/network lỗi", end=" ")
-            continue
-
-        k_day = (res_day.get("data") or {}).get("klineInfos")
         if not k_day:
-            fail_reason = f"API trả về NHƯNG không có klineInfos (chain={cid}) — token/contract này API aggregator không có data (dù token có thể vẫn đang sống trên Alpha)"
-            if DEBUG: print(f"[debug] res_day có trả về nhưng không có klineInfos (chain={cid}). keys={list(res_day.keys())}", end=" ")
+            fail_reason = (
+                f"Render /api/klines và API aggregator đều không trả dữ liệu "
+                f"(1d, chain={cid})"
+            )
+            if DEBUG: print(f"[debug] {fail_reason}", end=" ")
             continue
 
         day_match = _find_day_candles_1d(k_day, target_date_str)
@@ -564,9 +648,13 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         try:
             day_start_ms = int(day_match[0])
             day_end_ms   = day_start_ms + 86400000 - 1
-            hourly_url = f"{base}&interval=5m&limit=1000&endTime={day_end_ms}"
-            res_hourly = fa.fetch_smart(hourly_url, retries=1)
-            k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
+            k_hourly = fetch_alpha_agg_klines_render(
+                cid, clean_addr, "5m", limit=1000, end_ms=day_end_ms
+            )
+            if not k_hourly and base:
+                hourly_url = f"{base}&interval=5m&limit=1000&endTime={day_end_ms}"
+                res_hourly = fa.fetch_smart(hourly_url, retries=1)
+                k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
                 first_trade_ms = None
                 for k in k_hourly:
@@ -597,9 +685,13 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         # fail-soft về k_day chứ không làm mất listing_price đã qualify.
         k_max = k_day
         try:
-            recent_url = f"{base}&interval=1d&limit=1000"
-            res_recent = fa.fetch_smart(recent_url, retries=1)
-            recent_rows = (res_recent or {}).get("data", {}).get("klineInfos") if res_recent else None
+            recent_rows = fetch_alpha_agg_klines_render(
+                cid, clean_addr, "1d", limit=1000
+            )
+            if not recent_rows and base:
+                recent_url = f"{base}&interval=1d&limit=1000"
+                res_recent = fa.fetch_smart(recent_url, retries=1)
+                recent_rows = (res_recent or {}).get("data", {}).get("klineInfos") if res_recent else None
             if recent_rows:
                 k_max = recent_rows
         except Exception:
