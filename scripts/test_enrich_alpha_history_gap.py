@@ -111,5 +111,65 @@ class GapPriceTests(unittest.TestCase):
         self.assertNotIn("enrich_spot_listing_prices(", src)
 
 
+    def test_agg_historical_fallback_anchors_with_end_time(self):
+        old_api = lp.API_AGG_KLINES
+        old_fetch = getattr(lp.fa, "fetch_smart", None)
+        old_safe = getattr(lp.fa, "safe_float", None)
+        old_official = lp.fetch_alpha_trade_klines_official
+        seen = []
+        try:
+            lp.API_AGG_KLINES = "https://example.invalid/agg-klines"
+            lp.fetch_alpha_trade_klines_official = lambda *a, **k: None
+            lp.fa.safe_float = lambda value: float(value or 0)
+
+            day_ms = int(lp.datetime.strptime("2026-09-04", "%Y-%m-%d").timestamp() * 1000)
+            trade_ms = day_ms + 7 * 3600 * 1000
+
+            def fake_fetch(url, retries=1):
+                seen.append(url)
+                if "interval=5m" in url:
+                    return {"data": {"klineInfos": [
+                        [trade_ms, "0.030", "0.032", "0.029", "0.031", "100", trade_ms + 299999],
+                    ]}}
+                if "interval=1d" in url and "endTime=" in url:
+                    return {"data": {"klineInfos": [
+                        [day_ms, "0.030", "0.038", "0.029", "0.031", "1000", day_ms + 86399999],
+                    ]}}
+                if "interval=1d" in url:
+                    return {"data": {"klineInfos": [
+                        [day_ms, "0.030", "0.038", "0.029", "0.031", "1000", day_ms + 86399999],
+                        [day_ms + 86400000, "0.031", "0.050", "0.030", "0.045", "1200", day_ms + 2 * 86400000 - 1],
+                    ]}}
+                return None
+
+            lp.fa.fetch_smart = fake_fetch
+            result = lp.fetch_listing_price(
+                "8453",
+                "0x001aad84c21a5cd4d696c56d44866e9703c43f77",
+                "2026-09-04",
+                alpha_id="ALPHA_TEST",
+                alpha_listing_time_ms=trade_ms,
+            )
+            self.assertIsNotNone(result)
+            self.assertGreater(result["vwap"], 0)
+            self.assertTrue(any("interval=1d" in u and "endTime=" in u for u in seen))
+            self.assertTrue(any("interval=5m" in u and "endTime=" in u for u in seen))
+            self.assertFalse(any("startTime=" in u for u in seen if "example.invalid/agg-klines" in u))
+            self.assertEqual(result["max_since"]["price"], 0.045)
+        finally:
+            lp.API_AGG_KLINES = old_api
+            lp.fetch_alpha_trade_klines_official = old_official
+            if old_fetch is None:
+                if hasattr(lp.fa, "fetch_smart"):
+                    delattr(lp.fa, "fetch_smart")
+            else:
+                lp.fa.fetch_smart = old_fetch
+            if old_safe is None:
+                if hasattr(lp.fa, "safe_float"):
+                    delattr(lp.fa, "safe_float")
+            else:
+                lp.fa.safe_float = old_safe
+
+
 if __name__ == "__main__":
     unittest.main()
