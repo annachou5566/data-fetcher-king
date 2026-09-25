@@ -452,6 +452,45 @@ def fetch_alpha_agg_klines_render(chain_id, contract, interval, limit=1000, end_
 
 
 CLAIM_WINDOW_MINUTES = 5
+
+def _fetch_internal_klines_with_direct_fallback(url, proxy_retries=1):
+    """
+    Narrow listing-price helper.
+
+    fetch_alpha.fetch_smart() is intentionally proxy-first, but its 429/503
+    branch retries the proxy immediately after sleeping and can therefore skip
+    the documented direct-Binance fallback. For historical price qualification
+    we need one bounded direct attempt when the proxy path returns None.
+
+    This helper does NOT print the URL (it may contain an internal endpoint),
+    does not mutate shared proxy state, and performs at most one direct request
+    after the bounded proxy attempt.
+    """
+    try:
+        data = fa.fetch_smart(url, retries=max(1, int(proxy_retries)))
+        if data:
+            return data
+    except Exception:
+        pass
+
+    try:
+        session = fa.get_session()
+        res = session.get(url, timeout=15)
+        if res.status_code != 200:
+            if DEBUG:
+                print(f"[debug] direct agg-klines HTTP {res.status_code}", end=" ")
+            return None
+        payload = res.json()
+        if isinstance(payload, dict) and payload.get("code") == "000000":
+            return payload
+        if DEBUG:
+            print("[debug] direct agg-klines payload rejected", end=" ")
+    except Exception as ex:
+        if DEBUG:
+            print(f"[debug] direct agg-klines exception: {ex}", end=" ")
+    return None
+
+
 """
 [MỚI] Độ dài cửa sổ tính "giá lúc claim" — CHỈ tính VWAP trong N phút đầu
 tiên có giao dịch thật, KHÔNG PHẢI cả ngày (24h) như trước đây.
@@ -668,7 +707,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             if target_day_end_ms is not None:
                 day_url += f"&endTime={target_day_end_ms}"
             try:
-                res_day = fa.fetch_smart(day_url, retries=2)
+                res_day = _fetch_internal_klines_with_direct_fallback(day_url, proxy_retries=1)
                 k_day = (res_day or {}).get("data", {}).get("klineInfos") if res_day else None
             except Exception as ex:
                 fail_reason = f"fetch_smart exception (1d, chain={cid}): {ex}"
@@ -717,7 +756,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                 )
             if not k_hourly and base:
                 hourly_url = f"{base}&interval=5m&limit=1000&endTime={day_end_ms}"
-                res_hourly = fa.fetch_smart(hourly_url, retries=1)
+                res_hourly = _fetch_internal_klines_with_direct_fallback(hourly_url, proxy_retries=1)
                 k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
                 first_trade_ms = None
@@ -758,7 +797,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                 )
             if not recent_rows and base:
                 recent_url = f"{base}&interval=1d&limit=1000"
-                res_recent = fa.fetch_smart(recent_url, retries=1)
+                res_recent = _fetch_internal_klines_with_direct_fallback(recent_url, proxy_retries=1)
                 recent_rows = (res_recent or {}).get("data", {}).get("klineInfos") if res_recent else None
             if recent_rows:
                 k_max = recent_rows
