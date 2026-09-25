@@ -119,6 +119,26 @@ class AlphaHistoryMergeTests(unittest.TestCase):
         self.assertEqual(stats["existing"], 2)
         self.assertEqual(stats["added"], 1)
 
+    def test_catalog_clock_is_utc_plus_8_and_normalized_to_utc(self):
+        source = {
+            "token": "IRYS",
+            "name": "IRYS",
+            "date": "2026-07-10",
+            "time": "17:00",
+            "type": "grab",
+            "phase": 1,
+            "completed": True,
+            "contract_address": "0x1234",
+            "chain_id": "56",
+        }
+        mapped = mod.map_event(
+            source,
+            {},
+            now=datetime(2026, 9, 25, tzinfo=timezone.utc),
+        )
+        self.assertEqual(mapped["event_time"], "2026-07-10T09:00:00+00:00")
+        self.assertEqual(mapped["status"], "ended")
+
     def test_near_duplicate_detection_flags_same_contract_with_nearby_time(self):
         existing = [
             event(
