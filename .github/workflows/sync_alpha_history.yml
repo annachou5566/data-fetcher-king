@@ -1,13 +1,16 @@
-name: Sync Alpha History
+name: Sync Alpha History Dry Run
 
 on:
+  push:
+    branches:
+      - chatgpt/alpha-history-merge-backfill-2026-09-25
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  seed:
+  dry-run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -21,10 +24,13 @@ jobs:
       - name: Install dependencies
         run: pip install boto3 botocore
 
-      - name: Run sync script
+      - name: Unit tests
+        run: python -m unittest scripts/test_sync_alpha_history_merge.py
+
+      - name: R2 merge dry-run
         env:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python scripts/sync_alpha_history.py --input data/airdrops.json
+        run: python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 100
