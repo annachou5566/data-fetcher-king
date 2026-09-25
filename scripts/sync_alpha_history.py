@@ -428,6 +428,16 @@ def main():
         f"all_bytes={len(current_all_raw)} history_bytes={len(current_history_raw)}"
     )
 
+    current_all_keys = {event_identity(row) for row in current_all}
+    current_history_keys = {event_identity(row) for row in current_history}
+    missing_history_keys = current_history_keys - current_all_keys
+    print(f"[guard] history_identities_missing_from_all={len(missing_history_keys)}")
+    if missing_history_keys:
+        raise RuntimeError(
+            "fatal: current history contains identities absent from all.json; "
+            "repair canonical ownership before merge"
+        )
+
     merged_all, all_stats, added_all = merge_catalog(
         current_all, source_events, require_ended=False
     )
