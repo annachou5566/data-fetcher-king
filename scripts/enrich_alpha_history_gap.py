@@ -41,6 +41,9 @@ TARGETS = {
     ("CYS", "2026-09-23T10:00:00+00:00", "0x0c69199c1562233640e0db5ce2c399a88eb507c7"),
 }
 
+CP_KEY = ("CP", "2026-09-04T07:00:00+00:00", "0x001aad84c21a5cd4d696c56d44866e9703c43f77")
+APPLY_TARGETS = TARGETS - {CP_KEY}
+
 ALLOWED_TARGET_FIELDS = (
     "listing_price",
     "ath_since_listing_price",
@@ -171,9 +174,17 @@ def main():
     first_ids = lp._first_occurrence_ids(all_rows)
     history_by_key = {target_key(row): row for row in history_targets}
 
+    cp_all = next(row for row in all_targets if target_key(row) == CP_KEY)
+    cp_history = history_by_key[CP_KEY]
+    if cp_all.get("listing_price") or cp_history.get("listing_price"):
+        raise RuntimeError("CP guard failed: CP must remain NO_DATA for this approved apply")
+
     work = []
     for row in all_targets:
         key = target_key(row)
+        if key == CP_KEY:
+            print("[skip] CP excluded_by_owner_approval")
+            continue
         if row.get("listing_price"):
             print(f"[skip] {key[0]} {key[1]} already_enriched")
             continue
@@ -203,6 +214,9 @@ def main():
     failed = 0
     for row in all_targets:
         key = target_key(row)
+        if key == CP_KEY:
+            print(f"[result] {key[0]} {key[1]} EXCLUDED_NO_DATA")
+            continue
         if row.get("listing_price"):
             result = row.get("listing_price")
         else:
@@ -229,9 +243,10 @@ def main():
     verify_target_field_scope(all_before, all_rows)
     verify_target_field_scope(history_before, history_rows)
 
-    print(f"[plan] target_total=12 enriched_or_existing={filled} no_data={failed}")
+    print(f"[plan] target_total=12 apply_targets=11 enriched_or_existing={filled} no_data={failed}")
     print("[guard] non_target_rows_unchanged=PASS")
     print("[guard] target_field_scope=PASS")
+    print("[guard] cp_untouched=PASS")
 
     if not args.apply:
         print("[mode] DRY_RUN")
@@ -254,11 +269,18 @@ def main():
     verify_target_field_scope(history_before, verify_history)
 
     verify_targets, _ = split_targets(verify_history)
-    verify_filled = sum(1 for row in verify_targets if row.get("listing_price"))
+    verify_map = {target_key(row): row for row in verify_targets}
+    verify_filled = sum(
+        1 for key, row in verify_map.items()
+        if key in APPLY_TARGETS and row.get("listing_price")
+    )
+    if verify_map[CP_KEY].get("listing_price"):
+        raise RuntimeError("postcheck: CP was modified despite owner exclusion")
     print(f"[postcheck] all={len(verify_all)} history={len(verify_history)}")
-    print(f"[postcheck] target_listing_price={verify_filled}/12")
+    print(f"[postcheck] approved_target_listing_price={verify_filled}/11")
+    print("[postcheck] cp_untouched=PASS")
     print("[postcheck] non_target_rows_unchanged=PASS")
-    print("[mutation] TARGETED_12_PRICE_FIELDS")
+    print("[mutation] TARGETED_11_PRICE_FIELDS")
     print("[done] targeted Alpha History price enrichment PASS")
 
 
