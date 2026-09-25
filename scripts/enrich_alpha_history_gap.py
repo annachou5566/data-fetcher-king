@@ -137,6 +137,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--cp-only",
+        action="store_true",
+        help="Probe/apply only the exact CP target; all other rows must stay unchanged.",
+    )
+    parser.add_argument(
+        "--require-data",
+        action="store_true",
+        help="Fail closed when the selected target has no qualified price result.",
+    )
     args = parser.parse_args()
 
     r2 = lp.get_r2()
@@ -176,8 +186,96 @@ def main():
 
     cp_all = next(row for row in all_targets if target_key(row) == CP_KEY)
     cp_history = history_by_key[CP_KEY]
+
+    if args.cp_only:
+        # CP-specific repair lane. The previous 11 qualified rows and all
+        # 431 legacy rows are immutable in this mode.
+        other_target_before = [
+            copy.deepcopy(row) for row in all_targets
+            if target_key(row) != CP_KEY
+        ]
+        if cp_all.get("listing_price") or cp_history.get("listing_price"):
+            print("[result] CP already_enriched")
+            print("[mode] DRY_RUN" if not args.apply else "[mode] APPLY_NOOP")
+            print("[mutation] NONE")
+            return
+
+        probe = copy.deepcopy(cp_all)
+        _event, cp_result = lp._process_one(
+            probe, 1, 1, is_first_occurrence=id(cp_all) in first_ids
+        )
+        if not cp_result:
+            print(f"[result] {CP_KEY[0]} {CP_KEY[1]} NO_DATA")
+            print("[guard] non_target_rows_unchanged=PASS")
+            print("[guard] other_11_targets_unchanged=PASS")
+            print("[guard] target_field_scope=PASS")
+            print("[mutation] NONE")
+            if args.require_data or args.apply:
+                raise RuntimeError("CP qualified price data unavailable")
+            return
+
+        apply_price_result(cp_all, cp_result)
+        apply_price_result(cp_history, cp_result)
+
+        if not verify_non_target_unchanged(all_before, all_rows):
+            raise RuntimeError("CP dry-run changed non-target all.json rows")
+        if not verify_non_target_unchanged(history_before, history_rows):
+            raise RuntimeError("CP dry-run changed non-target history.json rows")
+        verify_target_field_scope(all_before, all_rows)
+        verify_target_field_scope(history_before, history_rows)
+
+        other_target_after = [
+            row for row in all_targets
+            if target_key(row) != CP_KEY
+        ]
+        if canonical_digest(other_target_before) != canonical_digest(other_target_after):
+            raise RuntimeError("CP repair changed one of the other 11 target rows")
+
+        vwap = cp_result.get("vwap") if isinstance(cp_result, dict) else None
+        peak = (cp_result.get("max_since") or {}).get("price") if isinstance(cp_result, dict) else None
+        print(f"[result] CP {CP_KEY[1]} PASS vwap={vwap} peak={peak}")
+        print("[guard] non_target_rows_unchanged=PASS")
+        print("[guard] other_11_targets_unchanged=PASS")
+        print("[guard] target_field_scope=PASS")
+
+        if not args.apply:
+            print("[mode] DRY_RUN")
+            print("[mutation] NONE")
+            return
+
+        lp.upload_json(r2, ALL_KEY, all_rows)
+        lp.upload_json(r2, HISTORY_KEY, history_rows)
+
+        verify_all = load_required(r2, ALL_KEY)
+        verify_history = load_required(r2, HISTORY_KEY)
+        if not verify_non_target_unchanged(all_before, verify_all):
+            raise RuntimeError("postcheck: CP apply changed non-target all.json rows")
+        if not verify_non_target_unchanged(history_before, verify_history):
+            raise RuntimeError("postcheck: CP apply changed non-target history.json rows")
+        verify_target_field_scope(all_before, verify_all)
+        verify_target_field_scope(history_before, verify_history)
+
+        verify_targets, _ = split_targets(verify_history)
+        verify_map = {target_key(row): row for row in verify_targets}
+        if not verify_map[CP_KEY].get("listing_price"):
+            raise RuntimeError("postcheck: CP listing_price missing after apply")
+        verify_other_targets = [
+            row for row in verify_targets
+            if target_key(row) != CP_KEY
+        ]
+        if canonical_digest(other_target_before) != canonical_digest(verify_other_targets):
+            raise RuntimeError("postcheck: one of the other 11 target rows changed")
+
+        print(f"[postcheck] all={len(verify_all)} history={len(verify_history)}")
+        print("[postcheck] cp_listing_price=1/1")
+        print("[postcheck] other_11_targets_unchanged=PASS")
+        print("[postcheck] non_target_rows_unchanged=PASS")
+        print("[mutation] TARGETED_CP_PRICE_FIELDS")
+        print("[done] targeted CP Alpha History price enrichment PASS")
+        return
+
     if cp_all.get("listing_price") or cp_history.get("listing_price"):
-        raise RuntimeError("CP guard failed: CP must remain NO_DATA for this approved apply")
+        raise RuntimeError("CP guard failed: CP must remain NO_DATA for the legacy 11-row apply lane")
 
     work = []
     for row in all_targets:
