@@ -12,7 +12,7 @@ permissions:
 jobs:
   dry-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +22,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install boto3 botocore
+        run: pip install -r requirements.txt
 
       - name: Unit tests
-        run: python -m unittest scripts/test_sync_alpha_history_merge.py
+        run: |
+          python -m unittest scripts/test_sync_alpha_history_merge.py
+          python -m unittest scripts/test_enrich_alpha_history_gap.py
 
       - name: R2 merge dry-run
         env:
@@ -34,3 +36,16 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: python scripts/sync_alpha_history.py --input data/airdrops.json --no-prices --max-add 100
+
+      - name: Targeted price enrichment dry-run
+        env:
+          MAX_CONCURRENT: "4"
+          BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+          PROXY_WORKER_URL: ${{ secrets.PROXY_WORKER_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        working-directory: scripts
+        run: python enrich_alpha_history_gap.py --workers 4
