@@ -322,6 +322,41 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
 
 
 CLAIM_WINDOW_MINUTES = 5
+
+
+def _fetch_internal_klines_with_direct_fallback(url, proxy_retries=1):
+    """
+    Bounded historical agg-klines read.
+
+    fetch_alpha.fetch_smart() is proxy-first. On a transient proxy 429/503,
+    its retry branch can exhaust attempts before reaching the documented
+    direct-Binance fallback. Historical price maintenance therefore gets
+    exactly one bounded direct attempt after the proxy path returns no data.
+
+    Never log the URL because the configured internal endpoint may be secret.
+    """
+    try:
+        data = fa.fetch_smart(url, retries=max(1, int(proxy_retries)))
+        if data:
+            return data
+    except Exception:
+        pass
+
+    try:
+        res = fa.get_session().get(url, timeout=15)
+        if res.status_code != 200:
+            if DEBUG:
+                print(f"[debug] direct agg-klines HTTP {res.status_code}", end=" ")
+            return None
+        payload = res.json()
+        if isinstance(payload, dict) and payload.get("code") == "000000":
+            return payload
+        if DEBUG:
+            print("[debug] direct agg-klines payload rejected", end=" ")
+    except Exception as ex:
+        if DEBUG:
+            print(f"[debug] direct agg-klines exception: {ex}", end=" ")
+    return None
 """
 [MỚI] Độ dài cửa sổ tính "giá lúc claim" — CHỈ tính VWAP trong N phút đầu
 tiên có giao dịch thật, KHÔNG PHẢI cả ngày (24h) như trước đây.
@@ -501,19 +536,16 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
 
     fail_reason = "không có chain nào để thử (chain_id/contract rỗng?)"
 
-    # [SỬA] BUG THẬT: không truyền startTime thì API (giống mọi API kiểu
-    # Binance klines) mặc định trả về N nến GẦN NHẤT TÍNH TỪ BÂY GIỜ, chứ
-    # không phải N nến kể từ ngày event. Với event càng cũ, cửa sổ trả về
-    # càng không chạm tới được ngày cần tìm — đúng như log thực tế cho
-    # thấy: token trả về đều đặn ~270-320 nến (không phải 1000 như đã xin)
-    # và luôn KHÔNG khớp ngày với các event quá 300 ngày trước. Neo
-    # startTime vào target_date_str (trừ đệm vài ngày) để cửa sổ trả về
-    # LUÔN bao trùm đúng ngày cần tìm, bất kể event cũ bao lâu.
+    # Historical internal agg-klines behavior is documented in fetch_alpha.py:
+    # startTime may be ignored, while endTime works for backward pagination.
+    # Anchor the historical window by the END of the target day so a 1d/5m
+    # request actually covers the event date instead of silently returning
+    # only recent candles.
     try:
         target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
     except (ValueError, TypeError):
         target_ms = None
-    day_start_ms = target_ms - 5 * 86400000 if target_ms is not None else None  # đệm 5 ngày trước
+    target_day_end_ms = target_ms + 86400000 - 1 if target_ms is not None else None
 
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
@@ -521,10 +553,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
 
         # 1) Nến ngày — luôn cần để có open/close + xác định đúng ngày
         day_url = f"{base}&interval=1d&limit=1000"
-        if day_start_ms is not None:
-            day_url += f"&startTime={day_start_ms}"
+        if target_day_end_ms is not None:
+            day_url += f"&endTime={target_day_end_ms}"
         try:
-            res_day = fa.fetch_smart(day_url, retries=2)
+            res_day = _fetch_internal_klines_with_direct_fallback(day_url, proxy_retries=1)
         except Exception as ex:
             fail_reason = f"fetch_smart exception (1d, chain={cid}): {ex}"
             if DEBUG: print(f"[debug] {fail_reason}", end=" ")
@@ -566,9 +598,8 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
         try:
             day_start_ms = int(day_match[0])
             day_end_ms   = day_start_ms + 86400000 - 1
-            hour_start_ms = day_start_ms - 86400000  # đệm 1 ngày trước cho chắc
-            hourly_url = f"{base}&interval=5m&limit=1000&startTime={hour_start_ms}"
-            res_hourly = fa.fetch_smart(hourly_url, retries=1)
+            hourly_url = f"{base}&interval=5m&limit=1000&endTime={day_end_ms}"
+            res_hourly = _fetch_internal_klines_with_direct_fallback(hourly_url, proxy_retries=1)
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
                 first_trade_ms = None
@@ -591,12 +622,27 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             pass
 
         ref_price = vwap if vwap is not None else close_price
+
+        # The event-day query above is intentionally endTime-anchored. Fetch
+        # one separate bounded recent daily window for ATH/hold comparison.
+        # If that read is unavailable, fail soft to the event-day window; do
+        # not discard an otherwise qualified listing_price.
+        k_max = k_day
+        try:
+            recent_url = f"{base}&interval=1d&limit=1000"
+            res_recent = _fetch_internal_klines_with_direct_fallback(recent_url, proxy_retries=1)
+            recent_rows = (res_recent or {}).get("data", {}).get("klineInfos") if res_recent else None
+            if recent_rows:
+                k_max = recent_rows
+        except Exception:
+            pass
+
         return {
-            "vwap":  vwap if vwap is not None else close_price,  # fallback: dùng close nếu không có 1h data
+            "vwap":  vwap if vwap is not None else close_price,
             "open":  open_price,
             "close": close_price,
             "date":  actual_date,
-            "max_since": _max_price_since(k_day, actual_date, ref_price=ref_price),
+            "max_since": _max_price_since(k_max, actual_date, ref_price=ref_price),
         }
 
     _fail_reason_local.value = f"[official: {official_note}] {fail_reason}"
@@ -1157,7 +1203,7 @@ def enrich_events(events):
     """
     todo = [
         e for e in events
-        if not e.get("listing_price")
+        if (not e.get("listing_price") or e.get("_vwap_daybound_recompute"))
         and (e.get("symbol") or e.get("token") or "").upper() not in MANUAL_CONFIRMED_DEAD
         and e.get("contract_address")
         and (e.get("event_time") or e.get("date"))
@@ -1179,6 +1225,7 @@ def enrich_events(events):
         }
         for fut in as_completed(futures):
             e, result = fut.result()
+            had_last_good = bool(e.get("listing_price"))
             if result:
                 e["listing_price"] = result
                 # [MỚI] Đưa ATH (max_since) ra field top-level cho dễ dùng
@@ -1188,8 +1235,15 @@ def enrich_events(events):
                 e["ath_since_listing_price"] = ms.get("price") if ms else None
                 e["ath_since_listing_date"]  = ms.get("date") if ms else None
                 filled += 1
+            elif not had_last_good:
+                e["listing_price"] = None  # missing rows remain retryable
             else:
-                e["listing_price"] = None  # đánh dấu đã thử, lần sau vẫn tự retry vì None là falsy
+                print(
+                    f"  [preserve-last-good] {e.get('symbol') or e.get('token') or '?'}: "
+                    "replacement unavailable; keeping existing listing_price",
+                    flush=True,
+                )
+            e.pop("_vwap_daybound_recompute", None)
 
     return filled
 
@@ -1457,9 +1511,11 @@ def invalidate_at_risk_listing_prices(events, status_map):
             continue
         if dt.hour == 0 and dt.minute == 0:
             continue  # canh đúng nửa đêm UTC -> không dính bug ranh giới ngày
-        e["listing_price"] = None
-        e["ath_since_listing_price"] = None
-        e["ath_since_listing_date"] = None
+        # Transactional recompute: preserve the qualified last-good value
+        # until a replacement has been successfully fetched and validated.
+        # A transient Binance/proxy failure must never turn valid history
+        # into listing_price=null in Production.
+        e["_vwap_daybound_recompute"] = True
         invalidated += 1
     return invalidated
 
