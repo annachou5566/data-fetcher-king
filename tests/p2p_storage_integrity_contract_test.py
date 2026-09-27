@@ -9,6 +9,7 @@ PARITY = (ROOT / "scripts/audit_p2p_parity.py").read_text(encoding="utf-8")
 VCB = (ROOT / "scripts/fetch_vcb.py").read_text(encoding="utf-8")
 SBV = (ROOT / "scripts/fetch_sbv.py").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/fetch_p2p.yml").read_text(encoding="utf-8")
+QUALIFY = (ROOT / "scripts/qualify_p2p_market.py").read_text(encoding="utf-8")
 
 
 class P2PStorageIntegrityContractTest(unittest.TestCase):
@@ -70,6 +71,21 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
     def test_market_snapshot_does_not_change_scheduler_or_legacy_switch(self):
         self.assertIn("github.event.schedule == '*/10 * * * *'", WORKFLOW)
         self.assertIn("P2P_WRITE_LEGACY:     '1'", WORKFLOW)
+
+    def test_market_qualifier_is_read_only(self):
+        self.assertIn("P2P_MARKET_QUAL_BEGIN", QUALIFY)
+        self.assertIn("P2P_MARKET_QUAL_END", QUALIFY)
+        self.assertNotIn("put_object", QUALIFY)
+        self.assertNotIn("get_r2", QUALIFY)
+        self.assertNotIn("R2_ACCESS_KEY_ID", QUALIFY)
+
+    def test_market_qualifier_covers_presets_and_both_assets(self):
+        self.assertIn("1_000_000", QUALIFY)
+        self.assertIn("5_000_000", QUALIFY)
+        self.assertIn("10_000_000", QUALIFY)
+        self.assertIn("50_000_000", QUALIFY)
+        self.assertIn("for asset in BNC_ASSETS", QUALIFY)
+        self.assertIn('for side in ("BUY", "SELL")', QUALIFY)
 
     def test_parity_workflow_is_manual_only_and_bounded(self):
         self.assertIn("run_parity_audit:", WORKFLOW)
