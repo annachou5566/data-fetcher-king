@@ -1,6 +1,9 @@
 name: P2P Rate Snapshot
 
 on:
+  push:
+    branches:
+      - chatgpt/p2p-phase0-integrity-2026-09-27
   schedule:
     - cron: '*/10 * * * *'   # P2P: mỗi 10 phút
     - cron: '35 1 * * *'     # VCB: 08:35 ICT hàng ngày
@@ -72,8 +75,10 @@ jobs:
 
   p2p-parity-audit:
     if: >
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.run_parity_audit == 'true'
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/chatgpt/p2p-phase0-integrity-2026-09-27') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.run_parity_audit == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -96,7 +101,14 @@ jobs:
         R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
-      run: python scripts/audit_p2p_parity.py --days "${{ github.event.inputs.parity_days }}"
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          for days in 30 60 90; do
+            python scripts/audit_p2p_parity.py --days "$days"
+          done
+        else
+          python scripts/audit_p2p_parity.py --days "${{ github.event.inputs.parity_days }}"
+        fi
 
   p2p-migrate-history:
     if: >
