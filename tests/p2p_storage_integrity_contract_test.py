@@ -33,6 +33,44 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn("if WRITE_LEGACY:", P2P)
         self.assertIn("P2P_WRITE_LEGACY:     '1'", WORKFLOW)
 
+    def test_market_snapshot_reuses_existing_binance_ads_fetch(self):
+        self.assertIn("def fetch_binance_side", P2P)
+        self.assertIn("stats, ads = fetch_binance_side(session, asset, side)", P2P)
+        self.assertIn("build_liquidity_and_market", P2P)
+        self.assertNotIn("fetch_binance_market_extra", P2P)
+
+    def test_market_snapshot_uses_existing_r2_owner(self):
+        self.assertIn('R2_MARKET_KEY   = "p2p-snapshots/_market-latest.json"', P2P)
+        self.assertNotIn("LIQUIDATION_HISTORY_SERVICE", P2P)
+
+    def test_market_snapshot_is_last_good_fail_closed(self):
+        self.assertIn("if stats[\"is_partial\"] or not ads:", P2P)
+        self.assertIn("market_complete = False", P2P)
+        self.assertIn("Canonical market snapshot SKIPPED", P2P)
+        self.assertIn("refusing to publish incomplete market snapshot", P2P)
+
+    def test_market_snapshot_keeps_all_sanitized_ads_from_complete_fetch(self):
+        self.assertIn("market_ads.append(normalized)", P2P)
+        self.assertIn('"reported_ad_count": total_reported', P2P)
+        self.assertIn('"ads": ads', P2P)
+
+    def test_market_ads_store_only_bounded_public_fields(self):
+        for token in (
+            '"price": price',
+            '"minFiat": min_fiat',
+            '"maxFiat": max_fiat',
+            '"availableCrypto": available',
+            '"payTypes": _normalize_pay_methods(item)',
+            '"merchant": merchant',
+            '"monthOrders": month_orders',
+            '"monthRate": round(finish_rate, 6)',
+        ):
+            self.assertIn(token, P2P)
+
+    def test_market_snapshot_does_not_change_scheduler_or_legacy_switch(self):
+        self.assertIn("github.event.schedule == '*/10 * * * *'", WORKFLOW)
+        self.assertIn("P2P_WRITE_LEGACY:     '1'", WORKFLOW)
+
     def test_parity_workflow_is_manual_only_and_bounded(self):
         self.assertIn("run_parity_audit:", WORKFLOW)
         self.assertIn("github.event_name == 'workflow_dispatch'", WORKFLOW)
