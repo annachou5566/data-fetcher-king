@@ -113,10 +113,10 @@ def _record_type(r):
 def _record_key(r):
     return (
         _record_type(r),
-        r["ts"],
-        r["exchange"],
-        r["asset"],
-        r["side"],
+        r.get("ts"),
+        r.get("exchange"),
+        r.get("asset"),
+        r.get("side"),
     )
 
 
@@ -132,7 +132,14 @@ def merge_day(r2, bucket, date_str, new_records, dry_run):
     except r2.exceptions.NoSuchKey:
         pass
 
-    seen = {_record_key(r) for r in existing}
+    # Incoming migration records are prices. Only existing price rows may
+    # dedupe them; liquidity/imbalance rows can legitimately share timestamp /
+    # exchange / asset but have different schemas (e.g. no side).
+    seen = {
+        _record_key(r)
+        for r in existing
+        if _record_type(r) == "price"
+    }
     merged = list(existing)
     added = 0
 
