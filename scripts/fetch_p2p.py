@@ -31,7 +31,9 @@ FIAT            = "VND"
 
 R2_DAILY_PREFIX = "p2p-snapshots/"
 R2_MANIFEST_KEY = "p2p-snapshots/_manifest.json"
+R2_MARKET_KEY   = "p2p-snapshots/_market-latest.json"
 SCHEMA_VERSION  = 1
+MARKET_SCHEMA_VERSION = 1
 
 BNC_URL     = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list"
 BNC_LIQUIDITY_URL = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -300,17 +302,80 @@ def fetch_binance_ads_page(session, asset, trade_type, page):
         return [], 0, False
 
 
-def fetch_binance_liquidity(session, asset, trade_type):
-    """
-    Phân trang lấy TOÀN BỘ ads, trả về:
-    {
-      liquidity_verified, liquidity_unverified, liquidity_total,
-      merchant_count_verified, merchant_count_unverified, merchant_count_total,
-      ad_count_raw, is_partial
+def _first_present(d, keys):
+    for k in keys:
+        if d.get(k) not in (None, ""):
+            return d.get(k)
+    return None
+
+
+def _normalize_pay_methods(item):
+    raw = item.get("tradeMethods") or item.get("payTypes") or []
+    out = []
+    for method in raw:
+        if isinstance(method, str):
+            name = method.strip()
+        elif isinstance(method, dict):
+            name = str(
+                method.get("tradeMethodName")
+                or method.get("tradeMethodShortName")
+                or method.get("identifier")
+                or method.get("payType")
+                or method.get("payId")
+                or ""
+            ).strip()
+        else:
+            name = ""
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _normalize_market_ad(item):
+    try:
+        price = float(item.get("price") or 0)
+        if price <= 10000:
+            return None
+        min_fiat = float(_first_present(
+            item, ["minSingleTransAmount", "minTransAmount", "minAmount"]
+        ) or 0)
+        max_fiat = float(_first_present(
+            item, ["maxSingleTransAmount", "maxTransAmount", "maxAmount"]
+        ) or 0)
+        available = float(_first_present(
+            item, ["surplusAmount", "tradableAmount", "tradableQuantity", "availableAmount"]
+        ) or 0)
+        advertiser = item.get("advertiser", {}) or {}
+        month_orders = int(_first_present(advertiser, ["monthOrderCount"]) or 0)
+        raw_finish_rate = float(_first_present(advertiser, ["monthFinishRate"]) or 0)
+        finish_rate = raw_finish_rate / 100 if raw_finish_rate > 1 else raw_finish_rate
+        merchant = str(_first_present(
+            advertiser, ["nickName", "userNo", "advNo"]
+        ) or "").strip()
+    except Exception:
+        return None
+
+    return {
+        "price": price,
+        "minFiat": min_fiat,
+        "maxFiat": max_fiat,
+        "availableCrypto": available,
+        "payTypes": _normalize_pay_methods(item),
+        "merchant": merchant,
+        "monthOrders": month_orders,
+        "monthRate": round(finish_rate, 6),
     }
-    Theo đúng công thức trong p2p-liquidity-architecture.md (mục 4).
+
+
+def fetch_binance_side(session, asset, trade_type):
+    """Fetch one complete Binance side once and derive both liquidity + market ads.
+
+    If pagination cannot reach Binance's reported total within MAX_PAGE_SAFETY,
+    is_partial=True. Callers MUST NOT publish a new canonical market snapshot
+    from partial data; keeping the previous last-good snapshot is safer.
     """
-    merchants = {}   # userNo -> {"amount": float, "trust": "VERIFIED"/"UNVERIFIED"}
+    merchants = {}
+    market_ads = []
     page = 1
     total_seen = 0
     total_reported = None
@@ -331,35 +396,31 @@ def fetch_binance_liquidity(session, asset, trade_type):
         for item in items:
             ad_count_raw += 1
 
-            def first_present(d, keys):
-                for k in keys:
-                    if d.get(k) not in (None, ""):
-                        return d.get(k)
-                return None
+            normalized = _normalize_market_ad(item)
+            if normalized is not None:
+                market_ads.append(normalized)
 
             try:
-                surplus = float(first_present(item, ["surplusAmount", "tradableAmount", "tradableQuantity"]) or 0)
-                # maxSingleTransAmount là ĐƠN VỊ FIAT (VND) — quy đổi về asset (USDT/USDC)
-                # bằng giá của chính ad đó để so sánh cùng đơn vị với surplus.
-                max_single_fiat = float(first_present(item, ["maxSingleTransAmount", "maxTransAmount"]) or 0)
+                surplus = float(_first_present(
+                    item, ["surplusAmount", "tradableAmount", "tradableQuantity"]
+                ) or 0)
+                max_single_fiat = float(_first_present(
+                    item, ["maxSingleTransAmount", "maxTransAmount"]
+                ) or 0)
                 price = float(item.get("price") or 0)
                 max_single = (max_single_fiat / price) if price > 0 else 0
                 adv = item.get("advertiser", {}) or {}
-                user_no = first_present(adv, ["userNo", "advNo", "nickName"])
-                month_order_count = int(first_present(adv, ["monthOrderCount"]) or 0)
-                raw_finish_rate = float(first_present(adv, ["monthFinishRate"]) or 0)
+                user_no = _first_present(adv, ["userNo", "advNo", "nickName"])
+                month_order_count = int(_first_present(adv, ["monthOrderCount"]) or 0)
+                raw_finish_rate = float(_first_present(adv, ["monthFinishRate"]) or 0)
                 finish_rate = raw_finish_rate / 100 if raw_finish_rate > 1 else raw_finish_rate
             except Exception as e:
                 print(f"  ⚠️  Parse ad lỗi, bỏ qua ad này: {e}")
                 continue
 
             if not user_no:
-                continue  # không xác định được merchant, bỏ qua để không tính sai dedupe
+                continue
 
-            # Áp cap cho SELL-side (merchant mua, tiền không đảm bảo thật).
-            # Lấy MIN của: (1) surplus tự khai, (2) cap theo maxSingleTransAmount
-            # ×3, (3) trần tuyệt đối SELL_CAP_FLAT_USDT — cách nào chặt hơn thì
-            # thắng, không phụ thuộc hoàn toàn vào số merchant tự báo cáo.
             if trade_type == "SELL":
                 candidates = [surplus, SELL_CAP_FLAT_USDT]
                 if max_single > 0:
@@ -374,25 +435,28 @@ def fetch_binance_liquidity(session, asset, trade_type):
                 else "UNVERIFIED"
             )
 
-            # Dedupe theo merchant: lấy MAX
             existing = merchants.get(user_no)
             if existing is None or amount > existing["amount"]:
                 merchants[user_no] = {"amount": amount, "trust": trust}
 
         total_seen += len(items)
-        if total_seen >= total_reported or page >= MAX_PAGE_SAFETY:
-            if page >= MAX_PAGE_SAFETY and total_seen < total_reported:
-                is_partial = True
+        if total_seen >= (total_reported or 0):
+            break
+        if page >= MAX_PAGE_SAFETY:
+            is_partial = True
             break
         page += 1
-        time.sleep(0.2)  # nhẹ nhàng, tránh rate-limit
+        time.sleep(0.2)
+
+    if total_reported is not None and total_seen < total_reported:
+        is_partial = True
 
     liquidity_verified = sum(m["amount"] for m in merchants.values() if m["trust"] == "VERIFIED")
     liquidity_unverified = sum(m["amount"] for m in merchants.values() if m["trust"] == "UNVERIFIED")
     merchant_count_verified = sum(1 for m in merchants.values() if m["trust"] == "VERIFIED")
     merchant_count_unverified = sum(1 for m in merchants.values() if m["trust"] == "UNVERIFIED")
 
-    return {
+    stats = {
         "liquidity_verified": round(liquidity_verified, 2),
         "liquidity_unverified": round(liquidity_unverified, 2),
         "liquidity_total": round(liquidity_verified + liquidity_unverified, 2),
@@ -400,28 +464,57 @@ def fetch_binance_liquidity(session, asset, trade_type):
         "merchant_count_unverified": merchant_count_unverified,
         "merchant_count_total": merchant_count_verified + merchant_count_unverified,
         "ad_count_raw": ad_count_raw,
+        "market_ad_count": len(market_ads),
+        "reported_ad_count": total_reported,
         "is_partial": is_partial,
     }
+    return stats, market_ads
 
 
-def build_liquidity_records(session, ts):
-    """Chạy Liquidity Index cho Binance, cả BUY/SELL, cả USDT/USDC."""
+def fetch_binance_liquidity(session, asset, trade_type):
+    """Compatibility wrapper for callers that only need liquidity stats."""
+    stats, _ = fetch_binance_side(session, asset, trade_type)
+    return stats
+
+
+def build_liquidity_and_market(session, ts):
+    """Build daily liquidity records and a volatile canonical ads snapshot.
+
+    The market snapshot is returned only when all four Binance asset/side
+    collections are complete and non-empty. This prevents a partial/WAF
+    failure from overwriting the previous last-good amount-aware snapshot.
+    """
     records = []
+    market_assets = {}
+    market_complete = True
+
     for asset in BNC_ASSETS:
+        market_assets[asset] = {}
         for side in ("BUY", "SELL"):
-            print(f"  📊 Liquidity BNC {asset}/{side}...", flush=True)
-            stats = fetch_binance_liquidity(session, asset, side)
+            print(f"  📊 Liquidity/market BNC {asset}/{side}...", flush=True)
+            stats, ads = fetch_binance_side(session, asset, side)
             records.append({
                 "record_type": "liquidity_snapshot",
                 "ts": ts, "exchange": "binance", "asset": asset, "fiat": FIAT, "side": side,
                 **stats,
             })
-            print(f"     verified={stats['liquidity_verified']:,.0f}  "
-                  f"unverified={stats['liquidity_unverified']:,.0f}  "
-                  f"merchants={stats['merchant_count_total']}  "
-                  f"partial={stats['is_partial']}")
 
-    # Imbalance Index — tính riêng cho USDT (asset chính, thanh khoản nhất)
+            market_assets[asset][side] = {
+                "ads": ads,
+                "ad_count": len(ads),
+                "reported_ad_count": stats.get("reported_ad_count"),
+            }
+
+            if stats["is_partial"] or not ads:
+                market_complete = False
+
+            print(
+                f"     verified={stats['liquidity_verified']:,.0f} "
+                f"unverified={stats['liquidity_unverified']:,.0f} "
+                f"merchants={stats['merchant_count_total']} "
+                f"market_ads={len(ads)} partial={stats['is_partial']}"
+            )
+
     usdt_records = {r["side"]: r for r in records if r["asset"] == "USDT"}
     if "BUY" in usdt_records and "SELL" in usdt_records:
         for kind in ("verified", "total"):
@@ -432,13 +525,48 @@ def build_liquidity_records(session, ts):
             records.append({
                 "record_type": "imbalance_index",
                 "ts": ts, "exchange": "binance", "asset": "USDT", "fiat": FIAT,
-                "kind": kind,   # "verified" hoặc "total"
+                "kind": kind,
                 "liquidity_buy": l_buy,
                 "liquidity_sell": l_sell,
                 "imbalance_index": round(imbalance, 4) if imbalance is not None else None,
             })
 
+    market = None
+    if market_complete:
+        market = {
+            "schema_version": MARKET_SCHEMA_VERSION,
+            "record_type": "market_snapshot",
+            "ts": ts,
+            "exchange": "binance",
+            "fiat": FIAT,
+            "complete": True,
+            "assets": market_assets,
+        }
+
+    return records, market
+
+
+def build_liquidity_records(session, ts):
+    """Compatibility wrapper; current main uses build_liquidity_and_market()."""
+    records, _ = build_liquidity_and_market(session, ts)
     return records
+
+
+def save_market_snapshot(r2, bucket, market):
+    if not market or not market.get("complete"):
+        raise ValueError("refusing to publish incomplete market snapshot")
+    r2.put_object(
+        Bucket=bucket,
+        Key=R2_MARKET_KEY,
+        Body=json.dumps(market, separators=(",", ":")).encode("utf-8"),
+        ContentType="application/json",
+        CacheControl="max-age=30",
+    )
+    return sum(
+        len(side.get("ads", []))
+        for asset in market.get("assets", {}).values()
+        for side in asset.values()
+    )
 
 
 # ── Main ──────────────────────────────────────────────────────────
@@ -482,9 +610,15 @@ def main():
     print("📊 Fetching Liquidity Index (Binance)...", flush=True)
     try:
         session = requests.Session(impersonate="chrome116")
-        liquidity_records = build_liquidity_records(session, ts)
+        liquidity_records, market_snapshot = build_liquidity_and_market(session, ts)
         total_liq = append_daily_records(r2, bucket, date_str, liquidity_records)
         print(f"✅ Liquidity Index OK — {date_str}: {total_liq:,} records hôm nay (tổng cả price + liquidity)")
+
+        if market_snapshot:
+            market_ads = save_market_snapshot(r2, bucket, market_snapshot)
+            print(f"✅ Canonical market snapshot OK — {market_ads:,} sanitized ads")
+        else:
+            print("⚠️  Canonical market snapshot SKIPPED — partial/empty Binance ads; giữ last-good")
     except Exception as e:
         print(f"❌ Liquidity Index error (không ảnh hưởng phần giá đã lưu ở trên): {e}")
 
