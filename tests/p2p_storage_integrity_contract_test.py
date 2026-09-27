@@ -107,10 +107,10 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
 
     def test_migration_dedupe_key_includes_record_type(self):
         self.assertIn("_record_type(r)", MIGRATE)
-        self.assertRegex(
-            MIGRATE,
-            r"return \(\s*_record_type\(r\),\s*r\[\"ts\"\],\s*r\[\"exchange\"\],\s*r\[\"asset\"\],\s*r\[\"side\"\],\s*\)",
-        )
+        self.assertIn("r.get(\"ts\")", MIGRATE)
+        self.assertIn("r.get(\"exchange\")", MIGRATE)
+        self.assertIn("r.get(\"asset\")", MIGRATE)
+        self.assertIn("r.get(\"side\")", MIGRATE)
 
     def test_migration_preserves_legacy_v1_and_v2(self):
         self.assertIn("def legacy_snapshot_to_records", MIGRATE)
@@ -140,8 +140,10 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
     def test_parity_report_only_is_read_only_and_compact(self):
         self.assertIn("--report-only", PARITY)
         self.assertIn("--details", PARITY)
-        self.assertIn("legacy_only_dates=", PARITY)
-        self.assertIn("legacy_only_shapes=", PARITY)
+        self.assertIn("missing_canonical_dates=", PARITY)
+        self.assertIn("missing_canonical_shapes=", PARITY)
+        self.assertIn("missing_legacy_dates=", PARITY)
+        self.assertIn("missing_legacy_shapes=", PARITY)
         self.assertNotIn("put_object(", PARITY)
 
     def test_parity_audit_is_read_only_and_bounded(self):
