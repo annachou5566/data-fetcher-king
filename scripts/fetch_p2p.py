@@ -25,6 +25,7 @@ from curl_cffi import requests
 
 # ── Config gốc (KHÔNG đổi) ──────────────────────────────────────────
 R2_KEY_LEGACY   = "p2p-data.json"
+WRITE_LEGACY   = os.getenv("P2P_WRITE_LEGACY", "1").strip().lower() not in {"0", "false", "no", "off"}
 MAX_KEEP        = 26_280
 FIAT            = "VND"
 
@@ -459,12 +460,15 @@ def main():
 
     r2, bucket = get_r2()
 
-    print("💾 Saving legacy (p2p-data.json)...", flush=True)
-    try:
-        count = save_snapshot_legacy(r2, bucket, snap)
-        print(f"✅ Legacy OK — {count:,} snapshots")
-    except Exception as e:
-        print(f"❌ Legacy save error: {e}")
+    if WRITE_LEGACY:
+        print("💾 Saving legacy (p2p-data.json)...", flush=True)
+        try:
+            count = save_snapshot_legacy(r2, bucket, snap)
+            print(f"✅ Legacy OK — {count:,} snapshots")
+        except Exception as e:
+            print(f"❌ Legacy save error: {e}")
+    else:
+        print("ℹ️  Legacy p2p-data.json write disabled; canonical daily partitions remain active")
 
     print("💾 Saving daily price partition...", flush=True)
     try:
