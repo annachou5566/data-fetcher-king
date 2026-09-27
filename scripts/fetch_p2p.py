@@ -163,7 +163,9 @@ def save_snapshot_legacy(r2, bucket, snapshot):
     except r2.exceptions.NoSuchKey:
         print("  📄 p2p-data.json chưa có → tạo mới")
     except Exception as e:
-        print(f"  ⚠️  Load R2 (legacy): {e} → tạo mới")
+        # Fail closed: transient read/parse/auth errors are NOT equivalent to
+        # NoSuchKey. Re-initialising here could overwrite the whole archive.
+        raise RuntimeError(f"Không đọc được R2 legacy; từ chối ghi đè archive: {e}") from e
     snapshots.append(snapshot)
     if len(snapshots) > MAX_KEEP:
         snapshots = snapshots[-MAX_KEEP:]
@@ -215,7 +217,11 @@ def append_daily_records(r2, bucket, date_str, new_records):
     except r2.exceptions.NoSuchKey:
         pass
     except Exception as e:
-        print(f"  ⚠️  Load R2 (daily {date_str}): {e} → tạo mới cho ngày này")
+        # Only an actual NoSuchKey may initialise a new daily partition.
+        # Any other read/JSON/auth/network error must abort this write.
+        raise RuntimeError(
+            f"Không đọc được R2 daily {date_str}; từ chối ghi đè partition: {e}"
+        ) from e
     records.extend(new_records)
     payload = {
         "schema_version": SCHEMA_VERSION, "date": date_str,
@@ -239,8 +245,9 @@ def update_manifest(r2, bucket, date_str):
     except r2.exceptions.NoSuchKey:
         pass
     except Exception as e:
-        print(f"  ⚠️  Load manifest: {e} → bỏ qua cập nhật manifest lần này")
-        return
+        raise RuntimeError(
+            f"Không đọc được P2P manifest; từ chối ghi manifest mới: {e}"
+        ) from e
     r2.put_object(
         Bucket=bucket, Key=R2_MANIFEST_KEY,
         Body=json.dumps(manifest, separators=(",", ":")).encode("utf-8"),
