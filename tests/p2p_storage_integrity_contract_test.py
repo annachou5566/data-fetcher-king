@@ -4,13 +4,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 P2P = (ROOT / "scripts/fetch_p2p.py").read_text(encoding="utf-8")
+MIGRATE = (ROOT / "scripts/migrate_p2p_history.py").read_text(encoding="utf-8")
+PARITY = (ROOT / "scripts/audit_p2p_parity.py").read_text(encoding="utf-8")
 VCB = (ROOT / "scripts/fetch_vcb.py").read_text(encoding="utf-8")
 SBV = (ROOT / "scripts/fetch_sbv.py").read_text(encoding="utf-8")
 
 
 class P2PStorageIntegrityContractTest(unittest.TestCase):
     def test_python_sources_parse(self):
-        for source in (P2P, VCB, SBV):
+        for source in (P2P, MIGRATE, PARITY, VCB, SBV):
             ast.parse(source)
 
     def test_p2p_legacy_read_errors_fail_closed(self):
@@ -24,6 +26,18 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
     def test_p2p_manifest_read_errors_fail_closed(self):
         self.assertIn("từ chối ghi manifest mới", P2P)
         self.assertNotIn("→ bỏ qua cập nhật manifest lần này", P2P)
+
+    def test_migration_preserves_legacy_v1_and_v2(self):
+        self.assertIn("def legacy_snapshot_to_records", MIGRATE)
+        self.assertIn("if len(snap) >= 9:", MIGRATE)
+        self.assertIn('("binance", "USDT", "BUY",  snap[1])', MIGRATE)
+        self.assertNotIn("if not isinstance(snap, list) or len(snap) < 9:", MIGRATE)
+
+    def test_parity_audit_is_read_only_and_bounded(self):
+        self.assertIn("--days", PARITY)
+        self.assertIn("args.days > 90", PARITY)
+        self.assertIn("P2P_PARITY_BEGIN", PARITY)
+        self.assertNotIn("put_object(", PARITY)
 
     def test_vcb_only_no_such_key_initializes_empty_archive(self):
         self.assertIn("except r2.exceptions.NoSuchKey:", VCB)
