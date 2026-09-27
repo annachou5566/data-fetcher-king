@@ -40,6 +40,21 @@ def price_value(r):
     return None if value is None else float(value)
 
 
+def is_price_record(r):
+    if r.get("record_type") == "price":
+        return True
+    # Backward compatibility: early canonical partitions predate record_type.
+    # Only rows with the full price identity + price field qualify.
+    return (
+        r.get("record_type") in (None, "")
+        and "price" in r
+        and r.get("ts") is not None
+        and r.get("exchange") is not None
+        and r.get("asset") is not None
+        and r.get("side") is not None
+    )
+
+
 def compact_identity_breakdown(counter):
     by_date = Counter()
     by_shape = Counter()
@@ -124,6 +139,7 @@ def main():
     canonical_exact = Counter()
     canonical_ids = Counter()
     canonical_prices = defaultdict(set)
+    canonical_legacy_schema_price_rows = 0
     missing_objects = []
 
     for d in selected:
@@ -133,8 +149,10 @@ def main():
             continue
         data = json.loads(obj["Body"].read().decode("utf-8"))
         for r in data.get("records", []):
-            if r.get("record_type") != "price":
+            if not is_price_record(r):
                 continue
+            if r.get("record_type") in (None, ""):
+                canonical_legacy_schema_price_rows += 1
             ik = identity_key(r)
             canonical_exact[exact_key(r)] += 1
             canonical_ids[ik] += 1
@@ -182,6 +200,7 @@ def main():
     print(f"manifest_days={len(selected)} missing_objects={len(missing_objects)}")
     print(f"legacy_records={sum(legacy_ids.values())} canonical_records={sum(canonical_ids.values())}")
     print(f"legacy_unique_keys={len(legacy_key_set)} canonical_unique_keys={len(canonical_key_set)}")
+    print(f"canonical_legacy_schema_price_rows={canonical_legacy_schema_price_rows}")
     print(f"missing_canonical_keys={len(missing_canonical)}")
     print(f"missing_legacy_keys={len(missing_legacy)}")
     print(f"value_mismatch_keys={len(value_mismatch_ids)}")
