@@ -50,8 +50,10 @@ def load_existing(r2, bucket):
         print("  📄 vcb-data.json chưa có → backfill từ đầu")
         return []
     except Exception as e:
-        print(f"  ⚠️  Load R2 lỗi: {e} → tạo mới")
-        return []
+        # Fail closed: only a real NoSuchKey may initialise a new archive.
+        # Treating transient read/parse/auth failures as "empty" can destroy
+        # years of VCB history on the next put_object.
+        raise RuntimeError(f"Không đọc được vcb-data.json; từ chối ghi đè archive: {e}") from e
 
 def fetch_day(date_str, session):
     try:
