@@ -36,6 +36,8 @@ def compact_breakdown(counter):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--end-date", default=None,
+                    help="Kết thúc cửa sổ UTC YYYY-MM-DD; mặc định manifest.last_date")
     ap.add_argument("--report-only", action="store_true",
                     help="In discrepancy nhưng không exit 2; dùng để thu đủ nhiều cửa sổ read-only")
     ap.add_argument("--details", action="store_true",
@@ -54,14 +56,25 @@ def main():
     if not dates:
         raise SystemExit("manifest không có dates")
 
-    end = datetime.strptime(dates[-1], "%Y-%m-%d").date()
+    manifest_end = datetime.strptime(dates[-1], "%Y-%m-%d").date()
+    if args.end_date:
+        try:
+            end = datetime.strptime(args.end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise SystemExit("--end-date phải dạng YYYY-MM-DD")
+        if end > manifest_end:
+            end = manifest_end
+    else:
+        end = manifest_end
     start = end - timedelta(days=args.days - 1)
     selected = [d for d in dates if start.isoformat() <= d <= end.isoformat()]
 
+    legacy_dates_all = []
     legacy_counter = Counter()
     for snap in legacy:
         try:
             day = datetime.fromtimestamp(snap[0], tz=timezone.utc).date()
+            legacy_dates_all.append(day)
         except Exception:
             continue
         if day < start or day > end:
@@ -85,7 +98,10 @@ def main():
     canonical_only = canonical_counter - legacy_counter
 
     print("P2P_PARITY_BEGIN")
+    legacy_first = min(legacy_dates_all).isoformat() if legacy_dates_all else "-"
+    legacy_last = max(legacy_dates_all).isoformat() if legacy_dates_all else "-"
     print(f"range={start.isoformat()}..{end.isoformat()}")
+    print(f"legacy_range={legacy_first}..{legacy_last}")
     print(f"days={len(selected)} missing_days={len(missing)}")
     print(f"legacy_price_records={sum(legacy_counter.values())}")
     print(f"canonical_price_records={sum(canonical_counter.values())}")
