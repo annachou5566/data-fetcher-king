@@ -1,6 +1,9 @@
 name: P2P Rate Snapshot
 
 on:
+  push:
+    branches:
+      - chatgpt/p2p-phase0-integrity-2026-09-27
   schedule:
     - cron: '*/10 * * * *'   # P2P: mỗi 10 phút
     - cron: '35 1 * * *'     # VCB: 08:35 ICT hàng ngày
@@ -100,8 +103,10 @@ jobs:
 
   p2p-migrate-history:
     if: >
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.run_migration == 'true'
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/chatgpt/p2p-phase0-integrity-2026-09-27') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.run_migration == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -125,7 +130,36 @@ jobs:
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: |
-        if [ "${{ github.event.inputs.migration_dry_run }}" = "true" ]; then
+        set -euo pipefail
+        if [ "${{ github.event_name }}" = "push" ]; then
+          python scripts/audit_p2p_parity.py --days 90 --report-only --details | tee /tmp/p2p-pre-90.txt
+          python scripts/audit_p2p_parity.py --days 4 --end-date 2026-06-29 --report-only --details | tee /tmp/p2p-pre-4.txt
+
+          grep -Fx 'missing_canonical_keys=208' /tmp/p2p-pre-90.txt
+          grep -Fx 'value_mismatch_keys=0' /tmp/p2p-pre-90.txt
+          grep -Fx 'manifest_days=90 missing_objects=0' /tmp/p2p-pre-90.txt
+          grep -Fx 'missing_canonical_keys=24' /tmp/p2p-pre-4.txt
+          grep -Fx 'value_mismatch_keys=0' /tmp/p2p-pre-4.txt
+          grep -Fx 'manifest_days=3 missing_objects=0' /tmp/p2p-pre-4.txt
+
+          python scripts/migrate_p2p_history.py --dry-run --from-date 2026-06-26 --to-date 2026-08-24 | tee /tmp/p2p-dry.txt
+          grep -Fx 'changed_days=4' /tmp/p2p-dry.txt
+          grep -Fx 'changed_breakdown=2026-06-26:20,2026-06-27:4,2026-07-03:32,2026-08-24:176' /tmp/p2p-dry.txt
+          grep -Fx 'total_added=232' /tmp/p2p-dry.txt
+          grep -Fx 'manifest_change=yes first_date=2026-06-26 last_date=2026-09-27 dates=94' /tmp/p2p-dry.txt
+
+          python scripts/migrate_p2p_history.py --from-date 2026-06-26 --to-date 2026-08-24 | tee /tmp/p2p-write.txt
+
+          python scripts/audit_p2p_parity.py --days 90 --details | tee /tmp/p2p-post-90.txt
+          python scripts/audit_p2p_parity.py --days 4 --end-date 2026-06-29 --details | tee /tmp/p2p-post-4.txt
+
+          grep -Fx 'missing_canonical_keys=0' /tmp/p2p-post-90.txt
+          grep -Fx 'value_mismatch_keys=0' /tmp/p2p-post-90.txt
+          grep -Fx 'manifest_days=90 missing_objects=0' /tmp/p2p-post-90.txt
+          grep -Fx 'missing_canonical_keys=0' /tmp/p2p-post-4.txt
+          grep -Fx 'value_mismatch_keys=0' /tmp/p2p-post-4.txt
+          grep -Fx 'manifest_days=4 missing_objects=0' /tmp/p2p-post-4.txt
+        elif [ "${{ github.event.inputs.migration_dry_run }}" = "true" ]; then
           python scripts/migrate_p2p_history.py --dry-run
         else
           python scripts/migrate_p2p_history.py
