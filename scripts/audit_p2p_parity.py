@@ -1,7 +1,7 @@
 """Bounded read-only parity audit: legacy p2p-data.json vs canonical daily partitions.
 
-Default scope is the latest 30 UTC days present in legacy data. Max 90 days per run.
-No R2 writes are performed.
+Default scope is the latest 30 UTC days present in canonical manifest.
+Max 90 days per run. No R2 writes are performed.
 """
 import argparse
 import json
@@ -19,9 +19,27 @@ def key(r):
     )
 
 
+def compact_breakdown(counter):
+    by_date = Counter()
+    by_shape = Counter()
+    for (ts, exchange, asset, side, _price), count in counter.items():
+        day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+        by_date[day] += count
+        by_shape[(exchange, asset, side)] += count
+    dates = ",".join(f"{d}:{n}" for d, n in sorted(by_date.items())[:20]) or "-"
+    shapes = ",".join(
+        f"{e}/{a}/{s}:{n}" for (e, a, s), n in sorted(by_shape.items())
+    ) or "-"
+    return dates, shapes
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--report-only", action="store_true",
+                    help="In discrepancy nhưng không exit 2; dùng để thu đủ nhiều cửa sổ read-only")
+    ap.add_argument("--details", action="store_true",
+                    help="In breakdown compact theo ngày và exchange/asset/side")
     args = ap.parse_args()
     if args.days < 1 or args.days > 90:
         raise SystemExit("--days phải trong khoảng 1..90")
@@ -73,9 +91,16 @@ def main():
     print(f"canonical_price_records={sum(canonical_counter.values())}")
     print(f"legacy_only={sum(legacy_only.values())}")
     print(f"canonical_only={sum(canonical_only.values())}")
+    if args.details:
+        legacy_dates, legacy_shapes = compact_breakdown(legacy_only)
+        canon_dates, canon_shapes = compact_breakdown(canonical_only)
+        print(f"legacy_only_dates={legacy_dates}")
+        print(f"legacy_only_shapes={legacy_shapes}")
+        print(f"canonical_only_dates={canon_dates}")
+        print(f"canonical_only_shapes={canon_shapes}")
     print("P2P_PARITY_END")
 
-    if missing or legacy_only:
+    if not args.report_only and (missing or legacy_only):
         raise SystemExit(2)
 
 
