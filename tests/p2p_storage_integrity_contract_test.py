@@ -8,6 +8,7 @@ MIGRATE = (ROOT / "scripts/migrate_p2p_history.py").read_text(encoding="utf-8")
 PARITY = (ROOT / "scripts/audit_p2p_parity.py").read_text(encoding="utf-8")
 VCB = (ROOT / "scripts/fetch_vcb.py").read_text(encoding="utf-8")
 SBV = (ROOT / "scripts/fetch_sbv.py").read_text(encoding="utf-8")
+WORKFLOW = (ROOT / ".github/workflows/fetch_p2p.yml").read_text(encoding="utf-8")
 
 
 class P2PStorageIntegrityContractTest(unittest.TestCase):
@@ -26,6 +27,17 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
     def test_p2p_manifest_read_errors_fail_closed(self):
         self.assertIn("từ chối ghi manifest mới", P2P)
         self.assertNotIn("→ bỏ qua cập nhật manifest lần này", P2P)
+
+    def test_legacy_writer_retirement_switch_defaults_on(self):
+        self.assertIn('P2P_WRITE_LEGACY", "1"', P2P)
+        self.assertIn("if WRITE_LEGACY:", P2P)
+        self.assertIn("P2P_WRITE_LEGACY:     '1'", WORKFLOW)
+
+    def test_parity_workflow_is_manual_only_and_bounded(self):
+        self.assertIn("run_parity_audit:", WORKFLOW)
+        self.assertIn("github.event_name == 'workflow_dispatch'", WORKFLOW)
+        self.assertIn("python scripts/audit_p2p_parity.py --days", WORKFLOW)
+        self.assertIn("options: ['30', '60', '90']", WORKFLOW)
 
     def test_migration_preserves_legacy_v1_and_v2(self):
         self.assertIn("def legacy_snapshot_to_records", MIGRATE)
