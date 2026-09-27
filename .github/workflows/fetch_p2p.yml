@@ -1,9 +1,6 @@
 name: P2P Rate Snapshot
 
 on:
-  push:
-    branches:
-      - chatgpt/p2p-phase0-integrity-2026-09-27
   schedule:
     - cron: '*/10 * * * *'   # P2P: mỗi 10 phút
     - cron: '35 1 * * *'     # VCB: 08:35 ICT hàng ngày
@@ -103,10 +100,8 @@ jobs:
 
   p2p-migrate-history:
     if: >
-      (github.event_name == 'push' &&
-       github.ref == 'refs/heads/chatgpt/p2p-phase0-integrity-2026-09-27') ||
-      (github.event_name == 'workflow_dispatch' &&
-       github.event.inputs.run_migration == 'true')
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.run_migration == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -130,9 +125,7 @@ jobs:
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
       run: |
-        if [ "${{ github.event_name }}" = "push" ]; then
-          python scripts/migrate_p2p_history.py --dry-run --from-date 2026-06-26 --to-date 2026-08-24
-        elif [ "${{ github.event.inputs.migration_dry_run }}" = "true" ]; then
+        if [ "${{ github.event.inputs.migration_dry_run }}" = "true" ]; then
           python scripts/migrate_p2p_history.py --dry-run
         else
           python scripts/migrate_p2p_history.py
