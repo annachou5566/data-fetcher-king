@@ -1,28 +1,49 @@
 """Bounded read-only parity audit: legacy p2p-data.json vs canonical daily partitions.
 
+Parity is defined on unique observation identity:
+    (ts, exchange, asset, side)
+
+Legacy may contain duplicate copies of the same observation. Duplicate multiplicity is
+reported separately and is NOT treated as missing canonical history. A retirement gate
+fails only when a canonical partition/object is missing, a legacy observation identity
+is absent from canonical, or the same identity has a different price value.
+
 Default scope is the latest 30 UTC days present in canonical manifest.
 Max 90 days per run. No R2 writes are performed.
 """
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 
 from fetch_p2p import get_r2, R2_KEY_LEGACY, R2_MANIFEST_KEY, _daily_key
 from migrate_p2p_history import legacy_snapshot_to_records
 
 
-def key(r):
+def identity_key(r):
     return (
-        int(r["ts"]), r["exchange"], r["asset"], r["side"],
+        int(r["ts"]),
+        r["exchange"],
+        r["asset"],
+        r["side"],
+    )
+
+
+def exact_key(r):
+    return identity_key(r) + (
         None if r.get("price") is None else float(r["price"]),
     )
 
 
-def compact_breakdown(counter):
+def price_value(r):
+    value = r.get("price")
+    return None if value is None else float(value)
+
+
+def compact_identity_breakdown(counter):
     by_date = Counter()
     by_shape = Counter()
-    for (ts, exchange, asset, side, _price), count in counter.items():
+    for (ts, exchange, asset, side), count in counter.items():
         day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
         by_date[day] += count
         by_shape[(exchange, asset, side)] += count
@@ -31,6 +52,18 @@ def compact_breakdown(counter):
         f"{e}/{a}/{s}:{n}" for (e, a, s), n in sorted(by_shape.items())
     ) or "-"
     return dates, shapes
+
+
+def mismatch_samples(ids, legacy_prices, canonical_prices, limit=8):
+    out = []
+    for ts, exchange, asset, side in sorted(ids)[:limit]:
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+        lv = sorted(legacy_prices[(ts, exchange, asset, side)], key=lambda x: (x is None, x))
+        cv = sorted(canonical_prices[(ts, exchange, asset, side)], key=lambda x: (x is None, x))
+        out.append(
+            f"{dt}|{exchange}/{asset}/{side}|legacy={lv}|canonical={cv}"
+        )
+    return ";".join(out) or "-"
 
 
 def main():
@@ -70,7 +103,10 @@ def main():
     selected = [d for d in dates if start.isoformat() <= d <= end.isoformat()]
 
     legacy_dates_all = []
-    legacy_counter = Counter()
+    legacy_exact = Counter()
+    legacy_ids = Counter()
+    legacy_prices = defaultdict(set)
+
     for snap in legacy:
         try:
             day = datetime.fromtimestamp(snap[0], tz=timezone.utc).date()
@@ -80,43 +116,106 @@ def main():
         if day < start or day > end:
             continue
         for r in legacy_snapshot_to_records(snap):
-            legacy_counter[key(r)] += 1
+            ik = identity_key(r)
+            legacy_exact[exact_key(r)] += 1
+            legacy_ids[ik] += 1
+            legacy_prices[ik].add(price_value(r))
 
-    canonical_counter = Counter()
-    missing = []
+    canonical_exact = Counter()
+    canonical_ids = Counter()
+    canonical_prices = defaultdict(set)
+    missing_objects = []
+
     for d in selected:
         obj = r2.get_object(Bucket=bucket, Key=_daily_key(d))
         if not obj:
-            missing.append(d)
+            missing_objects.append(d)
             continue
         data = json.loads(obj["Body"].read().decode("utf-8"))
         for r in data.get("records", []):
-            if r.get("record_type") == "price":
-                canonical_counter[key(r)] += 1
+            if r.get("record_type") != "price":
+                continue
+            ik = identity_key(r)
+            canonical_exact[exact_key(r)] += 1
+            canonical_ids[ik] += 1
+            canonical_prices[ik].add(price_value(r))
 
-    legacy_only = legacy_counter - canonical_counter
-    canonical_only = canonical_counter - legacy_counter
+    legacy_key_set = set(legacy_ids)
+    canonical_key_set = set(canonical_ids)
+    common = legacy_key_set & canonical_key_set
 
-    print("P2P_PARITY_BEGIN")
+    missing_canonical = Counter({
+        ik: legacy_ids[ik]
+        for ik in legacy_key_set - canonical_key_set
+    })
+    missing_legacy = Counter({
+        ik: canonical_ids[ik]
+        for ik in canonical_key_set - legacy_key_set
+    })
+
+    value_mismatch_ids = {
+        ik for ik in common
+        if legacy_prices[ik] != canonical_prices[ik]
+    }
+    value_mismatch = Counter({ik: 1 for ik in value_mismatch_ids})
+
+    legacy_duplicate_excess = Counter({
+        ik: legacy_ids[ik] - canonical_ids[ik]
+        for ik in common
+        if legacy_ids[ik] > canonical_ids[ik]
+    })
+    canonical_duplicate_excess = Counter({
+        ik: canonical_ids[ik] - legacy_ids[ik]
+        for ik in common
+        if canonical_ids[ik] > legacy_ids[ik]
+    })
+
+    legacy_only_exact = legacy_exact - canonical_exact
+    canonical_only_exact = canonical_exact - legacy_exact
+
     legacy_first = min(legacy_dates_all).isoformat() if legacy_dates_all else "-"
     legacy_last = max(legacy_dates_all).isoformat() if legacy_dates_all else "-"
+
+    print("P2P_PARITY_BEGIN")
     print(f"range={start.isoformat()}..{end.isoformat()}")
     print(f"legacy_range={legacy_first}..{legacy_last}")
-    print(f"days={len(selected)} missing_days={len(missing)}")
-    print(f"legacy_price_records={sum(legacy_counter.values())}")
-    print(f"canonical_price_records={sum(canonical_counter.values())}")
-    print(f"legacy_only={sum(legacy_only.values())}")
-    print(f"canonical_only={sum(canonical_only.values())}")
+    print(f"manifest_days={len(selected)} missing_objects={len(missing_objects)}")
+    print(f"legacy_records={sum(legacy_ids.values())} canonical_records={sum(canonical_ids.values())}")
+    print(f"legacy_unique_keys={len(legacy_key_set)} canonical_unique_keys={len(canonical_key_set)}")
+    print(f"missing_canonical_keys={len(missing_canonical)}")
+    print(f"missing_legacy_keys={len(missing_legacy)}")
+    print(f"value_mismatch_keys={len(value_mismatch_ids)}")
+    print(f"legacy_duplicate_excess={sum(legacy_duplicate_excess.values())}")
+    print(f"canonical_duplicate_excess={sum(canonical_duplicate_excess.values())}")
+    print(f"legacy_only_exact={sum(legacy_only_exact.values())}")
+    print(f"canonical_only_exact={sum(canonical_only_exact.values())}")
+
     if args.details:
-        legacy_dates, legacy_shapes = compact_breakdown(legacy_only)
-        canon_dates, canon_shapes = compact_breakdown(canonical_only)
-        print(f"legacy_only_dates={legacy_dates}")
-        print(f"legacy_only_shapes={legacy_shapes}")
-        print(f"canonical_only_dates={canon_dates}")
-        print(f"canonical_only_shapes={canon_shapes}")
+        miss_dates, miss_shapes = compact_identity_breakdown(
+            Counter({ik: 1 for ik in missing_canonical})
+        )
+        dup_dates, dup_shapes = compact_identity_breakdown(legacy_duplicate_excess)
+        mismatch_dates, mismatch_shapes = compact_identity_breakdown(value_mismatch)
+        extra_dates, extra_shapes = compact_identity_breakdown(
+            Counter({ik: 1 for ik in missing_legacy})
+        )
+        print(f"missing_canonical_dates={miss_dates}")
+        print(f"missing_canonical_shapes={miss_shapes}")
+        print(f"legacy_duplicate_dates={dup_dates}")
+        print(f"legacy_duplicate_shapes={dup_shapes}")
+        print(f"value_mismatch_dates={mismatch_dates}")
+        print(f"value_mismatch_shapes={mismatch_shapes}")
+        print(
+            "value_mismatch_samples=" +
+            mismatch_samples(value_mismatch_ids, legacy_prices, canonical_prices)
+        )
+        print(f"missing_legacy_dates={extra_dates}")
+        print(f"missing_legacy_shapes={extra_shapes}")
+
     print("P2P_PARITY_END")
 
-    if not args.report_only and (missing or legacy_only):
+    blocking = bool(missing_objects or missing_canonical or value_mismatch_ids)
+    if not args.report_only and blocking:
         raise SystemExit(2)
 
 
