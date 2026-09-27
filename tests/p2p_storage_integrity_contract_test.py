@@ -64,6 +64,13 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn('("binance", "USDT", "BUY",  snap[1])', MIGRATE)
         self.assertNotIn("if not isinstance(snap, list) or len(snap) < 9:", MIGRATE)
 
+    def test_parity_distinguishes_missing_keys_from_duplicates(self):
+        self.assertIn("missing_canonical_keys=", PARITY)
+        self.assertIn("value_mismatch_keys=", PARITY)
+        self.assertIn("legacy_duplicate_excess=", PARITY)
+        self.assertIn("missing_legacy_keys=", PARITY)
+        self.assertIn("blocking = bool(missing_objects or missing_canonical or value_mismatch_ids)", PARITY)
+
     def test_parity_supports_bounded_historical_windows(self):
         self.assertIn("--end-date", PARITY)
         self.assertIn("--end-date phải dạng YYYY-MM-DD", PARITY)
