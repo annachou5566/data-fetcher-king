@@ -37,8 +37,39 @@ def load_legacy_snapshots(r2, bucket):
     return snapshots
 
 
+def legacy_snapshot_to_records(snap):
+    """Convert both legacy v1 (5 fields) and v2 (9 fields) snapshots.
+
+    v1: [ts, bnc_usdt_buy, bnc_usdt_sell, bnc_usdc_buy, bnc_usdc_sell]
+    v2: [ts, bnc_ub, bnc_us, bnc_cb, bnc_cs, okx_ub, okx_us, bbt_ub, bbt_us]
+    """
+    if not isinstance(snap, list) or len(snap) < 5:
+        return []
+
+    if len(snap) >= 9:
+        return build_long_records(snap)
+
+    ts = snap[0]
+    values = [
+        ("binance", "USDT", "BUY",  snap[1]),
+        ("binance", "USDT", "SELL", snap[2]),
+        ("binance", "USDC", "BUY",  snap[3]),
+        ("binance", "USDC", "SELL", snap[4]),
+    ]
+    return [{
+        "record_type": "price",
+        "ts": ts,
+        "exchange": exchange,
+        "asset": asset,
+        "fiat": "VND",
+        "side": side,
+        "price": price if price and price > 0 else None,
+        "ads_count": None,
+    } for exchange, asset, side, price in values]
+
+
 def group_by_date(snapshots, skip_date=None):
-    """Gom snapshot theo ngày UTC, mỗi snapshot → 8 record long-format.
+    """Gom snapshot theo ngày UTC; v1 → 4 Binance records, v2 → 8 records.
     skip_date (nếu có) sẽ bị loại — dùng để tránh đụng vào ngày hôm nay,
     vì bot live (fetch_p2p.py) đang ghi trực tiếp vào đúng file đó mỗi 10
     phút; nếu migrate cũng ghi cùng lúc sẽ có race condition (2 job chạy
@@ -47,7 +78,8 @@ def group_by_date(snapshots, skip_date=None):
     skipped = 0
     skipped_today = 0
     for snap in snapshots:
-        if not isinstance(snap, list) or len(snap) < 9:
+        records = legacy_snapshot_to_records(snap)
+        if not records:
             skipped += 1
             continue
         ts = snap[0]
@@ -59,7 +91,7 @@ def group_by_date(snapshots, skip_date=None):
         if skip_date and date_str == skip_date:
             skipped_today += 1
             continue
-        by_date[date_str].extend(build_long_records(snap))
+        by_date[date_str].extend(records)
     if skipped:
         print(f"⚠️  Bỏ qua {skipped} snapshot dạng lạ/lỗi (không đủ field)")
     if skipped_today:
