@@ -56,8 +56,12 @@ def load_existing(r2, bucket):
     try:
         obj = r2.get_object(Bucket=bucket, Key=R2_KEY)
         return json.loads(obj["Body"].read().decode("utf-8")).get("rows", [])
-    except Exception:
+    except r2.exceptions.NoSuchKey:
         return []
+    except Exception as e:
+        # Fail closed: transient read/parse/auth failures are not an empty archive.
+        # Otherwise a partial fresh fetch could overwrite the accumulated SBV history.
+        raise RuntimeError(f"Không đọc được sbv-data.json; từ chối ghi đè archive: {e}") from e
 
 # ── Date helper ─────────────────────────────────────────────────────
 def to_date(raw_utc):
