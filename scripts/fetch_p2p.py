@@ -448,9 +448,10 @@ def fetch_binance_side(session, asset, trade_type):
         page += 1
         time.sleep(0.2)
 
-    if total_reported is not None and total_seen < total_reported:
-        is_partial = True
-
+    # Binance's reported total is a moving count. Ads may appear/disappear while
+    # pages are being fetched, so a small final count drift is not proof of a
+    # partial fetch. Only an actual page failure or the hard safety cap marks
+    # the snapshot partial.
     liquidity_verified = sum(m["amount"] for m in merchants.values() if m["trust"] == "VERIFIED")
     liquidity_unverified = sum(m["amount"] for m in merchants.values() if m["trust"] == "UNVERIFIED")
     merchant_count_verified = sum(1 for m in merchants.values() if m["trust"] == "VERIFIED")
