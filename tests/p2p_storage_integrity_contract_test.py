@@ -39,6 +39,20 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn("python scripts/audit_p2p_parity.py --days", WORKFLOW)
         self.assertIn("options: ['30', '60', '90']", WORKFLOW)
 
+    def test_migration_is_bounded_and_skips_unchanged_partitions(self):
+        self.assertIn("--from-date", MIGRATE)
+        self.assertIn("--to-date", MIGRATE)
+        self.assertIn("if dry_run or added == 0:", MIGRATE)
+        self.assertIn("Migration write không được bao gồm ngày UTC hiện tại", MIGRATE)
+        self.assertIn("manifest_change=no", MIGRATE)
+
+    def test_migration_dedupe_key_includes_record_type(self):
+        self.assertIn("_record_type(r)", MIGRATE)
+        self.assertRegex(
+            MIGRATE,
+            r"return \(\s*_record_type\(r\),\s*r\[\"ts\"\],\s*r\[\"exchange\"\],\s*r\[\"asset\"\],\s*r\[\"side\"\],\s*\)",
+        )
+
     def test_migration_preserves_legacy_v1_and_v2(self):
         self.assertIn("def legacy_snapshot_to_records", MIGRATE)
         self.assertIn("if len(snap) >= 9:", MIGRATE)
