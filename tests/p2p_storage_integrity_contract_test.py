@@ -55,6 +55,11 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn('"reported_ad_count": total_reported', P2P)
         self.assertIn('"ads": ads', P2P)
 
+    def test_market_completeness_does_not_treat_moving_reported_total_as_failure(self):
+        self.assertNotIn("if total_reported is not None and total_seen < total_reported", P2P)
+        self.assertIn("if page >= MAX_PAGE_SAFETY:", P2P)
+        self.assertIn("if not ok:", P2P)
+
     def test_market_ads_store_only_bounded_public_fields(self):
         for token in (
             '"price": price',
