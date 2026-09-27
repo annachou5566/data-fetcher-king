@@ -45,6 +45,13 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn('("binance", "USDT", "BUY",  snap[1])', MIGRATE)
         self.assertNotIn("if not isinstance(snap, list) or len(snap) < 9:", MIGRATE)
 
+    def test_parity_report_only_is_read_only_and_compact(self):
+        self.assertIn("--report-only", PARITY)
+        self.assertIn("--details", PARITY)
+        self.assertIn("legacy_only_dates=", PARITY)
+        self.assertIn("legacy_only_shapes=", PARITY)
+        self.assertNotIn("put_object(", PARITY)
+
     def test_parity_audit_is_read_only_and_bounded(self):
         self.assertIn("--days", PARITY)
         self.assertIn("args.days > 90", PARITY)
