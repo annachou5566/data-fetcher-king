@@ -64,6 +64,12 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn('("binance", "USDT", "BUY",  snap[1])', MIGRATE)
         self.assertNotIn("if not isinstance(snap, list) or len(snap) < 9:", MIGRATE)
 
+    def test_parity_recognizes_legacy_canonical_price_schema(self):
+        self.assertIn("def is_price_record(r):", PARITY)
+        self.assertIn('canonical_legacy_schema_price_rows=', PARITY)
+        self.assertIn('r.get("record_type") in (None, "")', PARITY)
+        self.assertIn('"price" in r', PARITY)
+
     def test_parity_distinguishes_missing_keys_from_duplicates(self):
         self.assertIn("missing_canonical_keys=", PARITY)
         self.assertIn("value_mismatch_keys=", PARITY)
