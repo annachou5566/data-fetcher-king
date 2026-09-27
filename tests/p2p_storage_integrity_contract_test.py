@@ -46,6 +46,11 @@ class P2PStorageIntegrityContractTest(unittest.TestCase):
         self.assertIn("Migration write không được bao gồm ngày UTC hiện tại", MIGRATE)
         self.assertIn("manifest_change=no", MIGRATE)
 
+    def test_migration_dedupes_only_against_existing_prices(self):
+        self.assertIn('if _record_type(r) == "price"', MIGRATE)
+        self.assertIn('r.get("side")', MIGRATE)
+        self.assertNotIn('seen = {_record_key(r) for r in existing}', MIGRATE)
+
     def test_migration_dedupe_key_includes_record_type(self):
         self.assertIn("_record_type(r)", MIGRATE)
         self.assertRegex(
