@@ -18,6 +18,15 @@ on:
         description: 'Chạy VCB thủ công để test (mặc định KHÔNG chạy khi trigger P2P qua workflow_dispatch, ví dụ từ cron-job.org)'
         type: boolean
         default: false
+      run_parity_audit:
+        description: 'Audit read-only parity legacy p2p-data.json với canonical daily partitions'
+        type: boolean
+        default: false
+      parity_days:
+        description: 'Số ngày audit parity (bounded)'
+        type: choice
+        options: ['30', '60', '90']
+        default: '30'
       run_cleanup_liquidity:
         description: 'Dọn dẹp Liquidity Index cũ tính sai do cap lỏng (1 lần, an toàn chạy lại nhiều lần)'
         type: boolean
@@ -58,7 +67,36 @@ jobs:
         R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+        P2P_WRITE_LEGACY:     '1'   # retirement requires a separate approved flip after parity PASS
       run: python scripts/fetch_p2p.py
+
+  p2p-parity-audit:
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.run_parity_audit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: job-p2p-parity-audit
+      cancel-in-progress: false
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-p2p-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-p2p-
+    - run: pip install -r requirements.txt
+    - name: Run — P2P Legacy Parity Audit
+      env:
+        R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+      run: python scripts/audit_p2p_parity.py --days "${{ github.event.inputs.parity_days }}"
 
   p2p-migrate-history:
     if: >
