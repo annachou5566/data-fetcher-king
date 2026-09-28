@@ -150,6 +150,7 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
                 "ad_count_raw": 1,
                 "market_ad_count": 1,
                 "reported_ad_count": 1,
+                "v2_required_fields_complete": True,
                 "is_partial": False,
             }
             return stats, [ad(f"binance-{asset}-{side}", ad_id=f"b-{asset}-{side}")]
@@ -193,6 +194,7 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
                 "ad_count_raw": 1,
                 "market_ad_count": 1,
                 "reported_ad_count": 1,
+                "v2_required_fields_complete": True,
                 "is_partial": False,
             }, [ad(f"b-{asset}-{side}", ad_id=f"b-{asset}-{side}")]
 
