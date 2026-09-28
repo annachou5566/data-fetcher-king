@@ -124,6 +124,27 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
         self.assertIn('"okx": "provider_completeness_not_proven"', SOURCE)
 
 
+    def test_binance_required_field_gap_excludes_v2_side(self):
+        item = {
+            "price": "25000",
+            "minSingleTransAmount": "100000",
+            # maxSingleTransAmount intentionally missing
+            "surplusAmount": "5000",
+            "advNo": "ad-1",
+            "advertiser": {
+                "userNo": "merchant-1",
+                "nickName": "Merchant",
+                "monthOrderCount": 100,
+                "monthFinishRate": 0.99,
+            },
+        }
+        with patch.object(p2p, "fetch_binance_ads_page", return_value=([item], 1, True)):
+            stats, ads = p2p.fetch_binance_side(object(), "USDT", "BUY")
+        self.assertEqual(ads, [])
+        self.assertEqual(stats["v2_invalid_ad_count"], 1)
+        self.assertFalse(stats["v2_required_fields_complete"])
+
+
     def test_bybit_maps_taker_buy_to_maker_sell_one_and_sell_to_buy_zero(self):
         buy_session = BybitSession()
         stats_buy, ads_buy = p2p.fetch_bybit_v2_side(buy_session, "USDC", "BUY")
