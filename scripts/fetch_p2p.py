@@ -15,8 +15,10 @@ Ghi các lớp SONG SONG, độc lập nhau (1 lớp lỗi không làm chết l�
      OKX remains top-price context only because ads-book completeness is NOT PROVEN.
      record_type="liquidity_v2_snapshot", same daily owner, versioned explicitly.
 
-     v2 uses one symmetric qualified executable advertised-capacity rule on BUY
-     and SELL. It is NOT executed volume and NOT a causal market-pressure signal.
+     v2 R2 uses side-aware qualified advertised capacity: maker-sell inventory
+     is measured by executable advertised size; maker-buy demand is guarded at
+     10,000 stablecoin units per merchant to limit unreserved fiat inflation.
+     It is NOT executed volume and NOT a causal market-pressure signal.
      Cross-provider ALL remains excluded until cross-provider identity/capital
      double-count can be bounded honestly.
 """
@@ -44,7 +46,8 @@ BNC_ASSETS  = ["USDT", "USDC"]
 OKX_URL     = "https://www.okx.com/v3/c2c/tradingOrders/books"
 BBT_URL     = "https://api2.bybit.com/fiat/otc/item/online"
 
-LIQUIDITY_V2_METHODOLOGY = "p2p-liquidity-v2-r1"
+LIQUIDITY_V2_METHODOLOGY = "p2p-liquidity-v2-r2"
+LIQUIDITY_V2_MAKER_BUY_CAP_CRYPTO = {"USDT": 10_000.0, "USDC": 10_000.0}
 LIQUIDITY_V2_BYBIT_PAGE_SIZE = 50
 LIQUIDITY_V2_BYBIT_MAX_PAGES = 20
 LIQUIDITY_V2_QUALIFIED_PROVIDERS = ("binance", "bybit")
@@ -355,6 +358,9 @@ def _normalize_market_ad(item):
         max_fiat = float(_first_present(
             item, ["maxSingleTransAmount", "maxTransAmount", "maxAmount"]
         ) or 0)
+        dynamic_max_fiat = float(_first_present(
+            item, ["dynamicMaxSingleTransAmount", "dynamicMaxTransAmount"]
+        ) or 0)
         available = float(_first_present(
             item, ["surplusAmount", "tradableAmount", "tradableQuantity", "availableAmount"]
         ) or 0)
@@ -382,6 +388,7 @@ def _normalize_market_ad(item):
         "price": price,
         "minFiat": min_fiat,
         "maxFiat": max_fiat,
+        "dynamicMaxFiat": dynamic_max_fiat if dynamic_max_fiat > 0 else None,
         "availableCrypto": available,
         "payTypes": _normalize_pay_methods(item),
         "merchant": merchant,
@@ -646,17 +653,24 @@ def fetch_bybit_v2_side(session, asset, user_side):
     }, ads
 
 def build_liquidity_v2_record(provider, asset, side, ads, ts, source_stats=None):
-    """Build symmetric v2 qualified executable advertised capacity.
+    """Build R2 side-aware qualified advertised capacity.
 
-    For each qualified ad:
-      executable_crypto = min(available_crypto, max_fiat / price)
+    BUY (user buys crypto / maker sells crypto):
+      executable_crypto = min(available_crypto, current_max_fiat / price)
 
-    The same definition is used on BUY and SELL. Provider-native order count
-    and completion-rate fields are normalized to one shared floor, then each
-    provider merchant contributes only its largest qualifying ad so duplicate
-    payment-method ads do not multiply the same advertised capacity.
+    SELL (user sells crypto / maker buys crypto):
+      executable_crypto = min(available_crypto, current_max_fiat / price,
+                              10_000 stablecoin units per merchant)
 
-    This is advertised capacity, not executed volume or causal pressure.
+    Binance prefers dynamicMaxSingleTransAmount when present; other providers
+    fall back to their normalized current max-fiat field. Provider-native order
+    count and completion rate share the same qualification floor. Each provider
+    merchant contributes only its largest qualifying ad, preventing duplicate
+    payment-method ads from multiplying the same advertised capacity.
+
+    The SELL cap is an anti-inflation guard for maker-buy ads whose fiat demand
+    is not proven reserved capital. It is not intended to force BUY/SELL parity.
+    This remains advertised capacity, not executed volume or causal pressure.
     """
     merchants = {}
     qualified_ads = 0
@@ -666,7 +680,9 @@ def build_liquidity_v2_record(provider, asset, side, ads, ts, source_stats=None)
         try:
             price = float(ad.get("price") or 0)
             min_fiat = float(ad.get("minFiat") or 0)
-            max_fiat = float(ad.get("maxFiat") or 0)
+            static_max_fiat = float(ad.get("maxFiat") or 0)
+            dynamic_max_fiat = float(ad.get("dynamicMaxFiat") or 0)
+            max_fiat = dynamic_max_fiat if dynamic_max_fiat > 0 else static_max_fiat
             available = float(ad.get("availableCrypto") or 0)
             merchant_id = str(ad.get("merchantId") or "").strip()
             order_count = int(float(ad.get("providerOrderCount") or 0))
@@ -689,6 +705,10 @@ def build_liquidity_v2_record(provider, asset, side, ads, ts, source_stats=None)
 
         max_order_crypto = max_fiat / price
         effective = min(available, max_order_crypto)
+        if side == "SELL":
+            maker_buy_cap = LIQUIDITY_V2_MAKER_BUY_CAP_CRYPTO.get(asset)
+            if maker_buy_cap is not None:
+                effective = min(effective, maker_buy_cap)
         if effective <= 0:
             continue
 
@@ -732,8 +752,9 @@ def build_liquidity_v2_record(provider, asset, side, ads, ts, source_stats=None)
         "complete": not bool(source_stats.get("is_partial")),
         "is_partial": bool(source_stats.get("is_partial")),
         "qualification_policy": "provider_orders_gte10_completion_gte0_85_v1",
-        "capacity_policy": "min_available_max_order_crypto_v1",
+        "capacity_policy": "side_aware_dynamic_order_maker_buy_cap10k_v2",
         "merchant_dedupe": "max_contribution_per_provider_merchant",
+        "maker_buy_cap_crypto": LIQUIDITY_V2_MAKER_BUY_CAP_CRYPTO.get(asset) if side == "SELL" else None,
         "payment_method_value_count": len(payment_values),
         "aggregate_eligible": False,
         "aggregate_status": LIQUIDITY_V2_AGGREGATE_STATUS,
