@@ -227,6 +227,9 @@ def get_json(session, url, *, params=None, body=None):
 
 
 def qualify_okx(session, asset, side):
+    # OKX endpoint side is maker-ad perspective. Wave/user BUY consumes maker
+    # SELL ads; Wave/user SELL consumes maker BUY ads.
+    provider_side = "sell" if side == "BUY" else "buy"
     # First try the marketplace endpoint because it exposes explicit paging controls
     # and richer ad fields. This remains unauthenticated/read-only.
     params = {
@@ -237,18 +240,17 @@ def qualify_okx(session, asset, side):
         "limit": str(OKX_PAGE_SIZE),
         "currentPage": "1",
         "numberPerPage": str(OKX_PAGE_SIZE),
-        "side": side,
+        "side": provider_side,
         "fiatCurrency": FIAT,
         "cryptoCurrency": asset,
     }
     s1, b1 = get_json(session, OKX_MARKET, params=params)
-    items1 = okx_items(b1 or {}, side) if b1 else []
+    items1 = okx_items(b1 or {}, provider_side.upper()) if b1 else []
     endpoint = "marketplace-prelogin"
     authless = s1 == 200
 
     if not items1:
         # Current writer's legacy price-context endpoint fallback.
-        provider_side = "sell" if side == "BUY" else "buy"
         params = {
             "quoteCurrency": FIAT,
             "baseCurrency": asset,
