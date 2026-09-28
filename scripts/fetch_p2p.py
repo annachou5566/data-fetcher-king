@@ -8,14 +8,16 @@ Ghi các lớp SONG SONG, độc lập nhau (1 lớp lỗi không làm chết l�
   1) LEGACY  — p2p-data.json (giữ nguyên 100%, không đổi gì)
   2) DAILY PRICE — p2p-snapshots/YYYY-MM-DD.json, record_type="price"
      (giữ nguyên 100%, không đổi gì)
-  3) MỚI — LIQUIDITY INDEX (chỉ Binance, xem kiến trúc trong tài liệu
-     p2p-liquidity-architecture.md) — record_type="liquidity_snapshot",
-     ghi vào CÙNG file daily, khác record_type để phân biệt.
+  3) LIQUIDITY v1 — Binance historical compatibility record
+     record_type="liquidity_snapshot" (không rewrite history cũ).
 
-     ⚠️ OKX/Bybit CHƯA có Liquidity Index vì field name (surplusAmount,
-     merchant trust...) chưa được xác minh chắc chắn cho 2 sàn này —
-     script chỉ in log debug cấu trúc response để xác minh sau, KHÔNG
-     đoán mò field để tránh dữ liệu sai.
+  4) LIQUIDITY v2 R1 — prospective per-exchange records for Binance/OKX/Bybit
+     record_type="liquidity_v2_snapshot", same daily owner, versioned explicitly.
+
+     v2 uses one symmetric bounded advertised-capacity rule on BUY and SELL.
+     It is NOT executed volume and NOT a causal market-pressure signal.
+     Cross-provider ALL remains excluded until cross-provider identity/capital
+     double-count can be bounded honestly.
 """
 
 import os, json, time, boto3
@@ -33,13 +35,22 @@ R2_DAILY_PREFIX = "p2p-snapshots/"
 R2_MANIFEST_KEY = "p2p-snapshots/_manifest.json"
 R2_MARKET_KEY   = "p2p-snapshots/_market-latest.json"
 SCHEMA_VERSION  = 1
-MARKET_SCHEMA_VERSION = 1
+MARKET_SCHEMA_VERSION = 2
 
 BNC_URL     = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/ad-list"
 BNC_LIQUIDITY_URL = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 BNC_ASSETS  = ["USDT", "USDC"]
 OKX_URL     = "https://www.okx.com/v3/c2c/tradingOrders/books"
+OKX_LIQUIDITY_URL = "https://www.okx.com/v3/c2c/tradingOrders/getMarketplaceAdsPrelogin"
 BBT_URL     = "https://api2.bybit.com/fiat/otc/item/online"
+
+LIQUIDITY_V2_METHODOLOGY = "p2p-liquidity-v2-r1"
+LIQUIDITY_V2_CAP_MULTIPLIER = 3
+LIQUIDITY_V2_FLAT_CAP_STABLE = 10_000
+LIQUIDITY_V2_BYBIT_PAGE_SIZE = 50
+LIQUIDITY_V2_BYBIT_MAX_PAGES = 20
+LIQUIDITY_V2_AGGREGATE_STATUS = "EXCLUDED"
+LIQUIDITY_V2_AGGREGATE_REASON = "cross_provider_identity_and_capital_overlap_not_proven"
 
 # ── Config MỚI — Liquidity Index (theo kiến trúc đã chốt) ───────────
 VERIFIED_MIN_ORDER_COUNT = 10
@@ -267,7 +278,7 @@ def save_snapshot_daily(r2, bucket, snap):
 
 
 # ══════════════════════════════════════════════════════════════════
-# MỚI — LIQUIDITY INDEX (chỉ Binance, theo kiến trúc đã chốt)
+# LIQUIDITY v1 compatibility + prospective per-exchange v2
 # ══════════════════════════════════════════════════════════════════
 
 def fetch_binance_ads_page(session, asset, trade_type, page):
@@ -352,6 +363,10 @@ def _normalize_market_ad(item):
         merchant = str(_first_present(
             advertiser, ["nickName", "userNo", "advNo"]
         ) or "").strip()
+        merchant_id = str(_first_present(
+            advertiser, ["userNo", "advNo", "nickName"]
+        ) or "").strip()
+        ad_id = str(_first_present(item, ["advNo", "id"]) or "").strip()
     except Exception:
         return None
 
@@ -362,6 +377,10 @@ def _normalize_market_ad(item):
         "availableCrypto": available,
         "payTypes": _normalize_pay_methods(item),
         "merchant": merchant,
+        "merchantId": merchant_id,
+        "adId": ad_id,
+        "providerOrderCount": month_orders,
+        "providerCompletionRate": round(finish_rate, 6),
         "monthOrders": month_orders,
         "monthRate": round(finish_rate, 6),
     }
@@ -472,6 +491,338 @@ def fetch_binance_side(session, asset, trade_type):
     return stats, market_ads
 
 
+def _normalise_rate(value):
+    try:
+        rate = float(value or 0)
+    except Exception:
+        return None
+    if rate > 1:
+        rate /= 100
+    return round(rate, 6) if rate >= 0 else None
+
+
+def _identity_value(item, keys):
+    for key in keys:
+        value = item.get(key) if isinstance(item, dict) else None
+        if value in (None, ""):
+            continue
+        text = str(value).strip()
+        if not text or text.lower() in {"0", "-1", "none", "null"}:
+            continue
+        return text
+    return ""
+
+
+def _normalize_okx_v2_ad(item, asset):
+    try:
+        if str(item.get("quoteCurrency") or "").upper() != FIAT:
+            return None
+        if str(item.get("baseCurrency") or "").upper() != asset:
+            return None
+        price = float(item.get("price") or 0)
+        min_fiat = float(item.get("quoteMinAmountPerOrder") or 0)
+        max_fiat = float(item.get("quoteMaxAmountPerOrder") or 0)
+        available = float(item.get("availableAmount") or 0)
+        if price <= 10_000 or max_fiat <= 0 or available <= 0:
+            return None
+        merchant_id = _identity_value(item, ["merchantId", "publicUserId", "userId", "nickName"])
+        ad_id = _identity_value(item, ["id", "advertisementId"])
+        if not merchant_id or not ad_id:
+            return None
+    except Exception:
+        return None
+
+    methods = item.get("paymentMethods") or []
+    methods = [str(x).strip() for x in methods if str(x).strip()] if isinstance(methods, list) else []
+    return {
+        "price": price,
+        "minFiat": min_fiat,
+        "maxFiat": max_fiat,
+        "availableCrypto": available,
+        "payTypes": methods,
+        "merchant": str(item.get("nickName") or merchant_id).strip(),
+        "merchantId": merchant_id,
+        "adId": ad_id,
+        "providerOrderCount": int(float(item.get("completedOrderQuantity") or 0)),
+        "providerCompletionRate": _normalise_rate(item.get("completedRate")),
+    }
+
+
+def _okx_v2_items(body, user_side):
+    data = body.get("data") if isinstance(body, dict) else None
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    rows = data.get(user_side.lower())
+    if isinstance(rows, list):
+        return rows
+    return []
+
+
+def fetch_okx_v2_side(session, asset, user_side):
+    """Fetch one full unauthenticated OKX P2P book with explicit terminal paging."""
+    ads = []
+    seen_ids = set()
+    page = 1
+    partial = False
+    raw_count = 0
+
+    while page <= MAX_PAGE_SAFETY:
+        try:
+            res = session.get(OKX_LIQUIDITY_URL, params={
+                "paymentMethod": "all",
+                "userType": "all",
+                "hideOverseasVerificationAds": "false",
+                "sortType": "price_asc",
+                "limit": "1000",
+                "currentPage": str(page),
+                "numberPerPage": "1000",
+                "side": user_side,
+                "fiatCurrency": FIAT,
+                "cryptoCurrency": asset,
+            }, timeout=15)
+            if res.status_code != 200:
+                partial = True
+                break
+            items = _okx_v2_items(res.json(), user_side)
+        except Exception:
+            partial = True
+            break
+
+        if not items:
+            break
+
+        new_ids = 0
+        for item in items:
+            raw_count += 1
+            normalized = _normalize_okx_v2_ad(item, asset)
+            if normalized is None:
+                continue
+            ad_id = normalized["adId"]
+            if ad_id in seen_ids:
+                continue
+            seen_ids.add(ad_id)
+            ads.append(normalized)
+            new_ids += 1
+
+        if new_ids == 0:
+            # Endpoint ignored the page cursor or returned a repeating page.
+            partial = True
+            break
+
+        page += 1
+        time.sleep(0.12)
+    else:
+        partial = True
+
+    return {
+        "reported_ad_count": None,
+        "ad_count_raw": raw_count,
+        "market_ad_count": len(ads),
+        "pages_fetched": max(1, page - 1),
+        "is_partial": partial,
+    }, ads
+
+
+def _normalize_bybit_v2_ad(item, asset):
+    try:
+        if str(item.get("currencyId") or "").upper() != FIAT:
+            return None
+        if str(item.get("tokenId") or "").upper() != asset:
+            return None
+        price = float(item.get("price") or 0)
+        min_fiat = float(item.get("minAmount") or 0)
+        max_fiat = float(item.get("maxAmount") or 0)
+        available = float(_first_present(item, ["lastQuantity", "quantity"]) or 0)
+        if price <= 10_000 or max_fiat <= 0 or available <= 0:
+            return None
+        merchant_id = _identity_value(
+            item, ["accountId", "userMaskId", "merchantId", "nickName", "userId"]
+        )
+        ad_id = _identity_value(item, ["id", "itemId"])
+        if not merchant_id or not ad_id:
+            return None
+    except Exception:
+        return None
+
+    payment_ids = item.get("payments") or []
+    payment_ids = [str(x).strip() for x in payment_ids if str(x).strip()] if isinstance(payment_ids, list) else []
+    return {
+        "price": price,
+        "minFiat": min_fiat,
+        "maxFiat": max_fiat,
+        "availableCrypto": available,
+        # Bybit's keyless endpoint exposes payment IDs here, not qualified
+        # human-readable method names. Keep them separate; do not mislabel IDs.
+        "payTypes": [],
+        "paymentIds": payment_ids,
+        "merchant": str(item.get("nickName") or merchant_id).strip(),
+        "merchantId": merchant_id,
+        "adId": ad_id,
+        "providerOrderCount": int(float(item.get("recentOrderNum") or 0)),
+        "providerCompletionRate": _normalise_rate(item.get("recentExecuteRate")),
+        "sourceCreatedAt": item.get("createDate"),
+    }
+
+
+def fetch_bybit_v2_side(session, asset, user_side):
+    """Fetch one complete Bybit keyless web book, bounded by reported total + hard cap.
+
+    Bybit side is maker perspective: maker SELL (1) serves taker/user BUY,
+    maker BUY (0) serves taker/user SELL.
+    """
+    provider_side = "1" if user_side == "BUY" else "0"
+    ads = []
+    seen_ids = set()
+    first_total = None
+    page = 1
+    partial = False
+    raw_count = 0
+
+    while page <= LIQUIDITY_V2_BYBIT_MAX_PAGES:
+        try:
+            res = session.post(BBT_URL, json={
+                "userId": "",
+                "tokenId": asset,
+                "currencyId": FIAT,
+                "payment": [],
+                "side": provider_side,
+                "size": str(LIQUIDITY_V2_BYBIT_PAGE_SIZE),
+                "page": str(page),
+                "amount": "",
+                "authMaker": False,
+                "canTrade": False,
+            }, timeout=15)
+            if res.status_code != 200:
+                partial = True
+                break
+            result = res.json().get("result", {}) or {}
+            items = result.get("items", []) or []
+            if first_total is None:
+                try:
+                    first_total = int(result.get("count"))
+                except Exception:
+                    first_total = None
+        except Exception:
+            partial = True
+            break
+
+        if not items:
+            if first_total is not None and len(seen_ids) < first_total:
+                partial = True
+            break
+
+        for item in items:
+            raw_count += 1
+            normalized = _normalize_bybit_v2_ad(item, asset)
+            if normalized is None:
+                continue
+            ad_id = normalized["adId"]
+            if ad_id in seen_ids:
+                continue
+            seen_ids.add(ad_id)
+            ads.append(normalized)
+
+        if first_total is not None and len(seen_ids) >= first_total:
+            break
+        if len(items) < LIQUIDITY_V2_BYBIT_PAGE_SIZE:
+            if first_total is not None and len(seen_ids) < first_total:
+                partial = True
+            break
+
+        page += 1
+        time.sleep(0.12)
+    else:
+        partial = True
+
+    return {
+        "reported_ad_count": first_total,
+        "ad_count_raw": raw_count,
+        "market_ad_count": len(ads),
+        "pages_fetched": page,
+        "is_partial": partial,
+    }, ads
+
+
+def build_liquidity_v2_record(provider, asset, side, ads, ts, source_stats=None):
+    """Canonical symmetric bounded advertised capacity for one venue/asset/side.
+
+    Structural qualification is intentionally provider-neutral. Provider-native
+    order/completion metrics are retained in ads for evidence but are NOT used
+    as a cross-provider trust score because their measurement windows are not
+    proven equivalent.
+    """
+    merchants = {}
+    qualified_ads = 0
+    payment_values = set()
+
+    for ad in ads:
+        try:
+            price = float(ad.get("price") or 0)
+            max_fiat = float(ad.get("maxFiat") or 0)
+            available = float(ad.get("availableCrypto") or 0)
+            merchant_id = str(ad.get("merchantId") or "").strip()
+        except Exception:
+            continue
+        if price <= 10_000 or max_fiat <= 0 or available <= 0 or not merchant_id:
+            continue
+
+        max_order_crypto = max_fiat / price
+        effective = min(
+            available,
+            LIQUIDITY_V2_FLAT_CAP_STABLE,
+            max_order_crypto * LIQUIDITY_V2_CAP_MULTIPLIER,
+        )
+        if effective <= 0:
+            continue
+
+        qualified_ads += 1
+        for method in (ad.get("payTypes") or []):
+            if isinstance(method, str) and method.strip():
+                payment_values.add(method.strip())
+        for payment_id in (ad.get("paymentIds") or []):
+            if isinstance(payment_id, str) and payment_id.strip():
+                payment_values.add("id:" + payment_id.strip())
+
+        contribution = {
+            "crypto": effective,
+            "vnd": effective * price,
+        }
+        current = merchants.get(merchant_id)
+        if current is None or contribution["crypto"] > current["crypto"]:
+            merchants[merchant_id] = contribution
+
+    capacity_crypto = sum(x["crypto"] for x in merchants.values())
+    capacity_vnd = sum(x["vnd"] for x in merchants.values())
+    source_stats = source_stats or {}
+
+    return {
+        "record_type": "liquidity_v2_snapshot",
+        "methodology_version": LIQUIDITY_V2_METHODOLOGY,
+        "ts": ts,
+        "exchange": provider,
+        "asset": asset,
+        "fiat": FIAT,
+        "side": side,
+        "capacity_crypto": round(capacity_crypto, 2),
+        "capacity_vnd": round(capacity_vnd),
+        "qualified_ad_count": qualified_ads,
+        "qualified_merchant_count": len(merchants),
+        "source_ad_count": len(ads),
+        "reported_ad_count": source_stats.get("reported_ad_count"),
+        "pages_fetched": source_stats.get("pages_fetched"),
+        "is_partial": bool(source_stats.get("is_partial")),
+        "qualification_policy": "structural_public_ad_v1",
+        "capacity_policy": "min_available_flat10000_maxorderx3_v1",
+        "merchant_dedupe": "max_contribution_per_provider_merchant",
+        "payment_method_value_count": len(payment_values),
+        "aggregate_eligible": False,
+        "aggregate_status": LIQUIDITY_V2_AGGREGATE_STATUS,
+        "aggregate_exclusion_reason": LIQUIDITY_V2_AGGREGATE_REASON,
+    }
+
+
 def fetch_binance_liquidity(session, asset, trade_type):
     """Compatibility wrapper for callers that only need liquidity stats."""
     stats, _ = fetch_binance_side(session, asset, trade_type)
@@ -479,18 +830,24 @@ def fetch_binance_liquidity(session, asset, trade_type):
 
 
 def build_liquidity_and_market(session, ts):
-    """Build daily liquidity records and a volatile canonical ads snapshot.
+    """Build legacy v1 plus prospective per-exchange Liquidity v2 records.
 
-    The market snapshot is returned only when all four Binance asset/side
-    collections are complete and non-empty. This prevents a partial/WAF
-    failure from overwriting the previous last-good amount-aware snapshot.
+    Binance remains the compatibility owner for the top-level canonical market
+    shape. v2 provider books are attached under providers without changing the
+    existing R2 key. Per-provider failure is fail-closed. Cross-provider ALL is
+    intentionally not emitted while cross-venue identity/capital overlap is
+    unproven.
     """
     records = []
     market_assets = {}
+    provider_market = {}
     market_complete = True
 
+    # Binance v1 compatibility + v2 source ads.
+    binance_v2 = {}
     for asset in BNC_ASSETS:
         market_assets[asset] = {}
+        binance_v2[asset] = {}
         for side in ("BUY", "SELL"):
             print(f"  📊 Liquidity/market BNC {asset}/{side}...", flush=True)
             stats, ads = fetch_binance_side(session, asset, side)
@@ -505,18 +862,41 @@ def build_liquidity_and_market(session, ts):
                 "ad_count": len(ads),
                 "reported_ad_count": stats.get("reported_ad_count"),
             }
+            binance_v2[asset][side] = {
+                "ads": ads,
+                "ad_count": len(ads),
+                "reported_ad_count": stats.get("reported_ad_count"),
+                "complete": not stats.get("is_partial") and bool(ads),
+            }
 
             if stats["is_partial"] or not ads:
                 market_complete = False
+            else:
+                records.append(
+                    build_liquidity_v2_record("binance", asset, side, ads, ts, stats)
+                )
 
             print(
-                f"     verified={stats['liquidity_verified']:,.0f} "
-                f"unverified={stats['liquidity_unverified']:,.0f} "
+                f"     v1_verified={stats['liquidity_verified']:,.0f} "
+                f"v1_unverified={stats['liquidity_unverified']:,.0f} "
                 f"merchants={stats['merchant_count_total']} "
                 f"market_ads={len(ads)} partial={stats['is_partial']}"
             )
 
-    usdt_records = {r["side"]: r for r in records if r["asset"] == "USDT"}
+    provider_market["binance"] = {
+        "complete": market_complete,
+        "assets": binance_v2,
+    }
+
+    # Historical v1 imbalance remains Binance-only and keeps its original
+    # asymmetric semantics. It is not reused as a v2 pressure signal.
+    usdt_records = {
+        r["side"]: r
+        for r in records
+        if r.get("record_type") == "liquidity_snapshot"
+        and r.get("exchange") == "binance"
+        and r.get("asset") == "USDT"
+    }
     if "BUY" in usdt_records and "SELL" in usdt_records:
         for kind in ("verified", "total"):
             l_buy = usdt_records["BUY"][f"liquidity_{kind}"]
@@ -532,6 +912,45 @@ def build_liquidity_and_market(session, ts):
                 "imbalance_index": round(imbalance, 4) if imbalance is not None else None,
             })
 
+    # Qualified v2 provider books. These do not affect Binance last-good market
+    # publication: an OKX/Bybit issue cannot erase a healthy Binance market.
+    for provider, fetcher in (
+        ("okx", fetch_okx_v2_side),
+        ("bybit", fetch_bybit_v2_side),
+    ):
+        provider_assets = {}
+        provider_complete = True
+        for asset in BNC_ASSETS:
+            provider_assets[asset] = {}
+            for side in ("BUY", "SELL"):
+                print(f"  📊 Liquidity v2 {provider.upper()} {asset}/{side}...", flush=True)
+                stats, ads = fetcher(session, asset, side)
+                complete = not stats.get("is_partial") and bool(ads)
+                provider_assets[asset][side] = {
+                    "ads": ads if complete else [],
+                    "ad_count": len(ads) if complete else 0,
+                    "reported_ad_count": stats.get("reported_ad_count"),
+                    "complete": complete,
+                }
+                if not complete:
+                    provider_complete = False
+                    print(
+                        f"     EXCLUDED side: ads={len(ads)} partial={stats.get('is_partial')}"
+                    )
+                    continue
+
+                record = build_liquidity_v2_record(provider, asset, side, ads, ts, stats)
+                records.append(record)
+                print(
+                    f"     capacity={record['capacity_crypto']:,.2f} {asset} "
+                    f"merchants={record['qualified_merchant_count']} ads={record['qualified_ad_count']}"
+                )
+
+        provider_market[provider] = {
+            "complete": provider_complete,
+            "assets": provider_assets,
+        }
+
     market = None
     if market_complete:
         market = {
@@ -542,6 +961,12 @@ def build_liquidity_and_market(session, ts):
             "fiat": FIAT,
             "complete": True,
             "assets": market_assets,
+            "providers": provider_market,
+            "liquidity_v2": {
+                "methodology_version": LIQUIDITY_V2_METHODOLOGY,
+                "aggregate_status": LIQUIDITY_V2_AGGREGATE_STATUS,
+                "aggregate_exclusion_reason": LIQUIDITY_V2_AGGREGATE_REASON,
+            },
         }
 
     return records, market
@@ -607,13 +1032,13 @@ def main():
         print(f"❌ Daily price save error: {e}")
         raise
 
-    # ── Lớp MỚI: Liquidity Index (độc lập, lỗi không ảnh hưởng 2 lớp trên) ──
-    print("📊 Fetching Liquidity Index (Binance)...", flush=True)
+    # ── Liquidity v1 compatibility + prospective per-exchange v2 ──
+    print("📊 Fetching Liquidity v1 + per-exchange v2...", flush=True)
     try:
         session = requests.Session(impersonate="chrome116")
         liquidity_records, market_snapshot = build_liquidity_and_market(session, ts)
         total_liq = append_daily_records(r2, bucket, date_str, liquidity_records)
-        print(f"✅ Liquidity Index OK — {date_str}: {total_liq:,} records hôm nay (tổng cả price + liquidity)")
+        print(f"✅ Liquidity write OK — {date_str}: {total_liq:,} records hôm nay (price + v1 + v2)")
 
         if market_snapshot:
             market_ads = save_market_snapshot(r2, bucket, market_snapshot)
