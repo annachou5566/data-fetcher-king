@@ -92,7 +92,7 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
     ad_ids = []
     merchants = []
     good_price = good_limits = good_inventory = good_payments = 0
-    good_orders = good_rate = good_ad_id = good_merchant = 0
+    good_orders = good_rate = good_ad_id = good_merchant = good_units = 0
     freshness_fields = set()
     prices = []
 
@@ -109,6 +109,7 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             orders = num(first(x, ("completedOrderQuantity", "completedOrderCount", "orderCount")))
             rate = num(first(x, ("completedRate", "completionRate", "finishRate")))
             pays = first(x, ("paymentMethods", "payments", "payTypes"))
+            unit_ok = str(x.get("quoteCurrency") or "").upper() == FIAT and str(x.get("baseCurrency") or "").upper() == asset
         else:
             price = num(first(x, ("price",)))
             mn = num(first(x, ("minAmount",)))
@@ -122,7 +123,10 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             orders = num(first(x, ("recentOrderNum", "orderNum", "completedOrderQuantity")))
             rate = num(first(x, ("recentExecuteRate", "completionRate")))
             pays = first(x, ("payments", "paymentMethods", "payTypes"))
+            unit_ok = str(x.get("currencyId") or "").upper() == FIAT and str(x.get("tokenId") or "").upper() == asset
 
+        if unit_ok:
+            good_units += 1
         if price and price > 10_000:
             good_price += 1
             prices.append(price)
@@ -186,6 +190,7 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             "completion_rate": good_rate,
             "ad_identity": good_ad_id,
             "merchant_identity": good_merchant,
+            "unit_labels": good_units,
         },
         "unique_ads": unique_ads,
         "unique_merchants": unique_merchants,
@@ -197,8 +202,9 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
         "sample_keys": field_keys[:80],
         "sample_ad_hash": short_hash(ad_ids[0]) if ad_ids else None,
         "sample_merchant_hash": short_hash(merchants[0]) if merchants else None,
-        "amount_filter_possible": bool(n and good_price == n and good_limits == n and good_inventory == n),
-        "capacity_without_guessing": bool(n and good_inventory == n),
+        "unit_labels_match": bool(n and good_units == n),
+        "amount_filter_possible": bool(n and good_price == n and good_limits == n and good_inventory == n and good_units == n),
+        "capacity_without_guessing": bool(n and good_inventory == n and good_units == n),
     }
     print("evidence " + json.dumps(evidence, separators=(",", ":"), sort_keys=True))
     return evidence
