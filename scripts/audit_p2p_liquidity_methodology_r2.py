@@ -150,6 +150,73 @@ def fetch_binance_book(session, asset, side):
     return items, reported, page, partial
 
 
+
+def audit_bybit(session):
+    print("BYBIT_AUDIT_BEGIN")
+    totals = {}
+    for asset in p2p.BNC_ASSETS:
+        for side in ("BUY", "SELL"):
+            stats, ads = p2p.fetch_bybit_v2_side(session, asset, side)
+            merchants = {}
+            qualified_ads = 0
+            for ad in ads:
+                try:
+                    price = fnum(ad.get("price"))
+                    max_fiat = fnum(ad.get("maxFiat"))
+                    available = fnum(ad.get("availableCrypto"))
+                    merchant_id = str(ad.get("merchantId") or "").strip()
+                    order_count = int(fnum(ad.get("providerOrderCount")))
+                    completion = norm_rate(ad.get("providerCompletionRate"))
+                except Exception:
+                    continue
+                if (
+                    price <= 10_000
+                    or max_fiat <= 0
+                    or available <= 0
+                    or not merchant_id
+                    or order_count < p2p.VERIFIED_MIN_ORDER_COUNT
+                    or completion < p2p.VERIFIED_MIN_FINISH_RATE
+                ):
+                    continue
+                effective = min(available, max_fiat / price)
+                if effective <= 0:
+                    continue
+                qualified_ads += 1
+                current = merchants.get(merchant_id, 0.0)
+                if effective > current:
+                    merchants[merchant_id] = effective
+
+            current = summarize(merchants.values())
+            guarded_values = [
+                min(v, BINANCE_SELL_GUARD_USDT) if side == "SELL" else v
+                for v in merchants.values()
+            ]
+            guarded = summarize(guarded_values)
+            totals[(asset, side)] = {"current": current, "guarded": guarded}
+            print(
+                "BYBIT "
+                f"asset={asset} side={side} raw_ads={len(ads)} "
+                f"reported={stats.get('reported_ad_count')} pages={stats.get('pages_fetched')} "
+                f"partial={int(bool(stats.get('is_partial')))} qualified_ads={qualified_ads} "
+                f"merchants={len(merchants)} current={current['total']:.2f} "
+                f"guard10k={guarded['total']:.2f} max_merchant={current['max']:.2f} "
+                f"gt10k_merchants={current['gt10k']} top1={current['top1_share']:.4f} "
+                f"top5={current['top5_share']:.4f} top10={current['top10_share']:.4f}"
+            )
+
+    for asset in p2p.BNC_ASSETS:
+        for key in ("current", "guarded"):
+            b = totals[(asset, "BUY")][key]["total"]
+            s = totals[(asset, "SELL")][key]["total"]
+            ratio = (s / b) if b > 0 else None
+            print(
+                f"BYBIT_RATIO asset={asset} method={key} "
+                f"sell_over_buy={ratio:.4f}" if ratio is not None
+                else f"BYBIT_RATIO asset={asset} method={key} sell_over_buy=NA"
+            )
+    print("BYBIT_AUDIT_END")
+
+
 def audit_binance(session):
     print("BINANCE_AUDIT_BEGIN")
     totals = {}
@@ -280,6 +347,7 @@ def main():
     print("mode=read_only storage=none raw_ads=not_printed merchant_ids=not_printed")
     session = p2p.requests.Session(impersonate="chrome116")
     audit_binance(session)
+    audit_bybit(session)
     audit_okx(session)
     print("P2P_LIQUIDITY_METHODOLOGY_R2_AUDIT_END")
 
