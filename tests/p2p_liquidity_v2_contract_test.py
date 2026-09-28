@@ -15,7 +15,7 @@ spec.loader.exec_module(p2p)
 
 
 def ad(merchant, *, price=25_000, max_fiat=25_000_000, available=5_000,
-       min_fiat=100_000, order_count=0, rate=0.0, ad_id=None):
+       min_fiat=100_000, order_count=100, rate=0.99, ad_id=None):
     return {
         "price": price,
         "minFiat": min_fiat,
@@ -37,33 +37,6 @@ class FakeResponse:
 
     def json(self):
         return self._body
-
-
-class OkxSession:
-    def __init__(self):
-        self.calls = []
-
-    def get(self, url, params=None, timeout=None):
-        self.calls.append(dict(params or {}))
-        side = params["side"]
-        if params["currentPage"] == "1":
-            item = {
-                "quoteCurrency": "VND",
-                "baseCurrency": params["cryptoCurrency"],
-                "side": side,
-                "price": "25000",
-                "quoteMinAmountPerOrder": "100000",
-                "quoteMaxAmountPerOrder": "25000000",
-                "availableAmount": "5000",
-                "merchantId": "merchant-okx",
-                "id": f"okx-{side}",
-                "nickName": "OKX Merchant",
-                "paymentMethods": ["BANK"],
-                "completedOrderQuantity": "100",
-                "completedRate": "0.99",
-            }
-            return FakeResponse({"data": {side: [item]}})
-        return FakeResponse({"data": {side: []}})
 
 
 class BybitSession:
@@ -96,31 +69,41 @@ class BybitSession:
 class P2PLiquidityV2ContractTest(unittest.TestCase):
     def test_methodology_is_explicit_and_all_is_excluded(self):
         self.assertEqual(p2p.LIQUIDITY_V2_METHODOLOGY, "p2p-liquidity-v2-r1")
+        self.assertEqual(p2p.LIQUIDITY_V2_QUALIFIED_PROVIDERS, ("binance", "bybit"))
+        self.assertEqual(
+            p2p.LIQUIDITY_V2_EXCLUDED_PROVIDERS["okx"],
+            "provider_completeness_not_proven",
+        )
         self.assertEqual(p2p.LIQUIDITY_V2_AGGREGATE_STATUS, "EXCLUDED")
         self.assertIn("cross_provider_identity", p2p.LIQUIDITY_V2_AGGREGATE_REASON)
 
     def test_symmetric_capacity_formula_is_side_independent(self):
         ads = [
-            ad("m1", max_fiat=25_000_000, available=5_000, ad_id="a1"),  # cap 3,000
-            ad("m1", max_fiat=50_000_000, available=7_000, ad_id="a2"),  # cap 6,000; wins merchant
-            ad("m2", max_fiat=250_000_000, available=20_000, ad_id="a3"), # flat cap 10,000
+            ad("m1", max_fiat=25_000_000, available=5_000, ad_id="a1"),   # 1,000
+            ad("m1", max_fiat=50_000_000, available=7_000, ad_id="a2"),   # 2,000; wins merchant
+            ad("m2", max_fiat=250_000_000, available=20_000, ad_id="a3"), # 10,000
         ]
         buy = p2p.build_liquidity_v2_record("binance", "USDT", "BUY", ads, 123)
         sell = p2p.build_liquidity_v2_record("binance", "USDT", "SELL", ads, 123)
-        self.assertEqual(buy["capacity_crypto"], 16_000)
-        self.assertEqual(sell["capacity_crypto"], 16_000)
+        self.assertEqual(buy["capacity_crypto"], 12_000)
+        self.assertEqual(sell["capacity_crypto"], 12_000)
         self.assertEqual(buy["capacity_crypto"], sell["capacity_crypto"])
         self.assertEqual(buy["qualified_merchant_count"], 2)
         self.assertEqual(buy["qualified_ad_count"], 3)
-        self.assertEqual(buy["capacity_vnd"], 400_000_000)
+        self.assertEqual(buy["capacity_vnd"], 300_000_000)
+        self.assertEqual(buy["capacity_policy"], "min_available_max_order_crypto_v1")
 
-    def test_provider_order_and_completion_metrics_do_not_change_capacity(self):
-        base = [ad("m1", order_count=1, rate=0.01)]
-        high = [ad("m1", order_count=999999, rate=1.0)]
-        a = p2p.build_liquidity_v2_record("okx", "USDT", "BUY", base, 1)
-        b = p2p.build_liquidity_v2_record("okx", "USDT", "BUY", high, 1)
-        self.assertEqual(a["capacity_crypto"], b["capacity_crypto"])
-        self.assertEqual(a["qualification_policy"], "structural_public_ad_v1")
+    def test_same_order_and_completion_floor_controls_capacity(self):
+        low = [ad("m1", order_count=9, rate=0.84)]
+        high = [ad("m1", order_count=10, rate=0.85)]
+        a = p2p.build_liquidity_v2_record("bybit", "USDT", "BUY", low, 1)
+        b = p2p.build_liquidity_v2_record("bybit", "USDT", "BUY", high, 1)
+        self.assertEqual(a["capacity_crypto"], 0)
+        self.assertGreater(b["capacity_crypto"], 0)
+        self.assertEqual(
+            b["qualification_policy"],
+            "provider_orders_gte10_completion_gte0_85_v1",
+        )
 
     def test_invalid_capacity_inputs_fail_closed_per_ad(self):
         rows = [
@@ -135,19 +118,11 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
         self.assertEqual(out["qualified_merchant_count"], 1)
         self.assertGreater(out["capacity_crypto"], 0)
 
-    def test_okx_maps_taker_buy_to_maker_sell_and_taker_sell_to_maker_buy(self):
-        buy_session = OkxSession()
-        stats_buy, ads_buy = p2p.fetch_okx_v2_side(buy_session, "USDT", "BUY")
-        self.assertFalse(stats_buy["is_partial"])
-        self.assertEqual(len(ads_buy), 1)
-        self.assertEqual(buy_session.calls[0]["side"], "sell")
-        self.assertEqual(ads_buy[0]["availableCrypto"], 5_000)
+    def test_okx_liquidity_is_excluded_after_completeness_gate(self):
+        self.assertNotIn("OKX_LIQUIDITY_URL", SOURCE)
+        self.assertNotIn("def fetch_okx_v2_side", SOURCE)
+        self.assertIn('"okx": "provider_completeness_not_proven"', SOURCE)
 
-        sell_session = OkxSession()
-        stats_sell, ads_sell = p2p.fetch_okx_v2_side(sell_session, "USDT", "SELL")
-        self.assertFalse(stats_sell["is_partial"])
-        self.assertEqual(len(ads_sell), 1)
-        self.assertEqual(sell_session.calls[0]["side"], "buy")
 
     def test_bybit_maps_taker_buy_to_maker_sell_one_and_sell_to_buy_zero(self):
         buy_session = BybitSession()
@@ -163,7 +138,7 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
         self.assertFalse(stats_sell["is_partial"])
         self.assertEqual(sell_session.calls[0]["side"], "0")
 
-    def test_market_keeps_legacy_binance_shape_and_adds_providers(self):
+    def test_market_keeps_legacy_binance_shape_while_v2_stays_in_daily_records(self):
         def binance_side(_session, asset, side):
             stats = {
                 "liquidity_verified": 100.0,
@@ -179,7 +154,7 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
             }
             return stats, [ad(f"binance-{asset}-{side}", ad_id=f"b-{asset}-{side}")]
 
-        def provider_side(_session, asset, side):
+        def bybit_side(_session, asset, side):
             stats = {
                 "reported_ad_count": 1,
                 "ad_count_raw": 1,
@@ -187,26 +162,25 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
                 "pages_fetched": 1,
                 "is_partial": False,
             }
-            return stats, [ad(f"provider-{asset}-{side}", ad_id=f"p-{asset}-{side}")]
+            return stats, [ad(f"bybit-{asset}-{side}", ad_id=f"y-{asset}-{side}")]
 
         with patch.object(p2p, "fetch_binance_side", side_effect=binance_side), \
-             patch.object(p2p, "fetch_okx_v2_side", side_effect=provider_side), \
-             patch.object(p2p, "fetch_bybit_v2_side", side_effect=provider_side):
+             patch.object(p2p, "fetch_bybit_v2_side", side_effect=bybit_side):
             records, market = p2p.build_liquidity_and_market(object(), 123)
 
         self.assertIsNotNone(market)
         self.assertTrue(market["complete"])
-        self.assertEqual(market["schema_version"], 2)
-        self.assertIn("assets", market)  # backward-compatible Binance owner
-        self.assertIn("USDT", market["assets"])
-        self.assertIn("BUY", market["assets"]["USDT"])
-        self.assertEqual(set(market["providers"]), {"binance", "okx", "bybit"})
+        self.assertEqual(market["schema_version"], 1)
+        self.assertIn("assets", market)
+        self.assertNotIn("providers", market)
+        self.assertNotIn("liquidity_v2", market)
         v2 = [r for r in records if r.get("record_type") == "liquidity_v2_snapshot"]
-        self.assertEqual(len(v2), 12)
+        self.assertEqual(len(v2), 8)
+        self.assertEqual({r["exchange"] for r in v2}, {"binance", "bybit"})
         self.assertTrue(all(r["methodology_version"] == "p2p-liquidity-v2-r1" for r in v2))
         self.assertTrue(all(r["aggregate_eligible"] is False for r in v2))
 
-    def test_partial_non_binance_provider_is_excluded_without_killing_binance_market(self):
+    def test_partial_bybit_side_is_excluded_without_killing_binance_market(self):
         def binance_side(_session, asset, side):
             return {
                 "liquidity_verified": 100.0,
@@ -221,30 +195,23 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
                 "is_partial": False,
             }, [ad(f"b-{asset}-{side}", ad_id=f"b-{asset}-{side}")]
 
-        def okx_side(_session, asset, side):
-            if asset == "USDC" and side == "SELL":
-                return {"reported_ad_count": None, "pages_fetched": 1, "is_partial": True}, []
-            return {"reported_ad_count": 1, "pages_fetched": 1, "is_partial": False}, [
-                ad(f"o-{asset}-{side}", ad_id=f"o-{asset}-{side}")
-            ]
-
         def bybit_side(_session, asset, side):
+            if asset == "USDC" and side == "SELL":
+                return {"reported_ad_count": 10, "pages_fetched": 1, "is_partial": True}, []
             return {"reported_ad_count": 1, "pages_fetched": 1, "is_partial": False}, [
                 ad(f"y-{asset}-{side}", ad_id=f"y-{asset}-{side}")
             ]
 
         with patch.object(p2p, "fetch_binance_side", side_effect=binance_side), \
-             patch.object(p2p, "fetch_okx_v2_side", side_effect=okx_side), \
              patch.object(p2p, "fetch_bybit_v2_side", side_effect=bybit_side):
             records, market = p2p.build_liquidity_and_market(object(), 123)
 
         self.assertIsNotNone(market)
         self.assertTrue(market["complete"])
-        self.assertFalse(market["providers"]["okx"]["complete"])
         blocked = [
             r for r in records
             if r.get("record_type") == "liquidity_v2_snapshot"
-            and r.get("exchange") == "okx"
+            and r.get("exchange") == "bybit"
             and r.get("asset") == "USDC"
             and r.get("side") == "SELL"
         ]
@@ -270,7 +237,7 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
     def test_no_all_record_is_emitted(self):
         self.assertNotIn('"exchange": "all"', SOURCE.lower())
         self.assertNotIn('"exchange": "ALL"', SOURCE)
-        sample = p2p.build_liquidity_v2_record("okx", "USDC", "BUY", [ad("m")], 1)
+        sample = p2p.build_liquidity_v2_record("bybit", "USDC", "BUY", [ad("m")], 1)
         self.assertEqual(sample["aggregate_status"], "EXCLUDED")
         self.assertFalse(sample["aggregate_eligible"])
 
