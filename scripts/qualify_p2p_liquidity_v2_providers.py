@@ -22,7 +22,7 @@ SIDES = ("BUY", "SELL")  # Wave/taker perspective
 TIMEOUT = 15
 MAX_PAGES = 20
 BYBIT_PAGE_SIZE = 50
-OKX_PAGE_SIZE = 1000
+OKX_PAGE_SIZE = 50
 
 OKX_BOOKS = "https://www.okx.com/v3/c2c/tradingOrders/books"
 OKX_MARKET = "https://www.okx.com/v3/c2c/tradingOrders/getMarketplaceAdsPrelogin"
@@ -95,6 +95,8 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
     good_orders = good_rate = good_ad_id = good_merchant = good_units = 0
     freshness_fields = set()
     prices = []
+    completion_rates = []
+    fiat_limit_inventory_relation = 0
 
     for x in items:
         if not isinstance(x, dict):
@@ -140,6 +142,12 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             good_orders += 1
         if rate is not None and rate >= 0:
             good_rate += 1
+            completion_rates.append(rate)
+        if (
+            price and price > 0 and mn is not None and mx is not None and inv is not None
+            and mn >= 0 and mx >= mn and inv > 0 and mx <= inv * price * 1.05
+        ):
+            fiat_limit_inventory_relation += 1
         if aid not in (None, ""):
             good_ad_id += 1
             ad_ids.append(str(aid))
@@ -162,6 +170,13 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
         order = "asc" if asc else "desc" if desc else "mixed"
 
     field_keys = sorted({k for x in items[:5] if isinstance(x, dict) for k in x.keys()})
+    if completion_rates:
+        rmin = min(completion_rates)
+        rmax = max(completion_rates)
+        rate_scale = "fraction" if rmax <= 1.000001 else "percent" if rmax <= 100.000001 else "invalid"
+    else:
+        rmin = rmax = None
+        rate_scale = "missing"
     merchant_identity_usable = bool(
         n and good_merchant == n and (unique_merchants > 1 or n == 1)
     )
@@ -198,6 +213,10 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
         "merchant_identity_usable": merchant_identity_usable,
         "provider_side_values": provider_side_values,
         "price_order": order,
+        "completion_rate_scale": rate_scale,
+        "completion_rate_min": rmin,
+        "completion_rate_max": rmax,
+        "fiat_limit_within_inventory_value": fiat_limit_inventory_relation,
         "freshness_fields": sorted(freshness_fields),
         "sample_keys": field_keys[:80],
         "sample_ad_hash": short_hash(ad_ids[0]) if ad_ids else None,
@@ -230,27 +249,66 @@ def qualify_okx(session, asset, side):
     # OKX endpoint side is maker-ad perspective. Wave/user BUY consumes maker
     # SELL ads; Wave/user SELL consumes maker BUY ads.
     provider_side = "sell" if side == "BUY" else "buy"
-    # First try the marketplace endpoint because it exposes explicit paging controls
-    # and richer ad fields. This remains unauthenticated/read-only.
-    params = {
-        "paymentMethod": "all",
-        "userType": "all",
-        "hideOverseasVerificationAds": "false",
-        "sortType": "price_asc",
-        "limit": str(OKX_PAGE_SIZE),
-        "currentPage": "1",
-        "numberPerPage": str(OKX_PAGE_SIZE),
-        "side": provider_side,
-        "fiatCurrency": FIAT,
-        "cryptoCurrency": asset,
-    }
-    s1, b1 = get_json(session, OKX_MARKET, params=params)
-    items1 = okx_items(b1 or {}, provider_side.upper()) if b1 else []
     endpoint = "marketplace-prelogin"
-    authless = s1 == 200
+    all_items = []
+    seen_ids = set()
+    statuses = []
+    page_sizes = []
+    repeated_page = False
+    complete = False
+    first_body = None
 
-    if not items1:
-        # Current writer's legacy price-context endpoint fallback.
+    for page in range(1, MAX_PAGES + 1):
+        params = {
+            "paymentMethod": "all",
+            "userType": "all",
+            "hideOverseasVerificationAds": "false",
+            "sortType": "price_asc",
+            "limit": str(OKX_PAGE_SIZE),
+            "currentPage": str(page),
+            "numberPerPage": str(OKX_PAGE_SIZE),
+            "side": provider_side,
+            "fiatCurrency": FIAT,
+            "cryptoCurrency": asset,
+        }
+        st, body = get_json(session, OKX_MARKET, params=params)
+        statuses.append(st)
+        if page == 1:
+            first_body = body
+        if st != 200 or not isinstance(body, dict):
+            break
+
+        items = okx_items(body, provider_side.upper())
+        page_sizes.append(len(items))
+        if not items:
+            complete = page > 1
+            break
+
+        page_ids = []
+        new_count = 0
+        for idx, item in enumerate(items):
+            aid = first(item, ("id", "advertisementId", "advNo")) if isinstance(item, dict) else None
+            key = str(aid) if aid not in (None, "") else f"page={page}:idx={idx}"
+            page_ids.append(key)
+            if key not in seen_ids:
+                seen_ids.add(key)
+                all_items.append(item)
+                new_count += 1
+
+        if page > 1 and new_count == 0:
+            repeated_page = True
+            break
+
+        # A short page is an observed terminal condition. Otherwise walk until
+        # an empty page or the hard safety bound.
+        if len(items) < OKX_PAGE_SIZE:
+            complete = True
+            break
+        time.sleep(0.12)
+
+    if not all_items:
+        # Existing writer endpoint can still provide price context, but without
+        # a proven page walk it is not sufficient for Liquidity-v2 completeness.
         params = {
             "quoteCurrency": FIAT,
             "baseCurrency": asset,
@@ -263,46 +321,51 @@ def qualify_okx(session, asset, side):
             "isAbleFilter": "false",
             "limit": "50",
         }
-        s1, b1 = get_json(session, OKX_BOOKS, params=params)
-        items1 = okx_items(b1 or {}, side) if b1 else []
-        endpoint = "books"
-        authless = s1 == 200
-        meta = {"http": s1, "root_keys": sorted((b1 or {}).keys())[:30] if isinstance(b1, dict) else []}
-        return summarize("okx", asset, side, items1, meta, False, "not_proven_books_no_page_walk", authless, endpoint)
+        st, body = get_json(session, OKX_BOOKS, params=params)
+        items = okx_items(body or {}, side) if body else []
+        meta = {
+            "http": st,
+            "root_keys": sorted((body or {}).keys())[:30] if isinstance(body, dict) else [],
+        }
+        return summarize(
+            "okx", asset, side, items, meta, False,
+            "not_proven_books_no_page_walk", st == 200, "books"
+        )
 
-    # Explicit page-2 probe. If page 2 is empty after a page smaller than the
-    # requested page size, the bounded terminal condition is directly observed.
-    p2 = dict(params)
-    p2["currentPage"] = "2"
-    s2, b2 = get_json(session, OKX_MARKET, params=p2)
-    items2 = okx_items(b2 or {}, side) if b2 else []
-    ids1 = {str(first(x, ("id", "advertisementId", "advNo"))) for x in items1 if isinstance(x, dict)}
-    ids2 = {str(first(x, ("id", "advertisementId", "advNo"))) for x in items2 if isinstance(x, dict)}
-    same_nonempty_page = bool(ids1 and ids2 and ids1 == ids2)
-    terminal = s2 == 200 and not items2 and len(items1) < OKX_PAGE_SIZE
-    complete = bool(terminal)
-    pagination = "page2_empty_terminal" if terminal else "page2_same_as_page1" if same_nonempty_page else "page2_nonempty_or_unresolved"
+    if len(page_sizes) >= MAX_PAGES and page_sizes[-1] >= OKX_PAGE_SIZE:
+        complete = False
+
+    pagination = (
+        f"walked_pages={len(page_sizes)};page_size={OKX_PAGE_SIZE};"
+        f"page_sizes={','.join(str(x) for x in page_sizes)};"
+        f"repeated_page={str(repeated_page).lower()}"
+    )
     meta = {
-        "http_page1": s1,
-        "http_page2": s2,
-        "page1_items": len(items1),
-        "page2_items": len(items2),
-        "root_keys": sorted((b1 or {}).keys())[:30] if isinstance(b1, dict) else [],
+        "http_statuses": statuses,
+        "collected_unique": len(all_items),
+        "page_sizes": page_sizes,
+        "max_capacity": OKX_PAGE_SIZE * MAX_PAGES,
+        "root_keys": sorted((first_body or {}).keys())[:30] if isinstance(first_body, dict) else [],
     }
-    return summarize("okx", asset, side, items1, meta, complete, pagination, authless, endpoint)
+    return summarize(
+        "okx", asset, side, all_items, meta,
+        bool(complete and not repeated_page),
+        pagination,
+        bool(statuses and all(st == 200 for st in statuses)),
+        endpoint,
+    )
 
 
 def qualify_bybit(session, asset, side):
-    # Bybit keyless web endpoint. side=1 is taker BUY, side=0 taker SELL in
-    # the current Wave source; qualification reports actual fields/completeness.
+    # Bybit keyless web endpoint. side=1 is taker BUY, side=0 taker SELL.
     provider_side = "1" if side == "BUY" else "0"
-    all_items = []
-    total = None
+    items_by_id = {}
+    reported_totals = []
     statuses = []
-    page = 1
+    page_sizes = []
     complete = False
 
-    while page <= MAX_PAGES:
+    for page in range(1, MAX_PAGES + 1):
         body = {
             "userId": "",
             "tokenId": asset,
@@ -319,38 +382,56 @@ def qualify_bybit(session, asset, side):
         statuses.append(st)
         if st != 200 or not isinstance(data, dict):
             break
+
         result = data.get("result") or {}
         items = result.get("items") if isinstance(result, dict) else None
         items = items if isinstance(items, list) else []
-        if total is None:
-            try:
-                total = int(result.get("count"))
-            except Exception:
-                total = None
+        page_sizes.append(len(items))
+        try:
+            reported_totals.append(int(result.get("count")))
+        except Exception:
+            pass
+
         if not items:
-            complete = total is None or len(all_items) >= total
+            complete = page > 1 or not reported_totals
             break
-        all_items.extend(items)
-        if total is not None and len(all_items) >= total:
+
+        for idx, item in enumerate(items):
+            aid = first(item, ("id", "itemId", "advNo")) if isinstance(item, dict) else None
+            key = str(aid) if aid not in (None, "") else f"page={page}:idx={idx}"
+            items_by_id[key] = item
+
+        current_total = reported_totals[-1] if reported_totals else None
+        if current_total is not None and len(items_by_id) >= current_total:
             complete = True
             break
         if len(items) < BYBIT_PAGE_SIZE:
-            complete = total is None or len(all_items) >= total
+            complete = True
             break
-        page += 1
         time.sleep(0.12)
 
-    if page > MAX_PAGES and (total is None or len(all_items) < total):
+    if len(page_sizes) >= MAX_PAGES and page_sizes[-1] >= BYBIT_PAGE_SIZE and not complete:
         complete = False
 
-    pagination = f"walked_pages={min(page, MAX_PAGES)};max_pages={MAX_PAGES};reported_total={total}"
+    all_items = list(items_by_id.values())
+    pagination = (
+        f"walked_pages={len(page_sizes)};page_size={BYBIT_PAGE_SIZE};"
+        f"reported_totals={','.join(str(x) for x in reported_totals)};"
+        f"page_sizes={','.join(str(x) for x in page_sizes)}"
+    )
     meta = {
         "http_statuses": statuses,
-        "reported_total": total,
-        "collected": len(all_items),
+        "reported_totals": reported_totals,
+        "collected_unique": len(all_items),
+        "page_sizes": page_sizes,
         "max_capacity": BYBIT_PAGE_SIZE * MAX_PAGES,
     }
-    return summarize("bybit", asset, side, all_items, meta, complete, pagination, bool(statuses and statuses[0] == 200), "online")
+    return summarize(
+        "bybit", asset, side, all_items, meta, complete,
+        pagination,
+        bool(statuses and all(st == 200 for st in statuses)),
+        "online",
+    )
 
 
 def main():
