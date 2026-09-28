@@ -372,10 +372,18 @@ def qualify_okx(session, asset, side):
         "max_capacity": OKX_PAGE_SIZE * MAX_PAGES,
         "root_keys": sorted((first_body or {}).keys())[:30] if isinstance(first_body, dict) else [],
     }
+    # The public OKX prelogin surface exposes rich ad fields but no
+    # provider-native total count / last-page marker. currentPage also does not
+    # establish a trustworthy page walk: bounded probes can return an empty
+    # page 2 even when raising limit yields more page-1 ads. Therefore field
+    # semantics are qualified, but whole-book completeness remains NOT PROVEN.
+    observed_terminal = bool(complete and not repeated_page)
+    meta["observed_terminal"] = observed_terminal
+    meta["completeness_reason"] = "no_provider_total_or_last_page_marker"
     return summarize(
         "okx", asset, side, all_items, meta,
-        bool(complete and not repeated_page),
-        pagination,
+        False,
+        pagination + ";completeness=not_proven",
         bool(statuses and all(st == 200 for st in statuses)),
         endpoint,
     )
