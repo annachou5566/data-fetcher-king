@@ -1,0 +1,25 @@
+name: P2P Liquidity V2 R1 Source Qualification
+
+on:
+  push:
+    branches:
+      - chatgpt/p2p-liquidity-v2-r1-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  source-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded test dependencies
+        run: pip install boto3 'curl-cffi>=0.6.0'
+      - name: Compile writer
+        run: python -m py_compile scripts/fetch_p2p.py
+      - name: Run P2P storage + Liquidity v2 contracts
+        run: python -m unittest tests/p2p_storage_integrity_contract_test.py tests/p2p_liquidity_v2_contract_test.py
