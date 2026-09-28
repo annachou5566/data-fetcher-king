@@ -1,0 +1,26 @@
+name: P2P Liquidity V2 R1 Qualification
+
+on:
+  push:
+    branches:
+      - chatgpt/p2p-liquidity-v2-r1-failclosed-fix-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    if: github.ref == 'refs/heads/chatgpt/p2p-liquidity-v2-r1-failclosed-fix-2026-09-28'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded dependencies
+        run: pip install 'curl-cffi>=0.6.0' boto3
+      - name: Run P2P contract tests
+        run: python -m unittest tests/p2p_liquidity_v2_contract_test.py tests/p2p_storage_integrity_contract_test.py
+      - name: Run read-only Liquidity v2 runtime qualifier
+        run: cd scripts && python qualify_p2p_liquidity_v2_r1.py
