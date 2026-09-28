@@ -11,11 +11,12 @@ Ghi các lớp SONG SONG, độc lập nhau (1 lớp lỗi không làm chết l�
   3) LIQUIDITY v1 — Binance historical compatibility record
      record_type="liquidity_snapshot" (không rewrite history cũ).
 
-  4) LIQUIDITY v2 R1 — prospective per-exchange records for Binance/OKX/Bybit
+  4) LIQUIDITY v2 R1 — prospective per-exchange records for Binance + Bybit.
+     OKX remains top-price context only because ads-book completeness is NOT PROVEN.
      record_type="liquidity_v2_snapshot", same daily owner, versioned explicitly.
 
-     v2 uses one symmetric bounded advertised-capacity rule on BUY and SELL.
-     It is NOT executed volume and NOT a causal market-pressure signal.
+     v2 uses one symmetric qualified executable advertised-capacity rule on BUY
+     and SELL. It is NOT executed volume and NOT a causal market-pressure signal.
      Cross-provider ALL remains excluded until cross-provider identity/capital
      double-count can be bounded honestly.
 """
