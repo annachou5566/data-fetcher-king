@@ -14,12 +14,13 @@ p2p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p2p)
 
 
-def ad(merchant, *, price=25_000, max_fiat=25_000_000, available=5_000,
-       min_fiat=100_000, order_count=100, rate=0.99, ad_id=None):
+def ad(merchant, *, price=25_000, max_fiat=25_000_000, dynamic_max_fiat=None,
+       available=5_000, min_fiat=100_000, order_count=100, rate=0.99, ad_id=None):
     return {
         "price": price,
         "minFiat": min_fiat,
         "maxFiat": max_fiat,
+        "dynamicMaxFiat": dynamic_max_fiat,
         "availableCrypto": available,
         "payTypes": ["BANK"],
         "merchant": merchant,
@@ -68,7 +69,9 @@ class BybitSession:
 
 class P2PLiquidityV2ContractTest(unittest.TestCase):
     def test_methodology_is_explicit_and_all_is_excluded(self):
-        self.assertEqual(p2p.LIQUIDITY_V2_METHODOLOGY, "p2p-liquidity-v2-r1")
+        self.assertEqual(p2p.LIQUIDITY_V2_METHODOLOGY, "p2p-liquidity-v2-r2")
+        self.assertEqual(p2p.LIQUIDITY_V2_MAKER_BUY_CAP_CRYPTO["USDT"], 10_000)
+        self.assertEqual(p2p.LIQUIDITY_V2_MAKER_BUY_CAP_CRYPTO["USDC"], 10_000)
         self.assertEqual(p2p.LIQUIDITY_V2_QUALIFIED_PROVIDERS, ("binance", "bybit"))
         self.assertEqual(
             p2p.LIQUIDITY_V2_EXCLUDED_PROVIDERS["okx"],
@@ -77,21 +80,44 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
         self.assertEqual(p2p.LIQUIDITY_V2_AGGREGATE_STATUS, "EXCLUDED")
         self.assertIn("cross_provider_identity", p2p.LIQUIDITY_V2_AGGREGATE_REASON)
 
-    def test_symmetric_capacity_formula_is_side_independent(self):
+    def test_r2_capacity_is_side_aware_and_sell_is_capped_per_merchant(self):
         ads = [
-            ad("m1", max_fiat=25_000_000, available=5_000, ad_id="a1"),   # 1,000
-            ad("m1", max_fiat=50_000_000, available=7_000, ad_id="a2"),   # 2,000; wins merchant
-            ad("m2", max_fiat=250_000_000, available=20_000, ad_id="a3"), # 10,000
+            ad("m1", max_fiat=50_000_000, available=7_000, ad_id="a1"),     # 2,000
+            ad("m1", max_fiat=125_000_000, available=8_000, ad_id="a2"),    # 5,000; wins merchant
+            ad("m2", max_fiat=500_000_000, available=25_000, ad_id="a3"),   # 20,000
         ]
         buy = p2p.build_liquidity_v2_record("binance", "USDT", "BUY", ads, 123)
         sell = p2p.build_liquidity_v2_record("binance", "USDT", "SELL", ads, 123)
-        self.assertEqual(buy["capacity_crypto"], 12_000)
-        self.assertEqual(sell["capacity_crypto"], 12_000)
-        self.assertEqual(buy["capacity_crypto"], sell["capacity_crypto"])
+        self.assertEqual(buy["capacity_crypto"], 25_000)
+        self.assertEqual(sell["capacity_crypto"], 15_000)
         self.assertEqual(buy["qualified_merchant_count"], 2)
+        self.assertEqual(sell["qualified_merchant_count"], 2)
         self.assertEqual(buy["qualified_ad_count"], 3)
-        self.assertEqual(buy["capacity_vnd"], 300_000_000)
-        self.assertEqual(buy["capacity_policy"], "min_available_max_order_crypto_v1")
+        self.assertEqual(sell["qualified_ad_count"], 3)
+        self.assertIsNone(buy["maker_buy_cap_crypto"])
+        self.assertEqual(sell["maker_buy_cap_crypto"], 10_000)
+        self.assertEqual(
+            buy["capacity_policy"],
+            "side_aware_dynamic_order_maker_buy_cap10k_v2",
+        )
+        self.assertEqual(
+            sell["capacity_policy"],
+            "side_aware_dynamic_order_maker_buy_cap10k_v2",
+        )
+
+    def test_r2_prefers_dynamic_max_fiat_without_changing_static_market_field(self):
+        rows = [
+            ad(
+                "m1",
+                max_fiat=250_000_000,
+                dynamic_max_fiat=50_000_000,
+                available=20_000,
+            )
+        ]
+        buy = p2p.build_liquidity_v2_record("binance", "USDT", "BUY", rows, 1)
+        sell = p2p.build_liquidity_v2_record("binance", "USDT", "SELL", rows, 1)
+        self.assertEqual(buy["capacity_crypto"], 2_000)
+        self.assertEqual(sell["capacity_crypto"], 2_000)
 
     def test_same_order_and_completion_floor_controls_capacity(self):
         low = [ad("m1", order_count=9, rate=0.84)]
@@ -123,6 +149,28 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
         self.assertNotIn("def fetch_okx_v2_side", SOURCE)
         self.assertIn('"okx": "provider_completeness_not_proven"', SOURCE)
 
+
+    def test_binance_normalizer_captures_dynamic_max_for_r2(self):
+        item = {
+            "price": "25000",
+            "minSingleTransAmount": "100000",
+            "maxSingleTransAmount": "250000000",
+            "dynamicMaxSingleTransAmount": "50000000",
+            "surplusAmount": "20000",
+            "advNo": "ad-1",
+            "advertiser": {
+                "userNo": "merchant-1",
+                "nickName": "Merchant",
+                "monthOrderCount": 100,
+                "monthFinishRate": 0.99,
+            },
+        }
+        with patch.object(p2p, "fetch_binance_ads_page", return_value=([item], 1, True)):
+            stats, ads = p2p.fetch_binance_side(object(), "USDT", "BUY")
+        self.assertTrue(stats["v2_required_fields_complete"])
+        self.assertEqual(len(ads), 1)
+        self.assertEqual(ads[0]["maxFiat"], 250000000)
+        self.assertEqual(ads[0]["dynamicMaxFiat"], 50000000)
 
     def test_binance_required_field_gap_excludes_v2_side(self):
         item = {
@@ -200,7 +248,11 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
         v2 = [r for r in records if r.get("record_type") == "liquidity_v2_snapshot"]
         self.assertEqual(len(v2), 8)
         self.assertEqual({r["exchange"] for r in v2}, {"binance", "bybit"})
-        self.assertTrue(all(r["methodology_version"] == "p2p-liquidity-v2-r1" for r in v2))
+        self.assertTrue(all(r["methodology_version"] == "p2p-liquidity-v2-r2" for r in v2))
+        sell = [r for r in v2 if r["side"] == "SELL"]
+        buy = [r for r in v2 if r["side"] == "BUY"]
+        self.assertTrue(all(r["maker_buy_cap_crypto"] == 10_000 for r in sell))
+        self.assertTrue(all(r["maker_buy_cap_crypto"] is None for r in buy))
         self.assertTrue(all(r["aggregate_eligible"] is False for r in v2))
 
     def test_partial_bybit_side_is_excluded_without_killing_binance_market(self):
