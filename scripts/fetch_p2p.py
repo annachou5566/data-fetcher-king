@@ -401,6 +401,7 @@ def fetch_binance_side(session, asset, trade_type):
     total_reported = None
     is_partial = False
     ad_count_raw = 0
+    v2_invalid_ad_count = 0
 
     while True:
         items, total, ok = fetch_binance_ads_page(session, asset, trade_type, page)
@@ -419,6 +420,8 @@ def fetch_binance_side(session, asset, trade_type):
             normalized = _normalize_market_ad(item)
             if normalized is not None:
                 market_ads.append(normalized)
+            else:
+                v2_invalid_ad_count += 1
 
             try:
                 surplus = float(_first_present(
@@ -487,6 +490,8 @@ def fetch_binance_side(session, asset, trade_type):
         "ad_count_raw": ad_count_raw,
         "market_ad_count": len(market_ads),
         "reported_ad_count": total_reported,
+        "v2_invalid_ad_count": v2_invalid_ad_count,
+        "v2_required_fields_complete": v2_invalid_ad_count == 0,
         "is_partial": is_partial,
     }
     return stats, market_ads
@@ -569,6 +574,7 @@ def fetch_bybit_v2_side(session, asset, user_side):
     page = 1
     partial = False
     raw_count = 0
+    invalid_ad_count = 0
 
     while page <= LIQUIDITY_V2_BYBIT_MAX_PAGES:
         try:
@@ -604,6 +610,7 @@ def fetch_bybit_v2_side(session, asset, user_side):
             raw_count += 1
             normalized = _normalize_bybit_v2_ad(item, asset)
             if normalized is None:
+                invalid_ad_count += 1
                 continue
             ad_id = normalized["adId"] or f"page={page}:idx={idx}"
             items_by_id[ad_id] = normalized
@@ -625,6 +632,8 @@ def fetch_bybit_v2_side(session, asset, user_side):
         "reported_ad_counts": reported_totals,
         "ad_count_raw": raw_count,
         "market_ad_count": len(ads),
+        "invalid_ad_count": invalid_ad_count,
+        "required_fields_complete": invalid_ad_count == 0,
         "pages_fetched": page,
         "is_partial": partial,
     }, ads
@@ -767,9 +776,19 @@ def build_liquidity_and_market(session, ts):
 
             if stats["is_partial"] or not ads:
                 market_complete = False
-            else:
+
+            if (
+                not stats["is_partial"]
+                and bool(ads)
+                and stats.get("v2_required_fields_complete") is True
+            ):
                 records.append(
                     build_liquidity_v2_record("binance", asset, side, ads, ts, stats)
+                )
+            elif not stats["is_partial"] and ads:
+                print(
+                    f"     Liquidity v2 BNC EXCLUDED — required-field coverage incomplete "
+                    f"invalid={stats.get('v2_invalid_ad_count')}"
                 )
 
             print(
@@ -809,7 +828,11 @@ def build_liquidity_and_market(session, ts):
         for side in ("BUY", "SELL"):
             print(f"  📊 Liquidity v2 BYBIT {asset}/{side}...", flush=True)
             stats, ads = fetch_bybit_v2_side(session, asset, side)
-            complete = not stats.get("is_partial") and bool(ads)
+            complete = (
+                not stats.get("is_partial")
+                and bool(ads)
+                and stats.get("required_fields_complete") is True
+            )
             if not complete:
                 print(
                     f"     EXCLUDED side: ads={len(ads)} partial={stats.get('is_partial')}"
