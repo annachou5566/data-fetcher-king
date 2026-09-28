@@ -102,7 +102,10 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             mx = num(first(x, ("maxAmount",)))
             inv = num(first(x, ("lastQuantity", "quantity")))
             aid = first(x, ("id", "itemId", "advNo"))
-            mid = first(x, ("userId", "merchantId", "nickName"))
+            # userId is commonly the anonymous sentinel "0" on the keyless
+            # endpoint. Prefer advertiser/account identities that actually
+            # distinguish public ads.
+            mid = first(x, ("accountId", "userMaskId", "merchantId", "nickName", "userId"))
             orders = num(first(x, ("recentOrderNum", "orderNum", "completedOrderQuantity")))
             rate = num(first(x, ("recentExecuteRate", "completionRate")))
             pays = first(x, ("payments", "paymentMethods", "payTypes"))
@@ -142,6 +145,14 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
         order = "asc" if asc else "desc" if desc else "mixed"
 
     field_keys = sorted({k for x in items[:5] if isinstance(x, dict) for k in x.keys()})
+    merchant_identity_usable = bool(
+        n and good_merchant == n and (unique_merchants > 1 or n == 1)
+    )
+    provider_side_values = sorted({
+        str(x.get("side")) for x in items
+        if isinstance(x, dict) and x.get("side") not in (None, "")
+    })[:10]
+
     evidence = {
         "provider": provider,
         "asset": asset,
@@ -166,6 +177,8 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
         "unique_ads": unique_ads,
         "unique_merchants": unique_merchants,
         "duplicate_merchants": duplicate_merchants,
+        "merchant_identity_usable": merchant_identity_usable,
+        "provider_side_values": provider_side_values,
         "price_order": order,
         "freshness_fields": sorted(freshness_fields),
         "sample_keys": field_keys[:80],
@@ -344,8 +357,9 @@ def main():
         amount = bool(rows and all(r.get("amount_filter_possible") for r in rows))
         capacity = bool(rows and all(r.get("capacity_without_guessing") for r in rows))
         authless = bool(rows and all(r.get("authless") for r in rows))
-        classification = "QUALIFIED_CANDIDATE" if full and amount and capacity and authless else "PARTIAL_EXCLUDE_ALL"
-        print(f"summary provider={provider} classification={classification} complete={str(full).lower()} amount={str(amount).lower()} capacity={str(capacity).lower()} authless={str(authless).lower()}")
+        identity = bool(rows and all(r.get("merchant_identity_usable") for r in rows))
+        classification = "QUALIFIED_CANDIDATE" if full and amount and capacity and authless and identity else "PARTIAL_EXCLUDE_ALL"
+        print(f"summary provider={provider} classification={classification} complete={str(full).lower()} amount={str(amount).lower()} capacity={str(capacity).lower()} authless={str(authless).lower()} identity={str(identity).lower()}")
 
     print("P2P_LIQ_V2_PROVIDER_QUAL_END")
 
