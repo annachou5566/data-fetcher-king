@@ -1,0 +1,24 @@
+name: P2P Liquidity V2 Provider Qualification
+
+on:
+  push:
+    branches:
+      - chatgpt/p2p-liquidity-v2-r1-provider-qual-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  provider-qualification:
+    if: github.ref == 'refs/heads/chatgpt/p2p-liquidity-v2-r1-provider-qual-2026-09-28'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install qualification-only dependency
+        run: pip install 'curl-cffi>=0.6.0'
+      - name: Run read-only OKX + Bybit qualification
+        run: python scripts/qualify_p2p_liquidity_v2_providers.py
