@@ -548,20 +548,25 @@ def _normalize_okx_v2_ad(item, asset):
     }
 
 
-def _okx_v2_items(body, user_side):
+def _okx_v2_items(body, provider_side):
     data = body.get("data") if isinstance(body, dict) else None
     if isinstance(data, list):
         return data
     if not isinstance(data, dict):
         return []
-    rows = data.get(user_side.lower())
+    rows = data.get(provider_side)
     if isinstance(rows, list):
         return rows
     return []
 
 
 def fetch_okx_v2_side(session, asset, user_side):
-    """Fetch one full unauthenticated OKX P2P book with explicit terminal paging."""
+    """Fetch one full unauthenticated OKX book for the Wave/taker direction.
+
+    OKX side is maker-ad perspective: maker SELL serves taker/user BUY,
+    maker BUY serves taker/user SELL.
+    """
+    provider_side = "sell" if user_side == "BUY" else "buy"
     ads = []
     seen_ids = set()
     page = 1
@@ -578,14 +583,14 @@ def fetch_okx_v2_side(session, asset, user_side):
                 "limit": "1000",
                 "currentPage": str(page),
                 "numberPerPage": "1000",
-                "side": user_side,
+                "side": provider_side,
                 "fiatCurrency": FIAT,
                 "cryptoCurrency": asset,
             }, timeout=15)
             if res.status_code != 200:
                 partial = True
                 break
-            items = _okx_v2_items(res.json(), user_side)
+            items = _okx_v2_items(res.json(), provider_side)
         except Exception:
             partial = True
             break
