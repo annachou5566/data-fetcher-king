@@ -359,8 +359,12 @@ def _normalize_market_ad(item):
             item, ["surplusAmount", "tradableAmount", "tradableQuantity", "availableAmount"]
         ) or 0)
         advertiser = item.get("advertiser", {}) or {}
-        month_orders = int(_first_present(advertiser, ["monthOrderCount"]) or 0)
-        raw_finish_rate = float(_first_present(advertiser, ["monthFinishRate"]) or 0)
+        raw_month_orders = _first_present(advertiser, ["monthOrderCount"])
+        raw_finish_rate_value = _first_present(advertiser, ["monthFinishRate"])
+        if raw_month_orders is None or raw_finish_rate_value is None:
+            return None
+        month_orders = int(raw_month_orders)
+        raw_finish_rate = float(raw_finish_rate_value)
         finish_rate = raw_finish_rate / 100 if raw_finish_rate > 1 else raw_finish_rate
         merchant = str(_first_present(
             advertiser, ["nickName", "userNo", "advNo"]
@@ -369,6 +373,8 @@ def _normalize_market_ad(item):
             advertiser, ["userNo", "advNo", "nickName"]
         ) or "").strip()
         ad_id = str(_first_present(item, ["advNo", "id"]) or "").strip()
+        if max_fiat <= 0 or available <= 0 or not merchant_id or not ad_id:
+            return None
     except Exception:
         return None
 
