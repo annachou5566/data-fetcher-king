@@ -160,6 +160,7 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
                 "ad_count_raw": 1,
                 "market_ad_count": 1,
                 "pages_fetched": 1,
+                "required_fields_complete": True,
                 "is_partial": False,
             }
             return stats, [ad(f"bybit-{asset}-{side}", ad_id=f"y-{asset}-{side}")]
@@ -197,8 +198,8 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
 
         def bybit_side(_session, asset, side):
             if asset == "USDC" and side == "SELL":
-                return {"reported_ad_count": 10, "pages_fetched": 1, "is_partial": True}, []
-            return {"reported_ad_count": 1, "pages_fetched": 1, "is_partial": False}, [
+                return {"reported_ad_count": 10, "pages_fetched": 1, "required_fields_complete": True, "is_partial": True}, []
+            return {"reported_ad_count": 1, "pages_fetched": 1, "required_fields_complete": True, "is_partial": False}, [
                 ad(f"y-{asset}-{side}", ad_id=f"y-{asset}-{side}")
             ]
 
@@ -216,6 +217,30 @@ class P2PLiquidityV2ContractTest(unittest.TestCase):
             and r.get("side") == "SELL"
         ]
         self.assertEqual(blocked, [])
+
+    def test_required_field_gap_excludes_bybit_side(self):
+        class BadBybitSession:
+            def post(self, url, json=None, timeout=None):
+                body = dict(json or {})
+                item = {
+                    "currencyId": "VND",
+                    "tokenId": body["tokenId"],
+                    "side": body["side"],
+                    "price": "25000",
+                    "minAmount": "100000",
+                    "maxAmount": "25000000",
+                    # lastQuantity intentionally missing
+                    "accountId": "merchant",
+                    "id": "bad-ad",
+                    "recentOrderNum": "100",
+                    "recentExecuteRate": "99",
+                }
+                return FakeResponse({"result": {"count": 1, "items": [item]}})
+
+        stats, ads = p2p.fetch_bybit_v2_side(BadBybitSession(), "USDT", "BUY")
+        self.assertEqual(ads, [])
+        self.assertEqual(stats["invalid_ad_count"], 1)
+        self.assertFalse(stats["required_fields_complete"])
 
     def test_v1_history_is_preserved_and_v2_is_prospective_only(self):
         self.assertIn('"record_type": "liquidity_snapshot"', SOURCE)
