@@ -335,13 +335,38 @@ def qualify_okx(session, asset, side):
     if len(page_sizes) >= MAX_PAGES and page_sizes[-1] >= OKX_PAGE_SIZE:
         complete = False
 
+    # Completeness cross-check: the endpoint historically accepts a much larger
+    # first-page limit even though currentPage pagination can return empty page 2.
+    # If that wide request exposes more ads than the page walk, page-walk
+    # completeness is disproven and this provider must be excluded from ALL.
+    wide_params = {
+        "paymentMethod": "all",
+        "userType": "all",
+        "hideOverseasVerificationAds": "false",
+        "sortType": "price_asc",
+        "limit": "1000",
+        "currentPage": "1",
+        "numberPerPage": "1000",
+        "side": provider_side,
+        "fiatCurrency": FIAT,
+        "cryptoCurrency": asset,
+    }
+    wide_status, wide_body = get_json(session, OKX_MARKET, params=wide_params)
+    wide_items = okx_items(wide_body or {}, provider_side.upper()) if wide_body else []
+    wide_count = len(wide_items)
+    if wide_status != 200 or wide_count > len(all_items):
+        complete = False
+
     pagination = (
         f"walked_pages={len(page_sizes)};page_size={OKX_PAGE_SIZE};"
         f"page_sizes={','.join(str(x) for x in page_sizes)};"
+        f"wide_count={wide_count};"
         f"repeated_page={str(repeated_page).lower()}"
     )
     meta = {
         "http_statuses": statuses,
+        "wide_http_status": wide_status,
+        "wide_count": wide_count,
         "collected_unique": len(all_items),
         "page_sizes": page_sizes,
         "max_capacity": OKX_PAGE_SIZE * MAX_PAGES,
