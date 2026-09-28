@@ -47,6 +47,19 @@ def num(v):
         return None
 
 
+def identity_value(d, keys):
+    if not isinstance(d, dict):
+        return None
+    for k in keys:
+        v = d.get(k)
+        if v in (None, ""):
+            continue
+        if str(v).strip().lower() in {"0", "-1", "none", "null"}:
+            continue
+        return v
+    return None
+
+
 def short_hash(v):
     if v in (None, ""):
         return None
@@ -92,7 +105,7 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             mx = num(first(x, ("quoteMaxAmountPerOrder", "maxAmount")))
             inv = num(first(x, ("availableAmount", "tradableAmount")))
             aid = first(x, ("id", "advertisementId", "advNo"))
-            mid = first(x, ("merchantId", "publicUserId", "userId", "nickName"))
+            mid = identity_value(x, ("merchantId", "publicUserId", "userId", "nickName"))
             orders = num(first(x, ("completedOrderQuantity", "completedOrderCount", "orderCount")))
             rate = num(first(x, ("completedRate", "completionRate", "finishRate")))
             pays = first(x, ("paymentMethods", "payments", "payTypes"))
@@ -105,7 +118,7 @@ def summarize(provider, asset, side, items, response_meta, complete, pagination,
             # userId is commonly the anonymous sentinel "0" on the keyless
             # endpoint. Prefer advertiser/account identities that actually
             # distinguish public ads.
-            mid = first(x, ("accountId", "userMaskId", "merchantId", "nickName", "userId"))
+            mid = identity_value(x, ("accountId", "userMaskId", "merchantId", "nickName", "userId"))
             orders = num(first(x, ("recentOrderNum", "orderNum", "completedOrderQuantity")))
             rate = num(first(x, ("recentExecuteRate", "completionRate")))
             pays = first(x, ("payments", "paymentMethods", "payTypes"))
