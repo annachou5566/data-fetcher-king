@@ -9530,6 +9530,24 @@
             "total_amount": "2058660",
             "market_cap": 29315299.92477986,
             "fdv": 182309079.1342031
-        }
+        },
+        {
+            "token": "XDP",
+            "name": "Doppler Finance",
+            "date": "2026-09-28",
+            "time": "22:30",
+            "points": "230",
+            "amount": "1666",
+            "type": "grab",
+            "phase": 1,
+            "language": "en",
+            "status": "announced",
+            "completed": true,
+            "contract_address": "0x07b3D902783c3C12b077508c3B5c00113d1291D0",
+            "chain_id": "8453",
+            "has_homonym": false,
+            "spot_listed": false,
+            "futures_listed": false
+
     ]
 }
