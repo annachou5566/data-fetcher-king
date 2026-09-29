@@ -12,7 +12,10 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact approved candidate
+        uses: actions/checkout@v4
+        with:
+          ref: d684aa30650b12cb3289c352706f8e32a339c742
 
       - uses: actions/setup-python@v5
         with:
@@ -21,10 +24,75 @@ jobs:
       - name: Install dependencies
         run: pip install boto3 botocore
 
-      - name: Run sync script
+      - name: Pre-write exact guard
         env:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python scripts/sync_alpha_history.py --input data/airdrops.json
+        run: |
+          set -euo pipefail
+          python scripts/sync_alpha_history.py \
+            --input data/airdrops.json \
+            --no-prices \
+            --fixed-now 2026-09-29T11:25:00Z \
+            --max-add 1 | tee /tmp/xdp-pre.log
+          grep -F '[current] all=443 history=443 ' /tmp/xdp-pre.log
+          grep -F '[gap] source_after_seam=1 ' /tmp/xdp-pre.log
+          grep -F '[plan] ALL existing=443 merged=444 matched=0 added=1 ' /tmp/xdp-pre.log
+          grep -F '[plan] HISTORY existing=443 merged=444 matched=0 added=1 ' /tmp/xdp-pre.log
+          grep -F '[dry-run] ALL_ADDED=1' /tmp/xdp-pre.log
+          grep -F '[dry-run] HISTORY_ADDED=1' /tmp/xdp-pre.log
+          grep -F '2026-09-28T14:30:00+00:00 XDP type=grab phase=1 chain=8453 contract=0x07b3D902783c3C12b077508c3B5c00113d1291D0' /tmp/xdp-pre.log
+          grep -F '[review] ALL_contract_matches=0 ALL_suspicious_near_duplicates=0' /tmp/xdp-pre.log
+          grep -F '[review] HISTORY_contract_matches=0 HISTORY_suspicious_near_duplicates=0' /tmp/xdp-pre.log
+          test "$(grep -Fc '[digest] current_all=eb9b516b8e7eacbbb89bb8c5d9db73da6bb646c8f0ae5fa704f337a23457c094' /tmp/xdp-pre.log)" -eq 1
+          test "$(grep -Fc '[digest] current_history=eb9b516b8e7eacbbb89bb8c5d9db73da6bb646c8f0ae5fa704f337a23457c094' /tmp/xdp-pre.log)" -eq 1
+          test "$(grep -Fc '[digest] merged_all=bb7d79e92f4915abf44ba525d60fadb045cd7c19e3d00489a683709ebbebb9a4' /tmp/xdp-pre.log)" -eq 1
+          test "$(grep -Fc '[digest] merged_history=bb7d79e92f4915abf44ba525d60fadb045cd7c19e3d00489a683709ebbebb9a4' /tmp/xdp-pre.log)" -eq 1
+          grep -F '[mode] DRY_RUN' /tmp/xdp-pre.log
+          grep -F '[mutation] NONE' /tmp/xdp-pre.log
+          echo 'XDP_PREWRITE_GUARD=PASS'
+
+      - name: Apply exact approved XDP append
+        env:
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+          python scripts/sync_alpha_history.py \
+            --input data/airdrops.json \
+            --no-prices \
+            --fixed-now 2026-09-29T11:25:00Z \
+            --max-add 1 \
+            --apply | tee /tmp/xdp-apply.log
+          grep -F '[postcheck] all=444 history=444' /tmp/xdp-apply.log
+          grep -F '[mutation] R2_ALL_AND_HISTORY' /tmp/xdp-apply.log
+          grep -F '[done] merge-preserving Alpha History import PASS' /tmp/xdp-apply.log
+          echo 'XDP_APPLY=PASS'
+
+      - name: Post-write exact digest and uniqueness guard
+        env:
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+          python scripts/sync_alpha_history.py \
+            --input data/airdrops.json \
+            --no-prices \
+            --fixed-now 2026-09-29T11:25:00Z \
+            --max-add 1 | tee /tmp/xdp-post.log
+          grep -F '[current] all=444 history=444 ' /tmp/xdp-post.log
+          grep -F '[gap] source_after_seam=0 ' /tmp/xdp-post.log
+          grep -F '[dry-run] ALL_ADDED=0' /tmp/xdp-post.log
+          grep -F '[dry-run] HISTORY_ADDED=0' /tmp/xdp-post.log
+          test "$(grep -Fc '[digest] current_all=bb7d79e92f4915abf44ba525d60fadb045cd7c19e3d00489a683709ebbebb9a4' /tmp/xdp-post.log)" -eq 1
+          test "$(grep -Fc '[digest] current_history=bb7d79e92f4915abf44ba525d60fadb045cd7c19e3d00489a683709ebbebb9a4' /tmp/xdp-post.log)" -eq 1
+          python -c 'import json,os,boto3; from botocore.config import Config; c=boto3.client("s3",endpoint_url=os.environ["R2_ENDPOINT_URL"],aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],config=Config(signature_version="s3v4")); b=os.environ["R2_BUCKET_NAME"]; keys=["alpha-events/all.json","alpha-events/history.json"]; target=("xdp","0x07b3d902783c3c12b077508c3b5c00113d1291d0","8453","2026-09-28T14:30:00+00:00"); counts=[]; [counts.append(sum(1 for r in json.loads(c.get_object(Bucket=b,Key=k)["Body"].read()) if (str(r.get("symbol") or "").lower(),str(r.get("contract_address") or "").lower(),str(r.get("chain_id") or ""),str(r.get("event_time") or ""))==target)) for k in keys]; print("XDP_UNIQUENESS_COUNTS="+"/".join(map(str,counts))); assert counts==[1,1]'
+          grep -F '[mode] DRY_RUN' /tmp/xdp-post.log
+          grep -F '[mutation] NONE' /tmp/xdp-post.log
+          echo 'XDP_POSTCHECK=PASS'
