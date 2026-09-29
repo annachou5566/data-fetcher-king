@@ -1,0 +1,123 @@
+name: Alpha123 Live Source Qualification
+
+on:
+  push:
+    branches:
+      - chatgpt/alpha123-live-source-qualify-2026-09-29
+
+permissions:
+  contents: read
+
+jobs:
+  live-source-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Bounded public Telegram preview qualification
+        shell: python
+        run: |
+          import hashlib
+          import html
+          import re
+          import time
+          import urllib.request
+
+          URL = "https://t.me/s/alpha123en"
+          UA = "WaveAlpha-ExternalAdvisory/1.0 (+https://wave-alpha.pages.dev)"
+          MAX_BYTES = 512 * 1024
+          TIMEOUT = 10
+
+          req = urllib.request.Request(
+              URL,
+              headers={
+                  "User-Agent": UA,
+                  "Accept": "text/html,application/xhtml+xml",
+                  "Cache-Control": "no-cache",
+              },
+              method="GET",
+          )
+
+          started = time.monotonic()
+          with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+              status = int(resp.status)
+              ctype = str(resp.headers.get("content-type") or "")
+              etag = str(resp.headers.get("etag") or "")
+              last_modified = str(resp.headers.get("last-modified") or "")
+              cache_control = str(resp.headers.get("cache-control") or "")
+              content_length = str(resp.headers.get("content-length") or "")
+              body = resp.read(MAX_BYTES + 1)
+          elapsed_ms = int((time.monotonic() - started) * 1000)
+
+          if status != 200:
+              raise SystemExit(f"FAIL status={status}")
+          if "text/html" not in ctype.lower():
+              raise SystemExit(f"FAIL content_type={ctype!r}")
+          if len(body) > MAX_BYTES:
+              raise SystemExit(f"FAIL response_size={len(body)}>{MAX_BYTES}")
+
+          text = body.decode("utf-8", "strict")
+          ids = [int(x) for x in re.findall(r'data-post=["\']alpha123en/(\d+)["\']', text, re.I)]
+          if not ids:
+              raise SystemExit("FAIL no_alpha123_message_ids")
+          if len(ids) != len(set(ids)):
+              raise SystemExit("FAIL duplicate_message_ids")
+
+          matches = list(re.finditer(r'data-post=["\']alpha123en/(\d+)["\']', text, re.I))
+          malformed = []
+          type_counts = {"FORECAST":0,"NEW_ALERT":0,"UPDATE":0,"STARTING_SOON":0,"UNKNOWN":0}
+          xdp_ids = []
+
+          for idx, match in enumerate(matches):
+              mid = int(match.group(1))
+              start = match.start()
+              end = matches[idx+1].start() if idx + 1 < len(matches) else len(text)
+              block = text[start:end]
+              has_time = bool(re.search(r'<time\b[^>]*\bdatetime=["\'][^"\']+["\'][^>]*>', block, re.I))
+              msg = re.search(
+                  r'<div\b[^>]*class=["\'][^"\']*tgme_widget_message_text[^"\']*["\'][^>]*>([\s\S]*?)</div>',
+                  block,
+                  re.I,
+              )
+              if not has_time or not msg:
+                  malformed.append(mid)
+                  continue
+              raw = re.sub(r'<br\s*/?\s*>', '\n', msg.group(1), flags=re.I)
+              raw = re.sub(r'<[^>]+>', '', raw)
+              plain = html.unescape(raw).strip()
+              first = next((line.strip() for line in plain.splitlines() if line.strip()), "")
+              if "Airdrop Forecast" in first:
+                  type_counts["FORECAST"] += 1
+              elif "New Airdrop Alert" in first:
+                  type_counts["NEW_ALERT"] += 1
+              elif "Airdrop Update" in first:
+                  type_counts["UPDATE"] += 1
+              elif "Airdrop Starting Soon" in first:
+                  type_counts["STARTING_SOON"] += 1
+              else:
+                  type_counts["UNKNOWN"] += 1
+              if re.search(r'\bXDP\b|Doppler Finance', plain, re.I):
+                  xdp_ids.append(mid)
+
+          if malformed:
+              raise SystemExit(f"FAIL unparseable_message_blocks={malformed}")
+
+          print("ALPHA123_LIVE_SOURCE_QUAL_BEGIN")
+          print(f"HTTP_STATUS={status}")
+          print(f"CONTENT_TYPE={ctype}")
+          print(f"BODY_BYTES={len(body)}")
+          print(f"ELAPSED_MS={elapsed_ms}")
+          print(f"BODY_SHA256={hashlib.sha256(body).hexdigest()}")
+          print(f"CONTENT_LENGTH_HEADER={content_length or 'ABSENT'}")
+          print(f"ETAG_PRESENT={'YES' if etag else 'NO'}")
+          print(f"LAST_MODIFIED_PRESENT={'YES' if last_modified else 'NO'}")
+          print(f"CACHE_CONTROL={cache_control or 'ABSENT'}")
+          print(f"MESSAGE_COUNT={len(ids)}")
+          print(f"MIN_MESSAGE_ID={min(ids)}")
+          print(f"MAX_MESSAGE_ID={max(ids)}")
+          print("MESSAGE_IDS=" + ",".join(map(str, ids)))
+          print("TYPE_COUNTS=" + ",".join(f"{k}:{v}" for k,v in type_counts.items()))
+          print("XDP_MESSAGE_IDS=" + (",".join(map(str, xdp_ids)) if xdp_ids else "NONE"))
+          print("UNPARSEABLE_BLOCKS=0")
+          print("MUTATION=NONE")
+          print("ALPHA123_LIVE_SOURCE_QUAL=PASS")
+          print("ALPHA123_LIVE_SOURCE_QUAL_END")
