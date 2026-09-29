@@ -1,0 +1,48 @@
+name: XDP History Price Final Apply
+
+on:
+  push:
+    branches:
+      - chatgpt/alpha-history-xdp-price-final-apply-2026-09-29
+
+permissions:
+  contents: read
+
+jobs:
+  xdp-price-final-apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact approved candidate
+        uses: actions/checkout@v4
+        with:
+          ref: a9bd65f9eba00632e4381e7b59a192f16274a4a8
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Exact candidate guard
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "a9bd65f9eba00632e4381e7b59a192f16274a4a8"
+          test "$(git hash-object scripts/enrich_xdp_history_price.py)" = "c1cbd06fea5d78ec6c40e26fe08b85bcabb141e2"
+          test "$(git hash-object scripts/sync_listing_prices.py)" = "0ededf0f0d2f72569519dfadb909d958d002c5c7"
+          echo 'XDP_PRICE_CANDIDATE_GUARD=PASS'
+
+      - name: Apply targeted XDP claim price and ATH
+        env:
+          MAX_CONCURRENT: '4'
+          BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+          PROXY_WORKER_URL: ${{ secrets.PROXY_WORKER_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        working-directory: scripts
+        run: python enrich_xdp_history_price.py --apply
