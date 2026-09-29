@@ -481,6 +481,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="data/airdrops.json")
     parser.add_argument("--no-prices", action="store_true")
+    parser.add_argument("--fixed-now", help="Freeze import timestamp for deterministic dry-run/apply.")
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -502,7 +503,14 @@ def main():
     print(f"[source] total={len(airdrops)}")
 
     prices = {} if args.no_prices else fetch_live_prices()
-    now = datetime.now(timezone.utc)
+    if args.fixed_now:
+        now = datetime.fromisoformat(args.fixed_now.replace("Z", "+00:00"))
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
+    else:
+        now = datetime.now(timezone.utc)
     source_events = [map_event(item, prices, now=now) for item in airdrops]
     completed_count = sum(1 for event in source_events if event.get("completed"))
     print(f"[source] completed={completed_count} incomplete={len(source_events)-completed_count}")
