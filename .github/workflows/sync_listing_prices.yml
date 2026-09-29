@@ -32,7 +32,8 @@ jobs:
       - name: Exact source guard
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "8be4bafac19b31cd854d9c18c946e8511e41bd05"
+          test "$(git hash-object scripts/enrich_xdp_history_price.py)" = "c1cbd06fea5d78ec6c40e26fe08b85bcabb141e2"
+          test "$(git hash-object scripts/sync_listing_prices.py)" = "0ededf0f0d2f72569519dfadb909d958d002c5c7"
           python -m py_compile scripts/enrich_xdp_history_price.py
           grep -F 'PRE_DIGEST = "bb7d79e92f4915abf44ba525d60fadb045cd7c19e3d00489a683709ebbebb9a4"' scripts/enrich_xdp_history_price.py
           echo 'XDP_PRICE_SOURCE_GUARD=PASS'
