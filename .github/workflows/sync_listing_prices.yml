@@ -1,50 +1,66 @@
 name: Sync Alpha Listing Prices
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'   # Mỗi 30 phút — chỉ token mới chưa có listing_price mới tốn request
   workflow_dispatch:
-
-concurrency:
-  group: sync-listing-prices
-  cancel-in-progress: false
+    inputs:
+      apply:
+        description: 'Apply ONLY XDP listing_price + ATH fields?'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  sync-listing-prices:
+  xdp-targeted-price:
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # Tăng từ 15 → 30, đủ cho lần backfill đầu tiên chạy hết toàn bộ lịch sử
+    timeout-minutes: 15
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout targeted candidate
+        uses: actions/checkout@v4
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Cache pip
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: ${{ runner.os }}-pip-
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-    - name: Install dependencies
-      run: pip install -r requirements.txt
+      - name: Exact source guard
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "8be4bafac19b31cd854d9c18c946e8511e41bd05"
+          python -m py_compile scripts/enrich_xdp_history_price.py
+          grep -F 'PRE_DIGEST = "bb7d79e92f4915abf44ba525d60fadb045cd7c19e3d00489a683709ebbebb9a4"' scripts/enrich_xdp_history_price.py
+          echo 'XDP_PRICE_SOURCE_GUARD=PASS'
 
-    - name: Backfill listing prices
-      env:
-        MAX_CONCURRENT: '6'
-        BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
-        PROXY_WORKER_URL:            ${{ secrets.PROXY_WORKER_URL }}
-        RENDER_API_KEY:              ${{ secrets.RENDER_API_KEY }}
-        R2_ACCESS_KEY_ID:            ${{ secrets.R2_ACCESS_KEY_ID }}
-        R2_SECRET_ACCESS_KEY:        ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        R2_ENDPOINT_URL:             ${{ secrets.R2_ENDPOINT_URL }}
-        R2_BUCKET_NAME:              ${{ secrets.R2_BUCKET_NAME }}
-      working-directory: scripts
-      run: python sync_listing_prices.py
+      - name: Targeted XDP price dry-run
+        if: ${{ !inputs.apply }}
+        env:
+          MAX_CONCURRENT: '4'
+          BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+          PROXY_WORKER_URL: ${{ secrets.PROXY_WORKER_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        working-directory: scripts
+        run: python enrich_xdp_history_price.py
+
+      - name: Targeted XDP price apply
+        if: ${{ inputs.apply }}
+        env:
+          MAX_CONCURRENT: '4'
+          BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
+          PROXY_WORKER_URL: ${{ secrets.PROXY_WORKER_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        working-directory: scripts
+        run: python enrich_xdp_history_price.py --apply
