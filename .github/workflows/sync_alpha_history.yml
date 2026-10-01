@@ -2,12 +2,26 @@ name: Sync Alpha History
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Alpha History maintenance mode
+        required: true
+        default: ct-repair-dry-run
+        type: choice
+        options:
+          - ct-repair-dry-run
+          - ct-repair-apply
+          - seed-full-history
+
+concurrency:
+  group: sync-listing-prices
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  seed:
+  history-maintenance:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -21,10 +35,25 @@ jobs:
       - name: Install dependencies
         run: pip install boto3 botocore
 
-      - name: Run sync script
+      - name: Run selected history operation
         env:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python scripts/sync_alpha_history.py --input data/airdrops.json
+        run: |
+          case "${{ inputs.mode }}" in
+            ct-repair-dry-run)
+              python scripts/repair_ct_history.py --source data/airdrops.json
+              ;;
+            ct-repair-apply)
+              python scripts/repair_ct_history.py --source data/airdrops.json --apply
+              ;;
+            seed-full-history)
+              python scripts/sync_alpha_history.py --input data/airdrops.json
+              ;;
+            *)
+              echo "unsupported mode" >&2
+              exit 2
+              ;;
+          esac
