@@ -9530,6 +9530,24 @@
             "total_amount": "2058660",
             "market_cap": 29315299.92477986,
             "fdv": 182309079.1342031
+        },
+        {
+            "token": "CT",
+            "name": "Concrete",
+            "date": "2026-09-30",
+            "time": "08:00",
+            "points": "223",
+            "amount": "200",
+            "type": "grab",
+            "phase": 1,
+            "language": "en",
+            "status": "announced",
+            "completed": true,
+            "contract_address": "0x0a092e544da31150b439a1aaa1a3a2214a867f46",
+            "chain_id": "56",
+            "has_homonym": false,
+            "spot_listed": false,
+            "futures_listed": false
         }
     ]
 }
