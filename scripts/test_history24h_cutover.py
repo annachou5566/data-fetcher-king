@@ -135,5 +135,94 @@ class PriceEnrichment(unittest.TestCase):
         old=legacy(1);new=json.loads(json.dumps(old));new[0]['status']='live'
         with self.assertRaises(CutoverHold):reconcile_price_enrichment(old,new,old)
 
+class HistoryPartialPairRecovery(unittest.TestCase):
+    def test_retry_after_all_only_commit_with_price_enrichment(self):
+        old={'id':'legacy-A', 'symbol':'ABC', 'event_time':'2025-01-01T00:00:00Z',
+             'event_type':'grab','status':'ended','listing_price':{'vwap':3}}
+        enriched=dict(old,listing_price={'vwap':4})
+        all_after=[enriched,dict(LIVE,status='ended',lifecycle_state='history')]
+        fixed,history=reconcile_price_enrichment(all_after,all_after,[old])
+        self.assertEqual(history[0]['listing_price']['vwap'],4)
+        proposed=plan(fixed,history,[dict(LIVE)],NOW)
+        self.assertEqual(len(proposed['history']),2)
+        self.assertEqual(proposed['history'][0]['listing_price']['vwap'],4)
+        self.assertFalse(proposed['retire_live'])
+    def test_idless_legacy_price_ack_loss_recovers_if_unique(self):
+        old={'symbol':'XYZ','event_time':'2025-08-01T08:00:00Z',
+             'event_type':'grab','phase':'P2','chain_id':'56',
+             'status':'ended','spot_listing_price':{'vwap':3}}
+        updated=dict(old,spot_listing_price={'vwap':4})
+        a,h=reconcile_price_enrichment([updated],[updated],[old])
+        self.assertEqual(h[0]['spot_listing_price']['vwap'],4)
+        self.assertEqual(a,h)
+    def test_ambiguous_idless_multi_round_retry_fails_closed(self):
+        old={'symbol':'XYZ','event_time':'2025-08-01T08:00:00Z',
+             'event_type':'grab','phase':'P2','status':'ended',
+             'listing_price':{'vwap':1}}
+        current=[dict(old,listing_price={'vwap':2}),
+                 dict(old,listing_price={'vwap':3})]
+        with self.assertRaisesRegex(CutoverHold,'HISTORY_RETRY_IDENTITY_AMBIGUOUS'):
+            reconcile_price_enrichment(current,current,[old])
+    def test_idless_missing_event_time_cannot_fuzzy_match(self):
+        old={'symbol':'XYZ','status':'ended','listing_price':{'vwap':1}}
+        updated=dict(old,listing_price={'vwap':2})
+        with self.assertRaisesRegex(CutoverHold,'HISTORY_PREIMAGE_NOT_IN_ALL'):
+            reconcile_price_enrichment([updated],[updated],[old])
+    def test_same_id_but_changed_event_time_not_reconciled(self):
+        old={'id':'legacy-A','symbol':'XYZ','event_time':'2025-08-01T08:00:00Z',
+             'status':'ended','listing_price':{'vwap':1}}
+        updated=dict(old,event_time='2025-08-02T08:00:00Z',listing_price={'vwap':2})
+        with self.assertRaisesRegex(CutoverHold,'HISTORY_IDENTITY_MOVED'):
+            reconcile_price_enrichment([updated],[updated],[old])
+    def test_all_cas_ack_loss_price_update_recovers_without_live_retire(self):
+        old=legacy(445)
+        changed=json.loads(json.dumps(old))
+        changed[0]['listing_price']={'vwap':999}
+        f=FakeR2(old,old,[dict(LIVE)])
+        all_new,hist_new=reconcile_price_enrichment(old,changed,old)
+        first=plan(all_new,hist_new,[dict(LIVE)],NOW)
+        f.fail_after=ALL_KEY
+        with self.assertRaises(RuntimeError):
+            publish_pair(f,'b',first,f.etag[ALL_KEY],f.etag[HISTORY_KEY])
+        self.assertEqual(f.data[LIVE_KEY],[dict(LIVE)])
+        self.assertEqual(f.data[HISTORY_KEY],old)
+        f.fail_after=None
+        latest_all,_=snapshot(f,'b',ALL_KEY)
+        latest_hist,_=snapshot(f,'b',HISTORY_KEY)
+        recovered_all,recovered_hist=reconcile_price_enrichment(latest_all,latest_all,latest_hist)
+        recovery=plan(recovered_all,recovered_hist,[dict(LIVE)],NOW)
+        reply=publish_pair(f,'b',recovery,f.etag[ALL_KEY],f.etag[HISTORY_KEY])
+        self.assertTrue(reply['pair_verified'])
+        self.assertEqual(len(f.data[HISTORY_KEY]),446)
+        self.assertEqual(f.data[HISTORY_KEY][0]['listing_price'],{'vwap':999})
+        self.assertEqual(f.data[LIVE_KEY],[dict(LIVE)])
+        self.assertEqual(sum(row.get('id')==CID for row in f.data[HISTORY_KEY]),1)
+    def test_history_cas_failure_after_all_price_update_recovers(self):
+        old=legacy(445)
+        changed=json.loads(json.dumps(old))
+        changed[1]['spot_listing_price']={'vwap':75}
+        f=FakeR2(old,old,[dict(LIVE)]);f.fail_before=HISTORY_KEY
+        a,h=reconcile_price_enrichment(old,changed,old)
+        first=plan(a,h,[dict(LIVE)],NOW)
+        with self.assertRaises(RuntimeError):
+            publish_pair(f,'b',first,f.etag[ALL_KEY],f.etag[HISTORY_KEY])
+        self.assertEqual(f.writes,[ALL_KEY]);f.fail_before=None
+        prior_all,_=snapshot(f,'b',ALL_KEY)
+        prior_history,_=snapshot(f,'b',HISTORY_KEY)
+        a,h=reconcile_price_enrichment(prior_all,prior_all,prior_history)
+        next_plan=plan(a,h,[dict(LIVE)],NOW)
+        publish_pair(f,'b',next_plan,f.etag[ALL_KEY],f.etag[HISTORY_KEY])
+        self.assertEqual(len(f.data[ALL_KEY]),446)
+        self.assertEqual(f.data[HISTORY_KEY][1]['spot_listing_price'],{'vwap':75})
+        self.assertEqual(f.data[LIVE_KEY],[dict(LIVE)])
+
+    def test_same_id_but_changed_firstlive_not_reconciled(self):
+        old={'id':'ae:0123456789abcdef01234567','symbol':'XYZ',
+             'firstLiveAt':'2026-10-11T00:00:00.000Z','status':'ended',
+             'listing_price':{'vwap':1}}
+        updated=dict(old,firstLiveAt='2026-10-12T00:00:00.000Z',listing_price={'vwap':2})
+        with self.assertRaisesRegex(CutoverHold,'HISTORY_IDENTITY_MOVED'):
+            reconcile_price_enrichment([updated],[updated],[old])
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -64,6 +64,31 @@ def _compatible(old, new):
     if old.get('firstLiveAt') is not None and old['firstLiveAt'] != new['firstLiveAt']:
         _hold('IMMUTABLE_CLOCK_CONFLICT')
 
+# Used ONLY to reconcile a partially committed All/History pair where
+# price enrichment changed All before History CAS could commit. Never match
+# legacy records by symbol alone: multi-round same-token events exist.
+_HISTORY_IDENTITY_FIELDS = ('id', 'source_msg_id', 'symbol', 'event_time',
+                            'event_type', 'contract_address', 'chain_id',
+                            'phase', 'project_name', 'source_channel', 'firstLiveAt')
+
+def _stable_history_identity(row):
+    old_id = row.get('id')
+    if isinstance(old_id, str) and old_id.strip():
+        return ('id', old_id)
+    symbol = row.get('symbol')
+    event_time = row.get('event_time')
+    if not isinstance(symbol, str) or not symbol.strip() or not isinstance(event_time, str) or not event_time.strip():
+        return None
+    # Exact, immutable set of event dimensions, excluding prices/status.
+    # If two rows share this signature, recovery must HOLD for owner review.
+    return ('legacy', tuple(_fingerprint({f: row.get(f)})
+                            for f in _HISTORY_IDENTITY_FIELDS if f != 'id'))
+
+def _verify_history_identity(old, candidate):
+    for field in _HISTORY_IDENTITY_FIELDS:
+        if old.get(field) != candidate.get(field):
+            _hold('HISTORY_IDENTITY_MOVED')
+
 def _overlay_without_erasing(prior, addition):
     result = dict(prior)
     for key, value in addition.items():
@@ -93,11 +118,29 @@ def reconcile_price_enrichment(pre_enrichment, enriched_all, prior_history):
     for i, row in enumerate(before):
         positions.setdefault(_fingerprint(row), []).append(i)
     result_all = copy.deepcopy(after)
+    # Do not allow one All row to satisfy two stale History rows.
+    claimed = set()
+    identities = {}
+    for i, row in enumerate(before):
+        k = _stable_history_identity(row)
+        if k is not None:
+            identities.setdefault(k, []).append(i)
     for old in old_history:
-        matches = positions.get(_fingerprint(old), [])
-        if not matches:
-            _hold('HISTORY_PREIMAGE_NOT_IN_ALL')
-        index = matches.pop(0)
+        matches = [i for i in positions.get(_fingerprint(old), []) if i not in claimed]
+        if matches:
+            index = matches[0]
+        else:
+            # Crash recovery: All was CAS-updated but History was not; its
+            # price/status fields may now differ. Use unique strong identity.
+            k = _stable_history_identity(old)
+            if k is None:
+                _hold('HISTORY_PREIMAGE_NOT_IN_ALL')
+            candidates = [i for i in identities.get(k, []) if i not in claimed]
+            if len(candidates) != 1 or len(identities[k]) != 1:
+                _hold('HISTORY_RETRY_IDENTITY_AMBIGUOUS')
+            index = candidates[0]
+            _verify_history_identity(old, before[index])
+        claimed.add(index)
         newer = result_all[index]
         if newer.get('status') in ('live', 'upcoming'):
             _hold('HISTORY_STATUS_REGRESSION')
