@@ -26,7 +26,7 @@ import zipfile
 import io
 import csv as _csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import boto3
 from botocore.config import Config
@@ -1610,9 +1610,35 @@ def main():
         print(f"   API_AGG_KLINES = {API_AGG_KLINES}")
         print(f"   PROXY_WORKER_URL = {fa.PROXY_WORKER_URL}")
 
+    # Default OFF. Keep existing listing-price writer unchanged unless the
+    # separately approved +24h single-owner cutover has completed all gates.
+    history24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED", "0") == "1"
+    if history24h_enabled:
+        required = (
+            "WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED",
+            "WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED",
+            "WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED",
+            "WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED",
+            "WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED",
+            "WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED",
+        )
+        if any(os.getenv(name) != "1" for name in required):
+            raise RuntimeError("WA_AE_HISTORY24H_HOLD_RUNTIME_GATES_INCOMPLETE")
+        from history24h_cutover import (
+            snapshot as history24h_snapshot,
+            reconcile_price_enrichment as history24h_reconcile,
+            plan as history24h_plan,
+            publish_pair as history24h_publish_pair,
+        )
+
     r2 = get_r2()
     print("⏳ Loading alpha-events/all.json from R2...")
-    all_events = load_json(r2, "alpha-events/all.json")
+    if history24h_enabled:
+        all_events, all24h_etag = history24h_snapshot(
+            r2, R2_BUCKET_NAME, "alpha-events/all.json")
+        before_price_enrichment = json.loads(json.dumps(all_events))
+    else:
+        all_events = load_json(r2, "alpha-events/all.json")
     print(f"   {len(all_events)} events loaded")
 
     if not all_events:
@@ -1701,8 +1727,30 @@ def main():
     #     wa-listener ghi liên tục).
     history = [e for e in all_events if e.get("status") in ("ended", None) or e.get("status") not in ("upcoming", "live")]
 
-    upload_json(r2, "alpha-events/all.json",     all_events)
-    upload_json(r2, "alpha-events/history.json", history)
+    if history24h_enabled:
+        # Read latest History + physical Live only after price computation.
+        # Both R2 keys remain owned by this existing listing-price writer.
+        previous_history, history24h_etag = history24h_snapshot(
+            r2, R2_BUCKET_NAME, "alpha-events/history.json")
+        physical_live, live24h_etag = history24h_snapshot(
+            r2, R2_BUCKET_NAME, "alpha-events/live.json")
+        safe_all, safe_history = history24h_reconcile(
+            before_price_enrichment, all_events, previous_history)
+        proposed = history24h_plan(
+            safe_all, safe_history, physical_live, datetime.now(timezone.utc))
+        # Abort if the physical Live generation moved before the writes.
+        _, current_live_etag = history24h_snapshot(
+            r2, R2_BUCKET_NAME, "alpha-events/live.json")
+        if current_live_etag != live24h_etag:
+            raise RuntimeError("WA_AE_HISTORY24H_HOLD_LIVE_GENERATION_MOVED")
+        ack = history24h_publish_pair(
+            r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
+        if ack.get("pair_verified") is not True:
+            raise RuntimeError("WA_AE_HISTORY24H_HOLD_PAIR_NOT_VERIFIED")
+        print("  [history24h] All + History CAS/readback verified; physical Live retained")
+    else:
+        upload_json(r2, "alpha-events/all.json",     all_events)
+        upload_json(r2, "alpha-events/history.json", history)
 
     print("🏁 DONE")
 
