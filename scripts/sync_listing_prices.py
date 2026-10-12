@@ -1626,7 +1626,13 @@ def main():
             "WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED",
             "WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED",
         )
-        guarded = required if legacy_pending_enabled else required[:-1]
+        # Legacy PREDICTED rows have NO firstLiveAt. Their independent
+        # verified old-R2-snapshot clock replaces (does not forge) Live proof.
+        if legacy_pending_enabled:
+            guarded = tuple(x for x in required
+                            if x != "WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED")
+        else:
+            guarded = required[:-1]
         if any(os.getenv(name) != "1" for name in guarded):
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_RUNTIME_GATES_INCOMPLETE")
         from history24h_cutover import (
@@ -1740,6 +1746,8 @@ def main():
             r2, R2_BUCKET_NAME, "alpha-events/history.json")
         physical_live, live24h_etag = history24h_snapshot(
             r2, R2_BUCKET_NAME, "alpha-events/live.json")
+        if legacy_pending_enabled and physical_live:
+            raise RuntimeError("WA_AE_HISTORY24H_HOLD_LEGACY_REQUIRES_EMPTY_PHYSICAL_LIVE")
         safe_all, safe_history = history24h_reconcile(
             before_price_enrichment, all_events, previous_history)
         now24h = datetime.now(timezone.utc)
