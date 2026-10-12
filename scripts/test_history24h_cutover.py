@@ -226,3 +226,82 @@ class HistoryPartialPairRecovery(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class LegacyPendingRecovery(unittest.TestCase):
+    def setUp(self):
+        from history24h_cutover import recover_stale_pending
+        self.recover=recover_stale_pending
+        self.now=datetime(2026,10,12,8,0,tzinfo=timezone.utc)
+        self.modified=datetime(2026,10,9,9,0,tzinfo=timezone.utc)
+        self.legacy=legacy(445)
+        self.manifest=[{'id':f'ae:{i:024x}', 'symbol':s, 'event_time':ts} for i,(s,ts) in enumerate([
+            ('BTR','2026-10-09T09:00:00+00:00'),
+            ('CLO','2026-10-09T09:00:00+00:00'),
+            ('US','2026-10-07T09:00:00+00:00')], 1)]
+        self.pending=[{'symbol':x['symbol'], 'event_time':x['event_time'],
+                       'amount_per_user':3, 'event_type':'grab','status':'upcoming'} for x in self.manifest]
+        self.base=plan(self.legacy,self.legacy,[],self.now)
+    def run_plan(self, **over):
+        opts={'plan_value':self.base,'pending_rows':self.pending,'exact_manifest':self.manifest,
+              'pending_last_modified':self.modified,'public_etag':'etag','pending_etag':'etag','now':self.now}
+        opts.update(over)
+        return self.recover(**opts)
+    def test_stale_three_promoted_preserving_445_price_rows(self):
+        p=self.run_plan();self.assertEqual(len(p['history']),448)
+        self.assertEqual(p['history'][:445],self.legacy)
+        self.assertEqual({x['symbol'] for x in p['history'][445:]},{'BTR','CLO','US'})
+        self.assertTrue(all(x['status']=='ended' for x in p['history'][445:]))
+        self.assertTrue(all('firstLiveAt' not in x for x in p['history'][445:]))
+        self.assertFalse(p['retire_pending']);self.assertFalse(p['retire_public_active'])
+    def test_replay_is_idempotent(self):
+        p=self.run_plan();r=self.run_plan(plan_value=plan(p['all'],p['history'],[],self.now))
+        self.assertEqual(p['history'],r['history']);self.assertEqual(p['all'],r['all'])
+    def test_exact_one_millisecond_before_24h_is_hold(self):
+        with self.assertRaisesRegex(CutoverHold,'SNAPSHOT_TOO_YOUNG'):
+            self.run_plan(now=self.modified+timedelta(hours=24)-timedelta(milliseconds=1))
+    def test_equal_24h_is_eligible(self):
+        self.assertEqual(len(self.run_plan(now=self.modified+timedelta(hours=24))['legacy_promoted']),3)
+    def test_requires_equal_r2_public_pending_etag(self):
+        with self.assertRaisesRegex(CutoverHold,'PROOF_MISSING'):
+            self.run_plan(public_etag='not-pending')
+    def test_cannot_guess_when_pending_token_missing(self):
+        with self.assertRaisesRegex(CutoverHold,'IDENTITY_NOT_UNIQUE'):
+            self.run_plan(pending_rows=self.pending[:2])
+    def test_cannot_match_symbol_alone_for_multi_round(self):
+        with self.assertRaisesRegex(CutoverHold,'IDENTITY_NOT_UNIQUE'):
+            self.run_plan(pending_rows=self.pending+[dict(self.pending[0])])
+    def test_cannot_change_signed_canonical_identity(self):
+        with self.assertRaisesRegex(CutoverHold,'CANONICAL_ID_CONFLICT'):
+            self.run_plan(pending_rows=[dict(self.pending[0],id='ae:'+('f'*24))]+self.pending[1:])
+    def test_preserve_old_price_on_existing_all(self):
+        enriched=dict(self.legacy[0]);enriched['listing_price']={'vwap':5000}
+        old=[enriched]+self.legacy[1:]
+        p=self.run_plan(plan_value=plan(old,old,[],self.now))
+        self.assertEqual(p['history'][0]['listing_price']['vwap'],5000)
+    def test_reject_non_utc_event_time(self):
+        bad=[dict(self.pending[0],event_time='2026-10-09T09:00:00')]+self.pending[1:]
+        with self.assertRaises(CutoverHold): self.run_plan(pending_rows=bad)
+    def test_no_r2_mutation_until_publish_pair(self):
+        r=FakeR2(self.legacy,self.legacy,[])
+        p=self.run_plan();self.assertEqual(r.writes,[])
+        ack=publish_pair(r,'free-bucket',p,r.etag[ALL_KEY],r.etag[HISTORY_KEY])
+        self.assertEqual(r.writes,[ALL_KEY,HISTORY_KEY]);self.assertTrue(ack['pair_verified'])
+    def test_manual_manifest_must_be_exact(self):
+        with self.assertRaisesRegex(CutoverHold,'MANIFEST_SHAPE'):
+            self.run_plan(exact_manifest=[{'id':self.manifest[0]['id'],'symbol':'BTR'}])
+
+
+class SnapshotMetadataProof(unittest.TestCase):
+    def test_checked_metadata_returned_only_when_requested(self):
+        f=FakeR2([],[]);last=datetime(2026,10,9,9,0,tzinfo=timezone.utc)
+        old=f.get_object
+        def get(Bucket,Key):return {**old(Bucket,Key),'LastModified':last}
+        f.get_object=get
+        self.assertEqual(len(snapshot(f,'b',ALL_KEY)),2)
+        self.assertEqual(snapshot(f,'b',ALL_KEY,include_last_modified=True)[2],last)
+    def test_missing_metadata_must_hold_before_writes(self):
+        f=FakeR2([],[])
+        with self.assertRaisesRegex(CutoverHold,'LASTMOD_PROOF_MISSING'):
+            snapshot(f,'b',ALL_KEY,include_last_modified=True)
+        self.assertEqual(f.writes,[])

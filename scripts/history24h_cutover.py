@@ -221,7 +221,7 @@ def plan(all_rows, history_rows, live_rows, now):
             'promoted': complete, 'retire_live': False,
             'independent_writer': False}
 
-def snapshot(r2, bucket, key):
+def snapshot(r2, bucket, key, include_last_modified=False):
     """Bounded, strict, versioned R2 GET. No permissive [] on failure."""
     obj = r2.get_object(Bucket=bucket, Key=key)
     etag = obj.get('ETag')
@@ -238,6 +238,11 @@ def snapshot(r2, bucket, key):
     except (ValueError, UnicodeError):
         _hold('R2_INVALID_JSON')
     _rows(values, key.upper())
+    if include_last_modified:
+        stamp = obj.get('LastModified')
+        if not isinstance(stamp, datetime) or stamp.tzinfo is None:
+            _hold('R2_LASTMOD_PROOF_MISSING')
+        return values, etag, stamp.astimezone(timezone.utc)
     return values, etag
 
 def _json_body(rows):
@@ -267,3 +272,106 @@ def publish_pair(r2, bucket, plan_value, old_all_etag, old_hist_etag):
         _hold('R2_PAIR_MISMATCH')
     return {'pair_verified': True, 'promoted': plan_value['promoted'],
             'retire_live': False}
+
+
+# LEGACY ACTIVE migration uses a proved LAST publication time as a conservative
+# upper bound for initial inclusion, NEVER calls it firstLiveAt. One writer only.
+def recover_stale_pending(plan_value, pending_rows, exact_manifest,
+                          pending_last_modified, public_etag, pending_etag, now):
+    """Move only operator-approved exact legacy identities into existing History.
+
+    NO R2 deletion/retirement is authorized by this pure function. The old
+    realtime owner must separately retire pending and re-publish Active once
+    this pair has been durably CAS-verified. Never infer firstLiveAt.
+    """
+    pending = _rows(pending_rows, 'PENDING')
+    if not isinstance(exact_manifest, list) or not 1 <= len(exact_manifest) <= 3:
+        _hold('LEGACY_EXACT_MANIFEST_REQUIRED')
+    if not isinstance(public_etag, str) or not public_etag or public_etag != pending_etag:
+        _hold('LEGACY_PUBLISHED_ACTIVE_PROOF_MISSING')
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
+        _hold('LEGACY_NOW_NOT_UTC')
+    if not isinstance(pending_last_modified, datetime) or pending_last_modified.tzinfo is None:
+        _hold('LEGACY_SNAPSHOT_LASTMOD_MISSING')
+    published = pending_last_modified.astimezone(timezone.utc)
+    if published > now or now < published + timedelta(milliseconds=LIVE_MS):
+        _hold('LEGACY_ACTIVE_SNAPSHOT_TOO_YOUNG')
+    if not isinstance(plan_value, dict) or plan_value.get('retire_live') is not False or plan_value.get('independent_writer') is not False:
+        _hold('LEGACY_PLAN_NOT_OWNED')
+    new_all = copy.deepcopy(_rows(plan_value['all'], 'LEGACY_ALL'))
+    new_history = copy.deepcopy(_rows(plan_value['history'], 'LEGACY_HISTORY'))
+    idx_all, idx_history = _indexes(new_all, 'LEGACY_ALL'), _indexes(new_history, 'LEGACY_HISTORY')
+    matched = set()
+    used = set()
+    for manifest in exact_manifest:
+        if not isinstance(manifest, dict) or set(manifest) != {'id', 'symbol', 'event_time'}:
+            _hold('LEGACY_MANIFEST_SHAPE')
+        cid, symbol, event_at = manifest['id'], manifest['symbol'], manifest['event_time']
+        if not isinstance(cid, str) or not CANONICAL.fullmatch(cid):
+            _hold('LEGACY_MANIFEST_ID')
+        if not isinstance(symbol, str) or not symbol.strip() or symbol != symbol.upper():
+            _hold('LEGACY_MANIFEST_SYMBOL')
+        if cid in used:
+            _hold('LEGACY_MANIFEST_DUPLICATE')
+        used.add(cid)
+        def parse_time(v):
+            if not isinstance(v, str):
+                _hold('LEGACY_EVENT_TIME_MISSING')
+            try:
+                t = datetime.fromisoformat(v.replace('Z','+00:00').replace(' ', 'T'))
+            except ValueError:
+                _hold('LEGACY_EVENT_TIME_INVALID')
+            if t.tzinfo is None:
+                _hold('LEGACY_EVENT_TIME_NOT_UTC')
+            return t.astimezone(timezone.utc)
+        reference = parse_time(event_at)
+        candidates = []
+        for row in pending:
+            row_symbol = str(row.get('symbol') or row.get('token') or '').upper()
+            if row_symbol != symbol:
+                continue
+            ts = row.get('event_time')
+            if ts is None and isinstance(row.get('date'), str) and isinstance(row.get('time'), str):
+                ts = row['date'] + 'T' + row['time'] + ':00+00:00' if len(row['time']) == 5 else row['date'] + 'T' + row['time']
+            if ts is not None and parse_time(ts) == reference:
+                candidates.append(row)
+        if len(candidates) != 1:
+            _hold('LEGACY_PENDING_IDENTITY_NOT_UNIQUE')
+        row = candidates[0]
+        if row.get('id') is not None and isinstance(row['id'], str) and CANONICAL.fullmatch(row['id']) and row['id'] != cid:
+            _hold('LEGACY_PENDING_CANONICAL_ID_CONFLICT')
+        if row.get('firstLiveAt') is not None:
+            _hold('LEGACY_CANNOT_OVERWRITE_REAL_FIRSTLIVE')
+        if cid in idx_history:
+            archived = new_history[idx_history[cid]]
+            _compatible(archived, row)
+            if archived.get('status') != 'ended':
+                _hold('LEGACY_HISTORY_NOT_TERMINAL')
+            matched.add(cid)
+            continue
+        merged = copy.deepcopy(row)
+        if cid in idx_all:
+            _compatible(new_all[idx_all[cid]], row)
+            merged = _overlay_without_erasing(merged, new_all[idx_all[cid]])
+        original_id = row.get('id')
+        if original_id and original_id != cid:
+            merged['legacy_active_id'] = original_id
+        merged.update(id=cid, symbol=symbol, status='ended', lifecycle_state='history')
+        merged.pop('firstLiveAt', None)
+        if cid in idx_all:
+            new_all[idx_all[cid]] = copy.deepcopy(merged)
+        else:
+            idx_all[cid] = len(new_all)
+            new_all.append(copy.deepcopy(merged))
+        idx_history[cid] = len(new_history)
+        new_history.append(copy.deepcopy(merged))
+        matched.add(cid)
+    if matched != used:
+        _hold('LEGACY_INCOMPLETE_MATCH')
+    if len(new_history) < len(plan_value['history']):
+        _hold('LEGACY_HISTORY_LOSS')
+    _rows(new_all, 'LEGACY_ALL_OUT')
+    _rows(new_history, 'LEGACY_HISTORY_OUT')
+    return {**plan_value, 'all': new_all, 'history': new_history,
+            'legacy_promoted': sorted(matched), 'retire_live': False,
+            'retire_pending': False, 'retire_public_active': False}

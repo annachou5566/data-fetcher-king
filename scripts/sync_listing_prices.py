@@ -1613,6 +1613,9 @@ def main():
     # Default OFF. Keep existing listing-price writer unchanged unless the
     # separately approved +24h single-owner cutover has completed all gates.
     history24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED", "0") == "1"
+    legacy_pending_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED", "0") == "1"
+    if legacy_pending_enabled and not history24h_enabled:
+        raise RuntimeError("WA_AE_HISTORY24H_HOLD_LEGACY_REQUIRES_WRITER_GATE")
     if history24h_enabled:
         required = (
             "WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED",
@@ -1621,14 +1624,17 @@ def main():
             "WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED",
             "WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED",
             "WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED",
+            "WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED",
         )
-        if any(os.getenv(name) != "1" for name in required):
+        guarded = required if legacy_pending_enabled else required[:-1]
+        if any(os.getenv(name) != "1" for name in guarded):
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_RUNTIME_GATES_INCOMPLETE")
         from history24h_cutover import (
             snapshot as history24h_snapshot,
             reconcile_price_enrichment as history24h_reconcile,
             plan as history24h_plan,
             publish_pair as history24h_publish_pair,
+            recover_stale_pending as history24h_recover_pending,
         )
 
     r2 = get_r2()
@@ -1736,8 +1742,33 @@ def main():
             r2, R2_BUCKET_NAME, "alpha-events/live.json")
         safe_all, safe_history = history24h_reconcile(
             before_price_enrichment, all_events, previous_history)
-        proposed = history24h_plan(
-            safe_all, safe_history, physical_live, datetime.now(timezone.utc))
+        now24h = datetime.now(timezone.utc)
+        proposed = history24h_plan(safe_all, safe_history, physical_live, now24h)
+        if legacy_pending_enabled:
+            # A single approved legacy recovery on the existing History owner.
+            # Never guess firstLiveAt; old-published snapshot age is proof.
+            pending_rows, pending_etag, pending_uploaded = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/pending.json",
+                include_last_modified=True)
+            public_rows, public_etag, _ = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/public/active.json",
+                include_last_modified=True)
+            if pending_rows != public_rows:
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_PUBLIC_ACTIVE_MISMATCH")
+            try:
+                approved_manifest = json.loads(
+                    os.environ["WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST"])
+            except (KeyError, ValueError):
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_LEGACY_MANIFEST_MISSING")
+            proposed = history24h_recover_pending(
+                proposed, pending_rows, approved_manifest,
+                pending_uploaded, public_etag, pending_etag, now24h)
+            _, current_pending_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/pending.json")
+            _, current_public_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/public/active.json")
+            if current_pending_etag != pending_etag or current_public_etag != public_etag:
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_ACTIVE_SOURCE_VERSION_MOVED")
         # Abort if the physical Live generation moved before the writes.
         _, current_live_etag = history24h_snapshot(
             r2, R2_BUCKET_NAME, "alpha-events/live.json")
@@ -1747,6 +1778,14 @@ def main():
             r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
         if ack.get("pair_verified") is not True:
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_PAIR_NOT_VERIFIED")
+        if legacy_pending_enabled:
+            _, after_pending = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/pending.json")
+            _, after_public = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/public/active.json")
+            if after_pending != pending_etag or after_public != public_etag:
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_POST_PAIR_ACTIVE_MOVED")
+            print("  [legacy-active] History pair verified; Active pending/CDN retained")
         print("  [history24h] All + History CAS/readback verified; physical Live retained")
     else:
         upload_json(r2, "alpha-events/all.json",     all_events)
