@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   seed:
+    # OFF by default: legacy history seeding must have separate owner approval.
+    if: ${{ vars.WA_ALPHA_EVENTS_LEGACY_HISTORY_MANUAL_SEED_APPROVED == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
