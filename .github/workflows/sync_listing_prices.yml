@@ -20,6 +20,10 @@ permissions:
 
 jobs:
   sync-listing-prices:
+    # OFF by default. During a separately approved History24h cutover,
+    # pause scheduled price writes without disabling manual workflow_dispatch.
+    # Preserve the original concurrency group; no extra scheduler.
+    if: ${{ github.event_name != 'schedule' || vars.WA_ALPHA_EVENTS_HISTORY24H_SCHEDULE_FENCED != '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30   # Tăng từ 15 → 30, đủ cho lần backfill đầu tiên chạy hết toàn bộ lịch sử
 
