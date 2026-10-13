@@ -933,6 +933,12 @@ def fetch_spot_listing_date(symbol, since_date_str=None):
 
 
 
+def _is_talus_us_oct2026_event(e):
+    # This exact History row is missing its Sui token identity.
+    return (e.get("id") == "ae:33a85f0a0ed845b1780e314e"
+            and (e.get("symbol") or e.get("token") or "").upper() == "US"
+            and e.get("event_time") == "2026-10-07T09:00:00Z")
+
 _ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId", "contractAddress", "chainId"}} — set trong main()
 
 
@@ -991,6 +997,9 @@ def _process_one(e, idx, total, is_first_occurrence=True):
     _alpha_id, _listing_ms = _get_alpha_info(symbol, contract_address=contract)
     if not is_first_occurrence:
         _listing_ms = None  # không tin listingTime chung cho đợt airdrop SAU lần đầu
+    if _is_talus_us_oct2026_event(e):
+        _alpha_id = "ALPHA_494"
+        _listing_ms = None  # Claim is Oct 2026, not the initial Dec 2025 Alpha listing
     result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_alpha_id, alpha_listing_time_ms=_listing_ms)
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
@@ -1201,6 +1210,19 @@ def enrich_events(events):
     416 token tuần tự dễ vượt timeout 15 phút của GitHub Actions,
     chạy song song giảm thời gian xuống còn ~1/N.
     """
+    # Restore only the verified 2026-10-07 Talus (US) Sui row. Never infer by ticker alone.
+    for e in events:
+        if not _is_talus_us_oct2026_event(e):
+            continue
+        expected_contract = "0xee962a61432231c2ede6946515beb02290cb516ad087bb06a731e922b2a5f57a::us::US"
+        if e.get("chain_id") not in (None, "", "CT_784") or e.get("contract_address") not in (None, "", expected_contract):
+            print("  [warn] US Sui identity conflict; refusing automatic repair")
+            continue
+        if not e.get("chain_id") or not e.get("contract_address"):
+            e["chain_id"] = "CT_784"
+            e["contract_address"] = expected_contract
+            print("  [us-sui] restored verified chain and contract for Oct-2026 event")
+
     todo = [
         e for e in events
         if (not e.get("listing_price") or e.get("_vwap_daybound_recompute"))
