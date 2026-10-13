@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '*/30 * * * *'   # Mỗi 30 phút — chỉ token mới chưa có listing_price mới tốn request
   workflow_dispatch:
+    inputs:
+      legacy_history24h_cutover:
+        description: 'One-time legacy History24h handoff; requires independent owner proof variables'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: sync-listing-prices
@@ -46,5 +52,20 @@ jobs:
         R2_SECRET_ACCESS_KEY:        ${{ secrets.R2_SECRET_ACCESS_KEY }}
         R2_ENDPOINT_URL:             ${{ secrets.R2_ENDPOINT_URL }}
         R2_BUCKET_NAME:              ${{ secrets.R2_BUCKET_NAME }}
+        # Preserve existing scheduled price-only behavior. Only an explicit
+        # manual invocation can request the existing guarded History owner.
+        WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover && '1' || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover && '1' || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED: '0'
+        # All proof gates come from separately approved repository variables,
+        # never from untrusted request input; Python fail-closes if any is OFF.
+        WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED: '0'
+        WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST || '[]' }}
       working-directory: scripts
       run: python sync_listing_prices.py
