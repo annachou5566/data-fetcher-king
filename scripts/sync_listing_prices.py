@@ -937,7 +937,7 @@ def _is_talus_us_oct2026_event(e):
     # This exact History row is missing its Sui token identity.
     return (e.get("id") == "ae:33a85f0a0ed845b1780e314e"
             and (e.get("symbol") or e.get("token") or "").upper() == "US"
-            and e.get("event_time") == "2026-10-07T09:00:00Z")
+            and e.get("event_time") in ("2026-10-07T09:00:00Z", "2026-10-07T09:00:00.000Z"))
 
 _ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId", "contractAddress", "chainId"}} — set trong main()
 
