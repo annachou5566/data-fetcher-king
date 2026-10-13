@@ -98,5 +98,33 @@ class EventPriceAnchorTests(unittest.TestCase):
         self.assertEqual(s.mark_event_anchor_reprices(events), 0)
 
 
+    def test_same_token_two_events_keep_independent_price_anchors(self):
+        first = {"id": "a", "symbol": "BTR", "event_time": "2025-08-27T12:00:00Z",
+                 "contract_address": "0xabc"}
+        again = {"id": "b", "symbol": "BTR", "event_time": self.EVENT_TIME,
+                 "contract_address": "0xabc"}
+        price = {"vwap": .2, "open": .2, "close": .2, "date": "2026-10-09",
+                 "max_since": {"price": .3, "date": "2026-10-10"}}
+        with patch.object(s, "_get_alpha_info", return_value=("ALPHA_777", self.OLD_LISTING_MS)), \
+             patch.object(s, "fetch_listing_price", return_value=price) as get:
+            s._process_one(first, 1, 2)
+            s._process_one(again, 2, 2)
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_args_list[0].kwargs["event_start_ms"],
+                         ms("2025-08-27T12:00:00Z"))
+        self.assertEqual(get.call_args_list[1].kwargs["event_start_ms"], self.EVENT_MS)
+
+    def test_failed_reprice_preserves_prior_record(self):
+        old = {"date": "2025-08-27", "vwap": .14,
+               "max_since": {"price": .3, "date": "2025-09-01"}}
+        event = {"id": "ae:38e6ce86b887e7b2002ba255", "symbol": "BTR",
+                 "event_time": self.EVENT_TIME, "contract_address": "0xabc",
+                 "listing_price": dict(old), "_vwap_daybound_recompute": True}
+        with patch.object(s, "_process_one", return_value=(event, None)):
+            self.assertEqual(s.enrich_events([event]), 0)
+        self.assertEqual(event["listing_price"], old)
+        self.assertNotIn("_vwap_daybound_recompute", event)
+
+
 if __name__ == "__main__":
     unittest.main()
