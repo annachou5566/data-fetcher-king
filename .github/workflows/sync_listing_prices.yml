@@ -46,6 +46,17 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
 
+    - name: Qualify isolated R2 CAS and restore
+      id: history24h_cas
+      if: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover }}
+      env:
+        R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      working-directory: scripts
+      run: python qualify_history24h_r2_cas.py
+
     - name: Backfill listing prices
       env:
         MAX_CONCURRENT: '6'
@@ -67,7 +78,7 @@ jobs:
         WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED: '0'
-        WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED: ${{ steps.history24h_cas.outputs.rollback_verified || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST || '[]' }}
