@@ -55,6 +55,12 @@ MANUAL_CONFIRMED_DEAD = {"MIRROR", "CYPR", "RDAC"}
 # tiếp. Xoá khỏi danh sách này sau khi đã xác nhận giá mới đúng.
 MANUAL_RESET_PRICES = {"SLX"}
 
+# Exactly these two dated Alpha Box events need migration; never reset by ticker.
+EVENT_ANCHOR_REPRICE_IDS = {
+    "ae:38e6ce86b887e7b2002ba255": "2026-10-09T09:00:00.000Z",  # BTR
+    "ae:7a19c82531ad7937fc8b9d6e": "2026-10-09T09:00:00.000Z",  # CLO
+}
+
 # [SỬA] fetch_listing_price chạy đa luồng (ThreadPoolExecutor) — lý do fail
 # phải lưu theo TỪNG THREAD riêng (threading.local), KHÔNG được gắn lên
 # function object dùng chung, nếu không các luồng sẽ ghi đè lẫn nhau và
@@ -371,15 +377,28 @@ claim" — có thể sai lệch nếu ngày đó có biến động mạnh muộ
 LINEA/SLX từng gặp, dù nguyên nhân khác nhưng cùng bản chất: khung thời
 gian tính toán không khớp với khái niệm muốn đo).
 
-max_since (đỉnh giá) KHÔNG bị ảnh hưởng bởi thay đổi này — vẫn quét từ
-đúng lúc listing tới HIỆN TẠI như cũ, vì "đỉnh" đúng nghĩa là so sánh với
-toàn bộ lịch sử kể từ đó, không giới hạn 10 phút.
+max_since (đỉnh giá) quét từ lúc SỰ KIỆN đang xét tới hiện tại, không
+quét từ lần listing đầu của cùng token (nhiều đợt airdrop độc lập).
 
 Đổi số phút ở đây nếu muốn (5-10 phút là hợp lý theo yêu cầu thực tế).
 """
 
 
-def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alpha_listing_time_ms=None):
+def _event_start_ms(event):
+    """Parse the actual UTC event instant; never substitute Binance's old listing date."""
+    raw = str(event.get("event_time") or event.get("date") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, OverflowError):
+        return None
+
+
+def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alpha_listing_time_ms=None, event_start_ms=None):
     """
     Trả về {vwap, open, close, date, max_since} của ngày event (listing
     hoặc airdrop), hoặc None nếu không tìm được dữ liệu nào / token chưa
@@ -395,7 +414,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                   để tham khảo / fallback khi vwap không tính được (vd
                   volume = 0 suốt cả khung).
     max_since: {price, date} — [SỬA] giá ĐÓNG CỬA (close) cao nhất trong
-               số tất cả các ngày kể từ lúc listing đến HIỆN TẠI — KHÔNG
+               số tất cả các ngày kể từ sự kiện hiện tại đến HIỆN TẠI — KHÔNG
                dùng "high" (giá cao nhất trong ngày) nữa, vì "high" chỉ
                cần 1 lệnh chớp nhoáng chạm mức đó là được ghi nhận (kiểu
                "râu nến" do market maker bơm/xả, thanh khoản gần như bằng
@@ -420,7 +439,8 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
     listing thật để giao dịch. Khoảng cách 2 mốc này thay đổi tuỳ token
     (đã xác minh thực tế: SENT cách 3 ngày, PIEVERSE cách 16 ngày, BTW
     cách ~70 ngày) — không có cửa sổ dò cố định nào đủ tin cậy. Nếu có
-    mốc này, dùng THẲNG làm ngày mục tiêu, khỏi cần dò mò.
+    mốc này, chỉ dùng khi SAU mốc event (token chưa giao dịch tại event).
+    Nếu listingTime CŨ hơn event, luôn bắt đầu từ thời gian event UTC.
     """
     official_attempted = False
     official_note = "không có alphaId (symbol không có trong 637 token đối chiếu, hoặc chưa graduate/chưa từng lên Alpha)"
@@ -428,13 +448,12 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
     if alpha_id:
         official_attempted = True
         try:
-            if alpha_listing_time_ms:
-                # Có mốc listingTime thật — dùng thẳng, chính xác tuyệt đối
-                target_ms = int(alpha_listing_time_ms)
-                target_date_str_real = datetime.utcfromtimestamp(target_ms / 1000).strftime('%Y-%m-%d')
-            else:
-                target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
-                target_date_str_real = target_date_str
+            event_ms = event_start_ms if event_start_ms is not None else int(
+                datetime.strptime(target_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000
+            )
+            # ListingTime is a later trade-open hint, never an earlier claim anchor.
+            target_ms = max(event_ms, int(alpha_listing_time_ms or 0))
+            target_date_str_real = datetime.utcfromtimestamp(target_ms / 1000).strftime("%Y-%m-%d")
             day_start, day_end = target_ms, target_ms + 86400000 - 1
 
             # [SỬA] Dùng nến 1 PHÚT thay vì 1 giờ để tính VWAP — nến 1h gộp
@@ -470,52 +489,48 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                 if k_daily_probe:
                     first_ms = int(float(k_daily_probe[0][0]))
                     actual_target_date_str = datetime.utcfromtimestamp(first_ms / 1000).strftime('%Y-%m-%d')
-                    day_start2, day_end2 = first_ms, first_ms + 86400000 - 1
+                    day_start2 = max(first_ms, target_ms)
+                    day_end2 = day_start2 + 86400000 - 1
                     k_intraday = fetch_alpha_trade_klines_official(alpha_id, "1m", start_ms=day_start2, end_ms=day_end2, limit=1440)
                     day_start, day_end = day_start2, day_end2  # [SỬA] thiếu cập nhật day_end trước đây
 
             if k_intraday:
-                # [MỚI] Tìm PHÚT ĐẦU TIÊN thật sự có giao dịch (volume>0)
-                # trong ngày — không giả định listingTime/day_start chính
-                # xác tới từng phút (có thể trễ vài phút do độ trễ hệ
-                # thống matching engine). Từ đó lấy đúng CLAIM_WINDOW_MINUTES
-                # phút kế tiếp để tính "giá lúc claim".
-                first_trade_ms = None
-                for k in k_intraday:
-                    try:
-                        if fa.safe_float(k[5]) > 0:  # volume > 0
-                            first_trade_ms = int(k[0])
-                            break
-                    except Exception:
-                        continue
+                # Protect against out-of-order and pre-event candles from providers.
+                k_intraday = sorted(
+                    (k for k in k_intraday if day_start <= int(k[0]) <= day_end),
+                    key=lambda k: int(k[0]),
+                )
+            if k_intraday:
+                first_trade_ms = next(
+                    (int(k[0]) for k in k_intraday if fa.safe_float(k[5]) > 0), None
+                )
                 if first_trade_ms is None:
-                    first_trade_ms = day_start  # không có nến nào có volume — dùng mốc gốc, vwap sẽ ra None ở bước sau
-
+                    _fail_reason_local.value = "No real traded volume after the event"
+                    return None
                 claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
                 claim_candles = [k for k in k_intraday if first_trade_ms <= int(k[0]) <= claim_end_ms]
-
-                open_price  = fa.safe_float(claim_candles[0][1]) if claim_candles else fa.safe_float(k_intraday[0][1])
-                close_price = fa.safe_float(claim_candles[-1][4]) if claim_candles else fa.safe_float(k_intraday[-1][4])
-                vwap = _compute_vwap(k_intraday, start_ms=first_trade_ms, end_ms=claim_end_ms)
-                ref_price = vwap if vwap is not None else close_price
-
-                # Nến ngày để tính max_since — kể từ ĐÚNG LÚC LISTING (không
-                # phải chỉ CLAIM_WINDOW_MINUTES) tới hiện tại, KHÔNG đổi.
-                k_daily = fetch_alpha_trade_klines_official(alpha_id, "1d", start_ms=day_start, limit=1500)
+                open_price = fa.safe_float(claim_candles[0][1])
+                close_price = fa.safe_float(claim_candles[-1][4])
+                ref_price = _compute_vwap(k_intraday, start_ms=first_trade_ms, end_ms=claim_end_ms)
+                if ref_price is None or ref_price <= 0:
+                    _fail_reason_local.value = "Post-event VWAP unavailable"
+                    return None
+                # Daily close at the event day's end is after an intraday event.
+                daily_start = (day_start // 86400000) * 86400000
+                k_daily = fetch_alpha_trade_klines_official(alpha_id, "1d", start_ms=daily_start, limit=1500)
                 max_since = _max_price_since(k_daily, actual_target_date_str, ref_price=ref_price) if k_daily else None
-
                 _fail_reason_local.value = None
                 return {
                     "vwap": ref_price,
                     "open": open_price,
                     "close": close_price,
                     "date": actual_target_date_str,
+                    "event_start_ms": event_ms,
                     "max_since": max_since,
                 }
-            if alpha_listing_time_ms:
-                official_note = f"API chính thức KHÔNG có nến 1 phút nào cho alphaId={alpha_id} tại đúng listingTime thật ({target_date_str_real}) — token có thể chưa từng thật sự khớp lệnh dù đã lên lịch listing"
-            else:
-                official_note = f"API chính thức KHÔNG có nến 1 phút nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng, không có listingTime thật để dùng)"
+            official_note = (f"API Alpha không trả nến 1 phút hợp lệ sau event cho "
+                             f"alphaId={alpha_id} từ {target_date_str_real}; "
+                             f"không suy diễn giá từ listingTime cũ")
         except Exception as ex:
             official_note = f"API chính thức lỗi: {ex}"
             if DEBUG: print(f"[debug] {official_note}", end=" ")
@@ -542,10 +557,12 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
     # request actually covers the event date instead of silently returning
     # only recent candles.
     try:
-        target_ms = int(datetime.strptime(target_date_str, "%Y-%m-%d").timestamp() * 1000)
+        target_ms = event_start_ms if event_start_ms is not None else int(
+            datetime.strptime(target_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000
+        )
     except (ValueError, TypeError):
         target_ms = None
-    target_day_end_ms = target_ms + 86400000 - 1 if target_ms is not None else None
+    target_day_end_ms = ((target_ms // 86400000 + 1) * 86400000 - 1) if target_ms is not None else None
 
     for cid in chain_variants:
         clean_addr = addr if cid in NO_LOWER_CHAINS else addr.lower()
@@ -603,24 +620,36 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             k_hourly = (res_hourly or {}).get("data", {}).get("klineInfos") if res_hourly else None
             if k_hourly:
                 first_trade_ms = None
-                for k in k_hourly:
-                    try:
-                        ot = int(k[0])
-                        if day_start_ms <= ot <= day_end_ms and fa.safe_float(k[5]) > 0:
-                            first_trade_ms = ot
-                            break
-                    except Exception:
-                        continue
-                if first_trade_ms is None:
-                    first_trade_ms = day_start_ms
-                claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
+                lower_bound = max(day_start_ms, event_start_ms or day_start_ms)
+                valid_trades = sorted(
+                    (k for k in k_hourly
+                     if lower_bound <= int(k[0]) <= day_end_ms and fa.safe_float(k[5]) > 0),
+                    key=lambda k: int(k[0]),
+                )
+                if valid_trades:
+                    first_trade_ms = int(valid_trades[0][0])
+                    claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
+                    claim_candles = sorted(
+                        (k for k in k_hourly if first_trade_ms <= int(k[0]) <= claim_end_ms),
+                        key=lambda k: int(k[0]),
+                    )
+                    if claim_candles:
+                        open_price = fa.safe_float(claim_candles[0][1])
+                        close_price = fa.safe_float(claim_candles[-1][4])
+                else:
+                    first_trade_ms = None
+                    claim_end_ms = None
                 # [SỬA] Dùng khoảng ms tường minh thay vì so chuỗi ngày —
                 # nhất quán với fix ở fetch_alpha_trade_klines_official,
                 # tránh lặp lại cùng loại lỗi nếu ngày không canh nửa đêm.
-                vwap = _compute_vwap(k_hourly, start_ms=first_trade_ms, end_ms=claim_end_ms)
+                if first_trade_ms is not None:
+                    vwap = _compute_vwap(k_hourly, start_ms=first_trade_ms, end_ms=claim_end_ms)
         except Exception:
             pass
 
+        if event_start_ms is not None and (vwap is None or vwap <= 0):
+            fail_reason = "No verifiable post-event 5m trade; refusing daily-close fallback"
+            continue
         ref_price = vwap if vwap is not None else close_price
 
         # The event-day query above is intentionally endTime-anchored. Fetch
@@ -642,6 +671,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             "open":  open_price,
             "close": close_price,
             "date":  actual_date,
+            "event_start_ms": event_start_ms if event_start_ms is not None else target_ms,
             "max_since": _max_price_since(k_max, actual_date, ref_price=ref_price),
         }
 
@@ -970,37 +1000,24 @@ def _get_alpha_info(symbol, contract_address=None):
     return st["alphaId"], st.get("listingTime")
 
 
-def _process_one(e, idx, total, is_first_occurrence=True):
-    """
-    Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None).
-
-    is_first_occurrence: [MỚI] token có thể có NHIỀU event cùng symbol
-    (nhiều đợt airdrop/claim khác nhau — "P1", "P2",...). listingTime lấy
-    từ Binance CHỈ có 1 giá trị DUY NHẤT cho mỗi symbol (mốc list Alpha
-    LẦN ĐẦU) — nếu áp dụng y hệt giá trị đó cho MỌI event cùng symbol, các
-    đợt airdrop SAU (P2, P3...) sẽ bị tính giá SAI ngày (dùng nhầm ngày
-    list lần đầu, có thể cách xa hàng tuần/tháng so với ngày claim thật
-    của đợt đó) — kéo theo "đỉnh giá" bị tính từ SAI mốc thời gian, ra số
-    vô nghĩa (đã xác minh thực tế qua ACU/WMTX round 2: đỉnh hiển thị hoá
-    ra là ATH từ lần list ĐẦU TIÊN, không phải từ ngày airdrop lần 2).
-
-    Chỉ event XƯA NHẤT của mỗi symbol mới được tin dùng listingTime chung
-    này (vì nó khớp với lần list đầu); các event SAU dùng đúng ngày riêng
-    của chính nó (date_str) — để fetch_listing_price tự dò/tính theo ngày
-    đó, không bị ghi đè bởi listingTime của lần list đầu.
-    """
+def _process_one(e, idx, total):
+    """One event per task; every round uses its own exact event UTC timestamp."""
     contract = e.get("contract_address")
     chain_id = e.get("chain_id")
     date_str = (e.get("event_time") or e.get("date") or "")[:10]
     symbol = e.get("symbol") or e.get("token") or "?"
 
+    event_ms = _event_start_ms(e)
+    if event_ms is None:
+        print(f"  [event-time] {symbol}: invalid/missing event timestamp; price unavailable", flush=True)
+        return e, None
     _alpha_id, _listing_ms = _get_alpha_info(symbol, contract_address=contract)
-    if not is_first_occurrence:
-        _listing_ms = None  # không tin listingTime chung cho đợt airdrop SAU lần đầu
     if _is_talus_us_oct2026_event(e):
         _alpha_id = "ALPHA_494"
-        _listing_ms = None  # Claim is Oct 2026, not the initial Dec 2025 Alpha listing
-    result = fetch_listing_price(chain_id, contract, date_str, alpha_id=_alpha_id, alpha_listing_time_ms=_listing_ms)
+    result = fetch_listing_price(
+        chain_id, contract, date_str, alpha_id=_alpha_id,
+        alpha_listing_time_ms=_listing_ms, event_start_ms=event_ms,
+    )
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
     if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
@@ -1104,9 +1121,7 @@ def invalidate_wrong_tge_dates(events):
             sym = e.get("symbol") or e.get("token") or "?"
             print(f"  [invalidate-tge] {sym}: TGE có listing_price.date={lp['date']} nhưng ngày gốc={own_date} "
                   f"— xoá để tính lại đúng ngày TGE thật")
-            e["listing_price"] = None
-            e["ath_since_listing_price"] = None
-            e["ath_since_listing_date"] = None
+            e["_vwap_daybound_recompute"] = True
             invalidated += 1
     return invalidated
 
@@ -1134,9 +1149,8 @@ def invalidate_multi_round_listing_prices(events):
         if id(e) in first_ids:
             continue  # lần đầu — không thuộc diện lỗi này
         if e.get("listing_price"):
-            e["listing_price"] = None
-            e["ath_since_listing_price"] = None
-            e["ath_since_listing_date"] = None
+            # A failed provider fetch must not erase the old value before replacement.
+            e["_vwap_daybound_recompute"] = True
             invalidated += 1
     return invalidated
 
@@ -1203,6 +1217,21 @@ def backfill_missing_event_time(events):
     return fixed
 
 
+def mark_event_anchor_reprices(events):
+    """Mark the two affected campaign rows once; retry safely if Binance is down."""
+    count = 0
+    for e in events:
+        expected = EVENT_ANCHOR_REPRICE_IDS.get(e.get("id"))
+        if not expected or e.get("event_time") != expected:
+            continue
+        previous = e.get("listing_price")
+        ms = _event_start_ms(e)
+        if previous and ms is not None and previous.get("event_start_ms") != ms:
+            e["_vwap_daybound_recompute"] = True
+            count += 1
+    return count
+
+
 def enrich_events(events):
     """
     Mutates events in-place, returns count of newly-filled entries.
@@ -1236,18 +1265,21 @@ def enrich_events(events):
     if not todo:
         return 0
 
-    first_ids = _first_occurrence_ids(events)
-
     print(f"  Xử lý {total} token, chạy song song tối đa {MAX_CONCURRENT} luồng...")
 
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
         futures = {
-            pool.submit(_process_one, e, i + 1, total, id(e) in first_ids): e
+            pool.submit(_process_one, e, i + 1, total): e
             for i, e in enumerate(todo)
         }
         for fut in as_completed(futures):
             e, result = fut.result()
             had_last_good = bool(e.get("listing_price"))
+            if (result and e.get("id") in EVENT_ANCHOR_REPRICE_IDS
+                    and had_last_good
+                    and not (result.get("max_since") or {}).get("price")):
+                print(f"  [preserve-last-good] {e.get('symbol')}: new event peak unavailable")
+                result = None
             if result:
                 e["listing_price"] = result
                 # [MỚI] Đưa ATH (max_since) ra field top-level cho dễ dùng
@@ -1747,8 +1779,11 @@ def main():
     if reset_count:
         print(f"   [reset] Đã xoá giá cũ của {reset_count} event trong MANUAL_RESET_PRICES — sẽ tính lại ngay bên dưới")
 
+    event_reprice_count = mark_event_anchor_reprices(all_events)
+    if event_reprice_count:
+        print(f"   [event-anchor] {event_reprice_count} BTR/CLO event row(s) selected for safe recalculation")
     filled = enrich_events(all_events)
-    print(f"\n✅ Backfilled {filled} new listing prices")
+    print(f"\n✅ Backfilled {filled} event Claim/Peak prices")
 
     filled_spot = enrich_spot_listing_prices(all_events)
     print(f"✅ Backfilled {filled_spot} giá lúc spot-listing (ngày lấy trực tiếp từ klines Binance)")
