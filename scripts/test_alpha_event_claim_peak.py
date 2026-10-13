@@ -71,7 +71,7 @@ class EventPriceAnchorTests(unittest.TestCase):
 
     def test_no_postevent_volume_never_uses_pre_event_trade(self):
         with patch.object(s, "fetch_alpha_trade_klines_official",
-                          return_value=[candle(self.EVENT_MS - 60000, 7.0)]), \\
+                          return_value=[candle(self.EVENT_MS - 60000, 7.0)]), \
              patch.object(s, "API_AGG_KLINES", None):
             p = s.fetch_listing_price(None, "0xabc", "2026-10-09", alpha_id="ALPHA_777",
                                       alpha_listing_time_ms=self.OLD_LISTING_MS,
