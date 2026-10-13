@@ -377,9 +377,8 @@ claim" — có thể sai lệch nếu ngày đó có biến động mạnh muộ
 LINEA/SLX từng gặp, dù nguyên nhân khác nhưng cùng bản chất: khung thời
 gian tính toán không khớp với khái niệm muốn đo).
 
-max_since (đỉnh giá) KHÔNG bị ảnh hưởng bởi thay đổi này — vẫn quét từ
-đúng lúc listing tới HIỆN TẠI như cũ, vì "đỉnh" đúng nghĩa là so sánh với
-toàn bộ lịch sử kể từ đó, không giới hạn 10 phút.
+max_since (đỉnh giá) quét từ lúc SỰ KIỆN đang xét tới hiện tại, không
+quét từ lần listing đầu của cùng token (nhiều đợt airdrop độc lập).
 
 Đổi số phút ở đây nếu muốn (5-10 phút là hợp lý theo yêu cầu thực tế).
 """
@@ -415,7 +414,7 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                   để tham khảo / fallback khi vwap không tính được (vd
                   volume = 0 suốt cả khung).
     max_since: {price, date} — [SỬA] giá ĐÓNG CỬA (close) cao nhất trong
-               số tất cả các ngày kể từ lúc listing đến HIỆN TẠI — KHÔNG
+               số tất cả các ngày kể từ sự kiện hiện tại đến HIỆN TẠI — KHÔNG
                dùng "high" (giá cao nhất trong ngày) nữa, vì "high" chỉ
                cần 1 lệnh chớp nhoáng chạm mức đó là được ghi nhận (kiểu
                "râu nến" do market maker bơm/xả, thanh khoản gần như bằng
@@ -440,7 +439,8 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
     listing thật để giao dịch. Khoảng cách 2 mốc này thay đổi tuỳ token
     (đã xác minh thực tế: SENT cách 3 ngày, PIEVERSE cách 16 ngày, BTW
     cách ~70 ngày) — không có cửa sổ dò cố định nào đủ tin cậy. Nếu có
-    mốc này, dùng THẲNG làm ngày mục tiêu, khỏi cần dò mò.
+    mốc này, chỉ dùng khi SAU mốc event (token chưa giao dịch tại event).
+    Nếu listingTime CŨ hơn event, luôn bắt đầu từ thời gian event UTC.
     """
     official_attempted = False
     official_note = "không có alphaId (symbol không có trong 637 token đối chiếu, hoặc chưa graduate/chưa từng lên Alpha)"
@@ -528,10 +528,9 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                     "event_start_ms": event_ms,
                     "max_since": max_since,
                 }
-            if alpha_listing_time_ms:
-                official_note = f"API chính thức KHÔNG có nến 1 phút nào cho alphaId={alpha_id} tại đúng listingTime thật ({target_date_str_real}) — token có thể chưa từng thật sự khớp lệnh dù đã lên lịch listing"
-            else:
-                official_note = f"API chính thức KHÔNG có nến 1 phút nào cho alphaId={alpha_id} trong ngày {target_date_str} lẫn 14 ngày sau đó (đã thử, trả rỗng, không có listingTime thật để dùng)"
+            official_note = (f"API Alpha không trả nến 1 phút hợp lệ sau event cho "
+                             f"alphaId={alpha_id} từ {target_date_str_real}; "
+                             f"không suy diễn giá từ listingTime cũ")
         except Exception as ex:
             official_note = f"API chính thức lỗi: {ex}"
             if DEBUG: print(f"[debug] {official_note}", end=" ")
@@ -1001,13 +1000,8 @@ def _get_alpha_info(symbol, contract_address=None):
     return st["alphaId"], st.get("listingTime")
 
 
-def _process_one(e, idx, total, is_first_occurrence=True):
-    """
-    Worker cho 1 token — chạy trong thread pool. Trả về (event, result|None).
-
-    is_first_occurrence: legacy compatibility only. Every reward round uses its
-    own event UTC instant; Binance listingTime is never allowed to rewind it.
-    """
+def _process_one(e, idx, total):
+    """One event per task; every round uses its own exact event UTC timestamp."""
     contract = e.get("contract_address")
     chain_id = e.get("chain_id")
     date_str = (e.get("event_time") or e.get("date") or "")[:10]
@@ -1274,18 +1268,21 @@ def enrich_events(events):
     if not todo:
         return 0
 
-    first_ids = _first_occurrence_ids(events)
-
     print(f"  Xử lý {total} token, chạy song song tối đa {MAX_CONCURRENT} luồng...")
 
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
         futures = {
-            pool.submit(_process_one, e, i + 1, total, id(e) in first_ids): e
+            pool.submit(_process_one, e, i + 1, total): e
             for i, e in enumerate(todo)
         }
         for fut in as_completed(futures):
             e, result = fut.result()
             had_last_good = bool(e.get("listing_price"))
+            if (result and e.get("id") in EVENT_ANCHOR_REPRICE_IDS
+                    and had_last_good
+                    and not (result.get("max_since") or {}).get("price")):
+                print(f"  [preserve-last-good] {e.get('symbol')}: new event peak unavailable")
+                result = None
             if result:
                 e["listing_price"] = result
                 # [MỚI] Đưa ATH (max_since) ra field top-level cho dễ dùng
