@@ -126,5 +126,39 @@ class EventPriceAnchorTests(unittest.TestCase):
         self.assertNotIn("_vwap_daybound_recompute", event)
 
 
+    def test_graduated_token_spot_fallback_uses_event_minutes_not_first_listing(self):
+        old = self.OLD_LISTING_MS
+        event = self.EVENT_MS
+        def spot(symbol, interval, start_ms=None, limit=1000, retries=2):
+            self.assertEqual(symbol, "BTR")
+            if interval == "1m":
+                self.assertEqual(start_ms, event)
+                return [
+                    candle(old, 8),
+                    candle(event - 60000, 5),
+                    candle(event + 60000, .10),
+                    candle(event + 120000, .12),
+                ]
+            self.assertEqual(interval, "1d")
+            self.assertEqual(start_ms, ms("2026-10-09T00:00:00Z"))
+            return [
+                candle(old, 8),
+                candle(ms("2026-10-09T00:00:00Z"), .18),
+                candle(ms("2026-10-10T00:00:00Z"), .25),
+            ]
+        with patch.object(s, "_binance_public_klines", side_effect=spot):
+            p = s.fetch_event_price_public_spot("BTR", event)
+        self.assertEqual(p["event_start_ms"], event)
+        self.assertEqual(p["date"], "2026-10-09")
+        self.assertAlmostEqual(p["vwap"], .11)
+        self.assertEqual(p["max_since"], {"price": .25, "date": "2026-10-10"})
+        self.assertEqual(p["source"], "public_spot_event")
+
+    def test_spot_fallback_cannot_use_only_pre_event_trades(self):
+        with patch.object(s, "_binance_public_klines",
+                          return_value=[candle(self.EVENT_MS - 60000, 9)]):
+            self.assertIsNone(s.fetch_event_price_public_spot("BTR", self.EVENT_MS))
+
+
 if __name__ == "__main__":
     unittest.main()
