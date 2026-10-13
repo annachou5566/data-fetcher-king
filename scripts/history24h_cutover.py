@@ -343,10 +343,19 @@ def recover_stale_pending(plan_value, pending_rows, exact_manifest,
         if row.get('firstLiveAt') is not None:
             _hold('LEGACY_CANNOT_OVERWRITE_REAL_FIRSTLIVE')
         if cid in idx_history:
+            if cid not in idx_all:
+                _hold('LEGACY_HISTORY_WITHOUT_ALL')
             archived = new_history[idx_history[cid]]
             _compatible(archived, row)
             if archived.get('status') != 'ended':
                 _hold('LEGACY_HISTORY_NOT_TERMINAL')
+            # The exact source-snapshot proof is now durable IN THE EXISTING
+            # History/All pair, so subsequent Oracle replays cannot resurrect
+            # this unstamped legacy identity after physical Pending retires.
+            for row_out in (new_all[idx_all[cid]], new_history[idx_history[cid]]):
+                if row_out.get('legacy_active_24h_verified') not in (None, True):
+                    _hold('LEGACY_TERMINAL_MARKER_CONFLICT')
+                row_out['legacy_active_24h_verified'] = True
             matched.add(cid)
             continue
         merged = copy.deepcopy(row)
@@ -356,7 +365,8 @@ def recover_stale_pending(plan_value, pending_rows, exact_manifest,
         original_id = row.get('id')
         if original_id and original_id != cid:
             merged['legacy_active_id'] = original_id
-        merged.update(id=cid, symbol=symbol, status='ended', lifecycle_state='history')
+        merged.update(id=cid, symbol=symbol, status='ended', lifecycle_state='history',
+                      legacy_active_24h_verified=True)
         merged.pop('firstLiveAt', None)
         if cid in idx_all:
             new_all[idx_all[cid]] = copy.deepcopy(merged)
@@ -375,3 +385,95 @@ def recover_stale_pending(plan_value, pending_rows, exact_manifest,
     return {**plan_value, 'all': new_all, 'history': new_history,
             'legacy_promoted': sorted(matched), 'retire_live': False,
             'retire_pending': False, 'retire_public_active': False}
+
+
+def plan_qualified_pending24h(plan_value, pending_rows, now):
+    return _plan_qualified_active24h(plan_value, pending_rows, now, allow_dual_clock=False)
+
+
+def plan_qualified_active24h(plan_value, active_rows, now):
+    """All three Active buckets share firstActiveAt; Live may also have firstLiveAt."""
+    return _plan_qualified_active24h(plan_value, active_rows, now, allow_dual_clock=True)
+
+
+def _plan_qualified_active24h(plan_value, pending_rows, now, *, allow_dual_clock):
+    """SOURCE-ONLY prospective pending Active 24h History candidate.
+
+    Caller MUST first independently establish that each ``firstActiveAt`` was
+    minted by the authenticated, single R2 Active publisher and durably
+    persisted with an immutable clock + exact R2 version/ETag. This function
+    cannot establish publisher custody, cannot write R2, and NEVER authorizes
+    physical Active retirement. A separate pair CAS/readback and publisher
+    fence are mandatory. Legacy unstamped rows use recover_stale_pending.
+    """
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
+        _hold('PENDING24H_NOW_NOT_UTC')
+    if (not isinstance(plan_value, dict) or
+        plan_value.get('retire_live') is not False or
+        plan_value.get('independent_writer') is not False):
+        _hold('PENDING24H_UNQUALIFIED_PLAN')
+    pending = _rows(pending_rows, 'PENDING24H')
+    all_out = copy.deepcopy(_rows(plan_value['all'], 'PENDING24H_ALL'))
+    hist_out = copy.deepcopy(_rows(plan_value['history'], 'PENDING24H_HISTORY'))
+    all_ids, hist_ids = _indexes(all_out, 'PENDING24H_ALL'), _indexes(hist_out, 'PENDING24H_HISTORY')
+    seen = set()
+    promoted = []
+
+    for row in pending:
+        clock = row.get('firstActiveAt')
+        if clock is None:
+            continue  # Never forge first inclusion for old pending snapshots.
+        cid = row.get('id')
+        if not isinstance(cid, str) or not CANONICAL.fullmatch(cid):
+            _hold('PENDING24H_CANONICAL_ID_REQUIRED')
+        if cid in seen:
+            _hold('PENDING24H_DUPLICATE_ID')
+        seen.add(cid)
+        if row.get('firstLiveAt') is not None:
+            if not allow_dual_clock:
+                _hold('PENDING24H_DUAL_CLOCK_UNQUALIFIED')
+            live_clock = _stamp(row['firstLiveAt'])
+            if live_clock < _stamp(clock) or live_clock > now:
+                _hold('ACTIVE24H_LIVE_CLOCK_CONFLICT')
+        first = _stamp(clock)
+        if now < first:
+            _hold('PENDING24H_CLOCK_IN_FUTURE')
+        eligible = now >= first + timedelta(milliseconds=LIVE_MS)
+        old_all = all_out[all_ids[cid]] if cid in all_ids else None
+        old_hist = hist_out[hist_ids[cid]] if cid in hist_ids else None
+        for old in (old_all, old_hist):
+            if old is None:
+                continue
+            _compatible(old, row)
+            for field in ('event_time', 'chain_id', 'project_name', 'firstActiveAt'):
+                a, b = old.get(field), row.get(field)
+                if a is not None and (b is None or a != b):
+                    _hold('PENDING24H_IMMUTABLE_IDENTITY_CONFLICT')
+        if old_hist is not None and (old_hist.get('status') != 'ended' or not eligible):
+            _hold('PENDING24H_EARLY_OR_NONTERMINAL_HISTORY')
+        if not eligible:
+            continue
+        merged = copy.deepcopy(row)
+        if old_all is not None:
+            merged = _overlay_without_erasing(merged, old_all)
+        if old_hist is not None:
+            merged = _overlay_without_erasing(merged, old_hist)
+        merged.update(id=cid, firstActiveAt=clock, status='ended', lifecycle_state='history')
+        if cid in all_ids:
+            all_out[all_ids[cid]] = copy.deepcopy(merged)
+        else:
+            all_ids[cid] = len(all_out)
+            all_out.append(copy.deepcopy(merged))
+        if cid in hist_ids:
+            hist_out[hist_ids[cid]] = copy.deepcopy(merged)
+        else:
+            hist_ids[cid] = len(hist_out)
+            hist_out.append(copy.deepcopy(merged))
+        promoted.append(cid)
+
+    _rows(all_out, 'PENDING24H_ALL_OUT')
+    _rows(hist_out, 'PENDING24H_HISTORY_OUT')
+    return {**plan_value, 'all': all_out, 'history': hist_out,
+            'pending24h_promoted': sorted(promoted),
+            'retire_live': False, 'retire_pending': False,
+            'retire_public_active': False}

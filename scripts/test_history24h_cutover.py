@@ -254,6 +254,8 @@ class LegacyPendingRecovery(unittest.TestCase):
         self.assertTrue(all(x['status']=='ended' for x in p['history'][445:]))
         self.assertTrue(all('firstLiveAt' not in x for x in p['history'][445:]))
         self.assertFalse(p['retire_pending']);self.assertFalse(p['retire_public_active'])
+        self.assertTrue(all(x['legacy_active_24h_verified'] is True for x in p['history'][445:]))
+        self.assertTrue(all(x['legacy_active_24h_verified'] is True for x in p['all'][445:]))
     def test_replay_is_idempotent(self):
         p=self.run_plan();r=self.run_plan(plan_value=plan(p['all'],p['history'],[],self.now))
         self.assertEqual(p['history'],r['history']);self.assertEqual(p['all'],r['all'])

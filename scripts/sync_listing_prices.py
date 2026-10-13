@@ -1614,6 +1614,11 @@ def main():
     # separately approved +24h single-owner cutover has completed all gates.
     history24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED", "0") == "1"
     legacy_pending_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED", "0") == "1"
+    pending24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED", "0") == "1"
+    if pending24h_enabled and not history24h_enabled:
+        raise RuntimeError("WA_AE_HISTORY24H_HOLD_PENDING_REQUIRES_WRITER_GATE")
+    if pending24h_enabled and legacy_pending_enabled:
+        raise RuntimeError("WA_AE_HISTORY24H_HOLD_LEGACY_AND_PROSPECTIVE_MUTUALLY_EXCLUSIVE")
     if legacy_pending_enabled and not history24h_enabled:
         raise RuntimeError("WA_AE_HISTORY24H_HOLD_LEGACY_REQUIRES_WRITER_GATE")
     if history24h_enabled:
@@ -1635,12 +1640,19 @@ def main():
             guarded = required[:-1]
         if any(os.getenv(name) != "1" for name in guarded):
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_RUNTIME_GATES_INCOMPLETE")
+        if pending24h_enabled and any(os.getenv(name) != "1" for name in (
+            "WA_ALPHA_EVENTS_HISTORY24H_FIRSTACTIVE_PROOF_QUALIFIED",
+            "WA_ALPHA_EVENTS_HISTORY24H_ACTIVE_PUBLISHER_CAS_QUALIFIED",
+            "WA_ALPHA_EVENTS_HISTORY24H_ORACLE_REPLAY_QUALIFIED",
+        )):
+            raise RuntimeError("WA_AE_HISTORY24H_HOLD_PENDING_PROOF_GATES_INCOMPLETE")
         from history24h_cutover import (
             snapshot as history24h_snapshot,
             reconcile_price_enrichment as history24h_reconcile,
             plan as history24h_plan,
             publish_pair as history24h_publish_pair,
             recover_stale_pending as history24h_recover_pending,
+            plan_qualified_active24h as history24h_plan_active,
         )
 
     r2 = get_r2()
@@ -1751,7 +1763,21 @@ def main():
         safe_all, safe_history = history24h_reconcile(
             before_price_enrichment, all_events, previous_history)
         now24h = datetime.now(timezone.utc)
-        proposed = history24h_plan(safe_all, safe_history, physical_live, now24h)
+        proposed = history24h_plan(
+            safe_all, safe_history,
+            [] if pending24h_enabled else physical_live, now24h)
+        pending24h_etag = None
+        if pending24h_enabled:
+            pending24h_rows, pending24h_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/pending.json")
+            upcoming24h_rows, upcoming24h_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/upcoming.json")
+            # One identity can live in exactly one physical Active bucket.
+            ids = [r.get("id") for r in (physical_live + upcoming24h_rows + pending24h_rows) if r.get("id")]
+            if len(set(ids)) != len(ids):
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_DUAL_ACTIVE_MEMBERSHIP")
+            proposed = history24h_plan_active(
+                proposed, physical_live + upcoming24h_rows + pending24h_rows, now24h)
         if legacy_pending_enabled:
             # A single approved legacy recovery on the existing History owner.
             # Never guess firstLiveAt; old-published snapshot age is proof.
@@ -1782,10 +1808,26 @@ def main():
             r2, R2_BUCKET_NAME, "alpha-events/live.json")
         if current_live_etag != live24h_etag:
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_LIVE_GENERATION_MOVED")
+        if pending24h_enabled:
+            _, current_pending24h_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/pending.json")
+            _, current_upcoming24h_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/upcoming.json")
+            if (pending24h_etag != current_pending24h_etag or
+                    upcoming24h_etag != current_upcoming24h_etag):
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_ACTIVE_GENERATION_MOVED")
         ack = history24h_publish_pair(
             r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
         if ack.get("pair_verified") is not True:
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_PAIR_NOT_VERIFIED")
+        if pending24h_enabled:
+            _, after_pending24h_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/pending.json")
+            _, after_upcoming24h_etag = history24h_snapshot(
+                r2, R2_BUCKET_NAME, "alpha-events/upcoming.json")
+            if (pending24h_etag != after_pending24h_etag or
+                    upcoming24h_etag != after_upcoming24h_etag):
+                raise RuntimeError("WA_AE_HISTORY24H_HOLD_ACTIVE_MOVED_DURING_PAIR")
         if legacy_pending_enabled:
             _, after_pending = history24h_snapshot(
                 r2, R2_BUCKET_NAME, "alpha-events/pending.json")
