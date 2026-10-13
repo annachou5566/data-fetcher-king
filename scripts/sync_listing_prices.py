@@ -1121,9 +1121,7 @@ def invalidate_wrong_tge_dates(events):
             sym = e.get("symbol") or e.get("token") or "?"
             print(f"  [invalidate-tge] {sym}: TGE có listing_price.date={lp['date']} nhưng ngày gốc={own_date} "
                   f"— xoá để tính lại đúng ngày TGE thật")
-            e["listing_price"] = None
-            e["ath_since_listing_price"] = None
-            e["ath_since_listing_date"] = None
+            e["_vwap_daybound_recompute"] = True
             invalidated += 1
     return invalidated
 
@@ -1151,9 +1149,8 @@ def invalidate_multi_round_listing_prices(events):
         if id(e) in first_ids:
             continue  # lần đầu — không thuộc diện lỗi này
         if e.get("listing_price"):
-            e["listing_price"] = None
-            e["ath_since_listing_price"] = None
-            e["ath_since_listing_date"] = None
+            # A failed provider fetch must not erase the old value before replacement.
+            e["_vwap_daybound_recompute"] = True
             invalidated += 1
     return invalidated
 
