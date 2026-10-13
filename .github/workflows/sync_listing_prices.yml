@@ -1,4 +1,4 @@
-name: Sync Alpha Listing Prices
+name: Sync Alpha Event Claim & Peak Prices
 
 on:
   schedule:
@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  sync-listing-prices:
+  sync-alpha-event-prices:
     # OFF by default. During a separately approved History24h cutover,
     # pause scheduled price writes without disabling manual workflow_dispatch.
     # Preserve the original concurrency group; no extra scheduler.
@@ -57,7 +57,7 @@ jobs:
       working-directory: scripts
       run: python qualify_history24h_r2_cas.py
 
-    - name: Backfill listing prices
+    - name: Calculate event Claim & Peak prices
       env:
         MAX_CONCURRENT: '6'
         BINANCE_INTERNAL_KLINES_API: ${{ secrets.BINANCE_INTERNAL_KLINES_API }}
