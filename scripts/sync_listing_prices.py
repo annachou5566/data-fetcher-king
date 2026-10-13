@@ -920,6 +920,54 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
 
 
 
+def fetch_event_price_public_spot(symbol, event_start_ms):
+    """Fallback only: price an individual Alpha reward from post-event SPOT candles.
+
+    Binance Vision 1m bars provide an independent event-time fallback after
+    Alpha graduation. Never reuse the original spot-listing day/24h VWAP.
+    Missing candles/volume/peak => unavailable rather than a fabricated price.
+    """
+    if event_start_ms is None:
+        return None
+    try:
+        intraday = _binance_public_klines(symbol, "1m", start_ms=event_start_ms, limit=30)
+        if not intraday:
+            return None
+        intraday = sorted(
+            (k for k in intraday if int(k[0]) >= event_start_ms),
+            key=lambda k: int(k[0]),
+        )
+        first_trade_ms = next(
+            (int(k[0]) for k in intraday if fa.safe_float(k[5]) > 0), None
+        )
+        if first_trade_ms is None:
+            return None
+        claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
+        claim = [k for k in intraday if first_trade_ms <= int(k[0]) <= claim_end_ms]
+        vwap = _compute_vwap(claim, start_ms=first_trade_ms, end_ms=claim_end_ms)
+        if vwap is None or vwap <= 0 or not claim:
+            return None
+        day_start = (first_trade_ms // 86400000) * 86400000
+        event_date = datetime.utcfromtimestamp(first_trade_ms / 1000).strftime("%Y-%m-%d")
+        daily = _binance_public_klines(symbol, "1d", start_ms=day_start, limit=1000)
+        peak = _max_price_since(daily, event_date, ref_price=vwap) if daily else None
+        if not peak or not peak.get("price"):
+            return None
+        return {
+            "vwap": vwap,
+            "open": fa.safe_float(claim[0][1]),
+            "close": fa.safe_float(claim[-1][4]),
+            "date": event_date,
+            "event_start_ms": event_start_ms,
+            "max_since": peak,
+            "source": "public_spot_event",
+        }
+    except Exception as ex:
+        if DEBUG:
+            print(f"[debug] event spot fallback unavailable for {symbol}: {ex}", end=" ")
+        return None
+
+
 def fetch_spot_listing_date(symbol, since_date_str=None):
     """
     Lấy NGÀY THẬT token bắt đầu có lệnh khớp trên Binance spot — không đoán,
@@ -1021,22 +1069,9 @@ def _process_one(e, idx, total):
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
     if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
-        # [SỬA] Token đã graduate khỏi Alpha — trước đây dùng NHẦM date_str
-        # (ngày list Alpha) để tra giá spot, trong khi cặp SYMBOLUSDT
-        # thường chỉ bắt đầu có nến THẬT SỰ nhiều tuần/tháng SAU đó → luôn
-        # "rỗng" dù symbol đúng và có cặp thật (đã xác minh HEMI, SAPIEN,
-        # HOLO đều đang giao dịch spot thật trên Binance). Giờ tìm NGÀY
-        # SPOT-LISTING THẬT trước (từ chính klines Binance), rồi mới lấy
-        # giá đúng ngày đó.
-        # listing_price_unavailable=True nghĩa là đã đối chiếu API Alpha
-        # và xác nhận token CHẾT HẲN (fullyDelisted, chưa từng lên CEX) —
-        # bỏ qua nhánh này vì chắc chắn Binance spot sẽ không có gì, tránh
-        # tốn request/thời gian dò ngày spot-listing vô ích.
-        spot_date = fetch_spot_listing_date(symbol, since_date_str=date_str)
-        if spot_date:
-            result = fetch_listing_price_public_spot(symbol, spot_date)
-            if result:
-                e["spot_listed_at"] = spot_date
+        # Claim/Peak on repeat rewards must never come from original spot-listing.
+        # Preserve the separate spot_listing_price pipeline as-is.
+        result = fetch_event_price_public_spot(symbol, event_ms)
 
     tag = f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})" if result else "no data"
     print(f"  [{idx}/{total}] {symbol} ({date_str})... {tag}", flush=True)
