@@ -12,7 +12,7 @@ from pathlib import Path
 
 MAX_FILE = 2_000_000
 CANON = re.compile(r"^ae:[0-9a-f]{24}$")
-ISO = re.compile(r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$")
+ISO = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$")
 
 
 def load(directory, name):
