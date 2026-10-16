@@ -1722,9 +1722,15 @@ def main():
         )
         # Legacy PREDICTED rows have NO firstLiveAt. Their independent
         # verified old-R2-snapshot clock replaces (does not forge) Live proof.
-        if legacy_pending_enabled:
-            guarded = tuple(x for x in required
+        if legacy_pending_enabled or pending24h_enabled:
+            # Prospective Active24h derives its immutable clock from the
+            # existing authenticated Pages publisher (firstActiveAt), not
+            # from a Live-only firstLiveAt. Legacy recovery has separate
+            # exact manifest/age provenance. Never fake Live proof here.
+            guarded = tuple(x for x in required[:-1]
                             if x != "WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED")
+            if legacy_pending_enabled:
+                guarded += ("WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED",)
         else:
             guarded = required[:-1]
         if any(os.getenv(name) != "1" for name in guarded):
