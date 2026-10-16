@@ -1,0 +1,41 @@
+name: One-shot Alpha24h repository gate read-only
+on:
+  push:
+    branches:
+      - fix/alpha-events-prospective24h-20261016
+    paths:
+      - .github/workflows/qa_alpha24h_gate_state_readonly.yml
+permissions:
+  contents: read
+jobs:
+  read-repository-flags:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Print Boolean only without exposing variable values
+        env:
+          G1: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED }}
+          G2: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED }}
+          G3: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED }}
+          G4: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED }}
+          G5: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED }}
+          G6: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_FIRSTACTIVE_PROOF_QUALIFIED }}
+          G7: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_ACTIVE_PUBLISHER_CAS_QUALIFIED }}
+          G8: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_ORACLE_REPLAY_QUALIFIED }}
+          G9: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED }}
+          G10: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_SCHEDULE_FENCED }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'WA_AE24_GATES_BEGIN\n'
+          if [[ "${G1:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED=OFF\n'; fi
+          if [[ "${G2:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED=OFF\n'; fi
+          if [[ "${G3:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED=OFF\n'; fi
+          if [[ "${G4:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED=OFF\n'; fi
+          if [[ "${G5:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED=OFF\n'; fi
+          if [[ "${G6:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_FIRSTACTIVE_PROOF_QUALIFIED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_FIRSTACTIVE_PROOF_QUALIFIED=OFF\n'; fi
+          if [[ "${G7:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_ACTIVE_PUBLISHER_CAS_QUALIFIED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_ACTIVE_PUBLISHER_CAS_QUALIFIED=OFF\n'; fi
+          if [[ "${G8:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_ORACLE_REPLAY_QUALIFIED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_ORACLE_REPLAY_QUALIFIED=OFF\n'; fi
+          if [[ "${G9:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED=OFF\n'; fi
+          if [[ "${G10:-}" == 1 ]]; then printf 'WA_ALPHA_EVENTS_HISTORY24H_SCHEDULE_FENCED=ON\n'; else printf 'WA_ALPHA_EVENTS_HISTORY24H_SCHEDULE_FENCED=OFF\n'; fi
+          printf 'WA_AE24_GATES_END\n'
