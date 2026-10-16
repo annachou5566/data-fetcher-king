@@ -1,0 +1,22 @@
+name: One-shot Alpha24h Activation Guard QA
+on:
+  push:
+    branches:
+      - fix/alpha-events-prospective24h-20261016
+    paths:
+      - .github/workflows/qa_alpha24h_activation_guard.yml
+permissions:
+  contents: read
+jobs:
+  offline-synthetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate helper syntax and synthetic offline guards
+        run: |
+          python3 -m py_compile scripts/activate_alpha_events_prospective24h.py
+          python3 -m unittest discover -s scripts -p 'test_activate_alpha_events_prospective24h.py' -v
