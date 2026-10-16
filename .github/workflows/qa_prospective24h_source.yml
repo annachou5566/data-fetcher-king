@@ -1,0 +1,22 @@
+name: Temporary Alpha Events Prospective24h Source QA
+on:
+  push:
+    branches:
+      - fix/alpha-events-prospective24h-20261016
+    paths:
+      - .github/workflows/qa_prospective24h_source.yml
+permissions:
+  contents: read
+jobs:
+  source-only-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: python -m py_compile scripts/history24h_cutover.py scripts/sync_listing_prices.py scripts/test_history24h_prospective_schedule.py
+      - name: Existing History24h plus new prospective regression
+        run: python -m unittest discover -s scripts -p 'test_*24h*.py' -v
