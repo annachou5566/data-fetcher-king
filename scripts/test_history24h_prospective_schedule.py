@@ -50,7 +50,7 @@ class ProspectiveScheduledHistoryGate(unittest.TestCase):
         self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_ORACLE_REPLAY_QUALIFIED:", WORKFLOW)
 
     def test_first_active_mode_does_not_forge_live_proof(self):
-        self.assertIn("if legacy_pending_enabled or pending24h_enabled:", PRICE_SOURCE)
+        self.assertIn("if legacy_pending_enabled or pending24h_enabled or official1h_enabled:", PRICE_SOURCE)
         self.assertIn('if x != "WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED"', PRICE_SOURCE)
         self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_FIRSTACTIVE_PROOF_QUALIFIED", PRICE_SOURCE)
         self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE_PUBLISHER_CAS_QUALIFIED", PRICE_SOURCE)
