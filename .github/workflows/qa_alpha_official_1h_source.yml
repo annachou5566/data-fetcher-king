@@ -1,4 +1,4 @@
-# Branch-scoped public synthetic-only verification; no secrets.
+# Branch-scoped public synthetic-only verification; no secrets, no R2 calls.
 name: One-shot Alpha official 1h source QA
 on:
   push:
