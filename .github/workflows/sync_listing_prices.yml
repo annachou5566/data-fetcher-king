@@ -10,6 +10,11 @@ on:
         type: boolean
         required: false
         default: false
+      official1h_transition:
+        description: 'Existing writer: one approved authenticated Binance official receipt handoff'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: sync-listing-prices
@@ -71,16 +76,23 @@ jobs:
         # unless independently approved repository variable is exactly 1.
         # The manual legacy migration remains a separate explicit path.
         # Never infer event_time as firstActiveAt or create another writer.
-        WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED: ${{ ((github.event_name == 'schedule' && vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED == '1') || (github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover)) && '1' || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED: ${{ ((github.event_name == 'schedule' && (vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED == '1' || vars.WA_ALPHA_EVENTS_OFFICIAL1H_APPROVED == '1')) || (github.event_name == 'workflow_dispatch' && (inputs.legacy_history24h_cutover || (inputs.official1h_transition && vars.WA_ALPHA_EVENTS_OFFICIAL1H_APPROVED == '1')))) && '1' || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover && '1' || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED: ${{ github.event_name == 'schedule' && vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED == '1' && '1' || '0' }}
+        # Separate new business policy; opt-in default OFF. Event-driven dispatch
+        # is allowed only when the independently qualified new mode is ON.
+        WA_ALPHA_EVENTS_OFFICIAL1H_ENABLED: ${{ ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.official1h_transition)) && vars.WA_ALPHA_EVENTS_OFFICIAL1H_APPROVED == '1') && '1' || '0' }}
+        WA_ALPHA_EVENTS_OFFICIAL1H_SOURCE_MATCH_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_OFFICIAL1H_SOURCE_MATCH_QUALIFIED || '0' }}
+        WA_ALPHA_EVENTS_OFFICIAL1H_SIGNED_PUBLISHER_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_OFFICIAL1H_SIGNED_PUBLISHER_QUALIFIED || '0' }}
+        WA_ALPHA_EVENTS_OFFICIAL1H_R2_HISTORY_PAIR_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_OFFICIAL1H_R2_HISTORY_PAIR_QUALIFIED || '0' }}
+        WA_ALPHA_EVENTS_OFFICIAL1H_FREE_HEADROOM_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_OFFICIAL1H_FREE_HEADROOM_QUALIFIED || '0' }}
         # All proof gates come from separately approved repository variables,
         # never from untrusted request input; Python fail-closes if any is OFF.
         WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_OWNER_APPROVED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_SINGLE_WRITER_FENCED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_MANUAL_SEED_FENCED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_FIRSTLIVE_PROOF_QUALIFIED: '0'
-        WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED: ${{ (github.event_name == 'schedule' && vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED == '1' && vars.WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED == '1' && '1') || steps.history24h_cas.outputs.rollback_verified || '0' }}
+        WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED: ${{ (((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.official1h_transition)) && (vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED == '1' || vars.WA_ALPHA_EVENTS_OFFICIAL1H_APPROVED == '1')) && vars.WA_ALPHA_EVENTS_HISTORY24H_ROLLBACK_VERIFIED == '1' && '1') || steps.history24h_cas.outputs.rollback_verified || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_FREE_HEADROOM_QUALIFIED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_OWNER_FENCED || '0' }}
         WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST: ${{ vars.WA_ALPHA_EVENTS_HISTORY24H_LEGACY_EXACT_MANIFEST || '[]' }}
