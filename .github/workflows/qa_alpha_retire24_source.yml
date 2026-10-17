@@ -1,0 +1,23 @@
+name: One-shot retired firstActive24h source QA
+on:
+  push:
+    branches:
+      - fix/alpha-events-retire-old-firstactive-24h-20261017
+    paths:
+      - .github/workflows/qa_alpha_retire24_source.yml
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Existing 81 plus official 10 regressions, no credentials
+        run: |
+          python3 -m py_compile scripts/alpha_events_official_onehour.py scripts/sync_listing_prices.py scripts/test_alpha_events_official_onehour.py
+          python3 -m unittest discover -s scripts -p 'test_alpha_events_official_onehour.py' -v
+          python3 -m unittest discover -s scripts -p 'test_*24h*.py' -v
