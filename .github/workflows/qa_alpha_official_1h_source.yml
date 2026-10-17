@@ -1,0 +1,22 @@
+name: One-shot Alpha official 1h source QA
+on:
+  push:
+    branches:
+      - fix/alpha-events-official-confirmation-1h-20261017
+    paths:
+      - .github/workflows/qa_alpha_official_1h_source.yml
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax and bounded no-credential regressions
+        run: |
+          python3 -m py_compile scripts/alpha_events_official_onehour.py scripts/test_alpha_events_official_onehour.py
+          python3 -m unittest discover -s scripts -p 'test_alpha_events_official_onehour.py' -v
