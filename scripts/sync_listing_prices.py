@@ -1704,6 +1704,11 @@ def main():
     history24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_CUTOVER_ENABLED", "0") == "1"
     legacy_pending_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED", "0") == "1"
     pending24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED", "0") == "1"
+    official1h_enabled = os.getenv("WA_ALPHA_EVENTS_OFFICIAL1H_ENABLED", "0") == "1"
+    if official1h_enabled and (pending24h_enabled or legacy_pending_enabled):
+        raise RuntimeError("WA_AE_OFFICIAL1H_HOLD_MUTUALLY_EXCLUSIVE_HISTORY_MODES")
+    if official1h_enabled and not history24h_enabled:
+        raise RuntimeError("WA_AE_OFFICIAL1H_HOLD_REQUIRES_EXISTING_HISTORY_WRITER")
     if pending24h_enabled and not history24h_enabled:
         raise RuntimeError("WA_AE_HISTORY24H_HOLD_PENDING_REQUIRES_WRITER_GATE")
     if pending24h_enabled and legacy_pending_enabled:
@@ -1722,7 +1727,7 @@ def main():
         )
         # Legacy PREDICTED rows have NO firstLiveAt. Their independent
         # verified old-R2-snapshot clock replaces (does not forge) Live proof.
-        if legacy_pending_enabled or pending24h_enabled:
+        if legacy_pending_enabled or pending24h_enabled or official1h_enabled:
             # Prospective Active24h derives its immutable clock from the
             # existing authenticated Pages publisher (firstActiveAt), not
             # from a Live-only firstLiveAt. Legacy recovery has separate
@@ -1741,6 +1746,13 @@ def main():
             "WA_ALPHA_EVENTS_HISTORY24H_ORACLE_REPLAY_QUALIFIED",
         )):
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_PENDING_PROOF_GATES_INCOMPLETE")
+        if official1h_enabled and any(os.getenv(name) != "1" for name in (
+            "WA_ALPHA_EVENTS_OFFICIAL1H_SOURCE_MATCH_QUALIFIED",
+            "WA_ALPHA_EVENTS_OFFICIAL1H_SIGNED_PUBLISHER_QUALIFIED",
+            "WA_ALPHA_EVENTS_OFFICIAL1H_R2_HISTORY_PAIR_QUALIFIED",
+            "WA_ALPHA_EVENTS_OFFICIAL1H_FREE_HEADROOM_QUALIFIED",
+        )):
+            raise RuntimeError("WA_AE_OFFICIAL1H_HOLD_PROOF_GATES_INCOMPLETE")
         from history24h_cutover import (
             snapshot as history24h_snapshot,
             reconcile_price_enrichment as history24h_reconcile,
@@ -1749,6 +1761,10 @@ def main():
             recover_stale_pending as history24h_recover_pending,
             plan_qualified_active24h as history24h_plan_active,
         )
+        if official1h_enabled:
+            from alpha_events_official_onehour import (
+                plan_qualified_official_onehour as history_plan_official_onehour,
+            )
 
     r2 = get_r2()
     print("⏳ Loading alpha-events/all.json from R2...")
@@ -1863,9 +1879,9 @@ def main():
         now24h = datetime.now(timezone.utc)
         proposed = history24h_plan(
             safe_all, safe_history,
-            [] if pending24h_enabled else physical_live, now24h)
+            [] if (pending24h_enabled or official1h_enabled) else physical_live, now24h)
         pending24h_etag = None
-        if pending24h_enabled:
+        if pending24h_enabled or official1h_enabled:
             pending24h_rows, pending24h_etag = history24h_snapshot(
                 r2, R2_BUCKET_NAME, "alpha-events/pending.json")
             upcoming24h_rows, upcoming24h_etag = history24h_snapshot(
@@ -1874,8 +1890,12 @@ def main():
             ids = [r.get("id") for r in (physical_live + upcoming24h_rows + pending24h_rows) if r.get("id")]
             if len(set(ids)) != len(ids):
                 raise RuntimeError("WA_AE_HISTORY24H_HOLD_DUAL_ACTIVE_MEMBERSHIP")
-            proposed = history24h_plan_active(
-                proposed, physical_live + upcoming24h_rows + pending24h_rows, now24h)
+            if official1h_enabled:
+                proposed = history_plan_official_onehour(
+                    proposed, physical_live + upcoming24h_rows + pending24h_rows, now24h)
+            else:
+                proposed = history24h_plan_active(
+                    proposed, physical_live + upcoming24h_rows + pending24h_rows, now24h)
         if legacy_pending_enabled:
             # A single approved legacy recovery on the existing History owner.
             # Never guess firstLiveAt; old-published snapshot age is proof.
@@ -1906,7 +1926,7 @@ def main():
             r2, R2_BUCKET_NAME, "alpha-events/live.json")
         if current_live_etag != live24h_etag:
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_LIVE_GENERATION_MOVED")
-        if pending24h_enabled:
+        if pending24h_enabled or official1h_enabled:
             _, current_pending24h_etag = history24h_snapshot(
                 r2, R2_BUCKET_NAME, "alpha-events/pending.json")
             _, current_upcoming24h_etag = history24h_snapshot(
@@ -1918,7 +1938,7 @@ def main():
             r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
         if ack.get("pair_verified") is not True:
             raise RuntimeError("WA_AE_HISTORY24H_HOLD_PAIR_NOT_VERIFIED")
-        if pending24h_enabled:
+        if pending24h_enabled or official1h_enabled:
             _, after_pending24h_etag = history24h_snapshot(
                 r2, R2_BUCKET_NAME, "alpha-events/pending.json")
             _, after_upcoming24h_etag = history24h_snapshot(
