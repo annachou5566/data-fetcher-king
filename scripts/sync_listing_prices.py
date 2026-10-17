@@ -1019,6 +1019,76 @@ def _is_talus_us_oct2026_event(e):
 
 _ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId", "contractAddress", "chainId"}} — set trong main()
 
+# Contract-bound, offline-verifiable chain identities from the already fetched
+# Binance Alpha token list. This existing writer ONLY updates All + History.
+_ALPHA_CHAIN_BY_EXACT_TOKEN = {}
+
+
+def _alpha_contract_key(address):
+    raw = str(address or "").strip()
+    if re.fullmatch(r"0x[0-9a-fA-F]{40}", raw):
+        return "evm:" + raw.lower()
+    if len(raw) >= 10 and not any(ch.isspace() for ch in raw):
+        return "non_evm:" + raw
+    return None
+
+
+def _alpha_chain_id(value):
+    raw = str(value or "").strip()
+    if raw in ("CT_501", "CT_784"):
+        return raw
+    if re.fullmatch(r"[1-9][0-9]{0,9}", raw):
+        return str(int(raw))
+    return None
+
+
+def _verified_alpha_chain_index(tokens):
+    # Many symbols can be reused. Only a unique exact symbol+contract chain
+    # qualifies; conflicting chain IDs for the same identity stay unresolved.
+    resolved, conflict = {}, set()
+    for token in tokens:
+        if not isinstance(token, dict):
+            continue
+        symbol = str(token.get("symbol") or "").strip().upper()
+        contract = _alpha_contract_key(token.get("contractAddress"))
+        chain = _alpha_chain_id(token.get("chainId"))
+        if not symbol or not contract or not chain:
+            continue
+        identity = (symbol, contract)
+        if identity in resolved and resolved[identity] != chain:
+            conflict.add(identity)
+        else:
+            resolved[identity] = chain
+    for identity in conflict:
+        resolved.pop(identity, None)
+    return resolved
+
+
+def restore_missing_event_chains(events, verified_index):
+    """Only fill absent chain_id from exact Binance identity, never guess.
+
+    Preserve old records (and their prices) on incomplete, conflicting or
+    cross-contract information. Zero extra provider calls / no Active writes.
+    """
+    count = 0
+    for event in events:
+        if not isinstance(event, dict) or event.get("chain_id") not in (None, ""):
+            continue
+        symbol = str(event.get("symbol") or event.get("token") or "").strip().upper()
+        contract = _alpha_contract_key(event.get("contract_address"))
+        if not symbol or not contract:
+            continue
+        chain = verified_index.get((symbol, contract))
+        if not chain:
+            continue
+        camel = event.get("chainId")
+        if camel not in (None, "") and _alpha_chain_id(camel) != chain:
+            continue
+        event["chain_id"] = chain
+        count += 1
+    return count
+
+
 
 def _get_alpha_info(symbol, contract_address=None):
     """
@@ -1497,6 +1567,8 @@ ALPHA_TOKEN_LIST_URL = "https://www.binance.com/bapi/defi/v1/public/wallet-direc
 
 
 def fetch_alpha_token_status_map():
+    global _ALPHA_CHAIN_BY_EXACT_TOKEN
+    _ALPHA_CHAIN_BY_EXACT_TOKEN = {}
     """
     Đối chiếu với danh sách token Alpha THẬT từ chính Binance — để phân
     biệt rạch ròi 2 trường hợp "no data" hoàn toàn khác nhau, mà log text
@@ -1524,6 +1596,9 @@ def fetch_alpha_token_status_map():
             return {}
         payload = res.json()
         data = payload.get("data") or []
+        if not isinstance(data, list):
+            return {}
+        _ALPHA_CHAIN_BY_EXACT_TOKEN = _verified_alpha_chain_index(data)
         out = {}
         for t in data:
             sym = (t.get("symbol") or "").upper()
@@ -1789,6 +1864,9 @@ def main():
     status_map = fetch_alpha_token_status_map()
     global _ALPHA_STATUS_MAP
     _ALPHA_STATUS_MAP = status_map
+    restored = restore_missing_event_chains(all_events, _ALPHA_CHAIN_BY_EXACT_TOKEN)
+    if restored:
+        print(f"  [chain-verified] {restored} missing chain_id recovered by exact Binance symbol+contract+unique chain (All/History only)")
     print("⏳ Đối chiếu danh sách hợp đồng Futures (USDT-M) từ Binance...")
     futures_symbols = fetch_futures_symbols(r2)
     marked_spot, marked_dead = apply_alpha_status(all_events, status_map, futures_symbols)
