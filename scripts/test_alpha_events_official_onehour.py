@@ -126,7 +126,8 @@ class OfficialOneHour(unittest.TestCase):
             make_run(row=row, prior_all=[LEGACY, old], prior_history=[LEGACY])
 
 
-\n\nclass SingleWriterWiring(unittest.TestCase):
+
+class SingleWriterWiring(unittest.TestCase):
     def test_official_mode_always_requires_separate_gate(self):
         from pathlib import Path
         p = Path(__file__).parent
