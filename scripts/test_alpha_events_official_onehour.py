@@ -122,6 +122,32 @@ class OfficialOneHour(unittest.TestCase):
                 [ID],
             )
 
+    def test_typed_tge_exact_action_only(self):
+        proof = copy.deepcopy(PROOF)
+        proof["binding"]["eventType"] = "TGE"
+        proof["verifiedSubject"]["confirmedAction"] = "TGE"
+        self.assertEqual(
+            make_run(row={**BASE, "officialConfirmation": proof})["official_promoted"],
+            [ID],
+        )
+        for event_type, action in [
+            ("TGE", "AIRDROP"), ("PRE_TGE", "TGE"),
+            ("AIRDROP", "TGE"), ("ALPHA_EVENT", "UNKNOWN")
+        ]:
+            invalid = copy.deepcopy(proof)
+            invalid["binding"]["eventType"] = event_type
+            invalid["verifiedSubject"]["confirmedAction"] = action
+            with self.assertRaises(OfficialConfirmationHold):
+                make_run(row={**BASE, "officialConfirmation": invalid})
+
+    def test_source_text_candidate_never_is_signed_terminal_evidence(self):
+        invalid = copy.deepcopy(PROOF)
+        invalid["binding"]["normalizedLifecycle"] = {
+            "noticeStage": "SOURCE_TEXT_CANDIDATE", "actionCandidate": "AIRDROP"
+        }
+        with self.assertRaises(OfficialConfirmationHold):
+            make_run(row={**BASE, "officialConfirmation": invalid})
+
     def test_history_pair_replay_is_stable(self):
         row = {**BASE, "officialConfirmation": copy.deepcopy(PROOF)}
         first = make_run(row=row)

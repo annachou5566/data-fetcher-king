@@ -79,9 +79,14 @@ def qualify_confirmation(row, now):
             or sub.get("preAnnouncement") is not False
             or action not in QUALIFIED_ACTIONS):
         hold("CONFIRMED_SUBJECT")
-    if (b.get("eventType") not in ("AIRDROP", "ALPHA_EVENT")
-            or (b.get("eventType") == "AIRDROP" and action != "AIRDROP")):
+    if (b.get("eventType") not in ("AIRDROP", "TGE", "ALPHA_EVENT")
+            or (b.get("eventType") == "AIRDROP" and action != "AIRDROP")
+            or (b.get("eventType") == "TGE" and action != "TGE")):
         hold("ACTION_CONFLICT")
+    # The producer's text-only extraction is NOT an Oracle-verified proof.
+    if isinstance(b.get("normalizedLifecycle"), dict) and (
+            b["normalizedLifecycle"].get("noticeStage") == "SOURCE_TEXT_CANDIDATE"):
+        hold("UNVERIFIED_SOURCE_CANDIDATE")
     published = _stamp(b.get("sourcePublishedAt"))
     observed = _stamp(b.get("observedAt"))
     if published > observed or observed > now:
