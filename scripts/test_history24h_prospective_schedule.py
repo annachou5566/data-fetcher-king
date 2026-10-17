@@ -40,10 +40,9 @@ def scheduled_plan(now, active=None, old_all=None, old_history=None):
 
 class ProspectiveScheduledHistoryGate(unittest.TestCase):
     def test_workflow_schedule_requires_explicit_opt_in(self):
-        self.assertIn(
-            "github.event_name == 'schedule' && vars.WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED == '1'",
-            WORKFLOW,
-        )
+        self.assertNotIn("WA_ALPHA_EVENTS_HISTORY24H_PROSPECTIVE_SCHEDULE_APPROVED", WORKFLOW)
+        self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED: '0'", WORKFLOW)
+        self.assertIn("vars.WA_ALPHA_EVENTS_OFFICIAL1H_APPROVED == '1'", WORKFLOW)
         self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED:", WORKFLOW)
         self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_FIRSTACTIVE_PROOF_QUALIFIED:", WORKFLOW)
         self.assertIn("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE_PUBLISHER_CAS_QUALIFIED:", WORKFLOW)
