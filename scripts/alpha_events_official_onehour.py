@@ -66,6 +66,12 @@ def qualify_confirmation(row, now):
             and b.get("relevant") is True and b.get("relevanceReason") == "MATCH"):
         hold("OFFICIAL_SOURCE")
     action = sub.get("confirmedAction")
+    # Alpha Competition notifications are a separate product and NEVER
+    # evidence for the Alpha Events History lifecycle. Only the authenticated
+    # Oracle content classifier may assert these explicit family proofs.
+    if (sub.get("productFamily") != "ALPHA_EVENTS"
+            or sub.get("competitionExcluded") is not True):
+        hold("COMPETITION_OR_UNQUALIFIED_PRODUCT_FAMILY")
     if (sub.get("canonicalId") != cid or sub.get("symbol") != symbol
             or sub.get("sourceIdentity") != b.get("sourceIdentity")
             or sub.get("sourceDigest") != b.get("sourceDigest")

@@ -29,6 +29,7 @@ PROOF = {
         "observedAt": "2026-10-17T01:00:04.000Z",
     },
     "verifiedSubject": {
+        "productFamily": "ALPHA_EVENTS", "competitionExcluded": True,
         "canonicalId": ID, "symbol": "ABC",
         "sourceIdentity": SOURCE, "sourceDigest": DIGEST,
         "confirmedAction": "AIRDROP", "noticeStage": "CONFIRMED",
@@ -88,6 +89,18 @@ class OfficialOneHour(unittest.TestCase):
             proof = copy.deepcopy(PROOF)
             proof["verifiedSubject"][field] = val
             with self.assertRaises(OfficialConfirmationHold, msg=field):
+                make_run(row={**BASE, "officialConfirmation": proof})
+
+    def test_competition_is_never_alpha_events_history(self):
+        for key, value in [
+            ("productFamily", "ALPHA_COMPETITION"),
+            ("productFamily", None),
+            ("competitionExcluded", False),
+            ("competitionExcluded", None),
+        ]:
+            proof = copy.deepcopy(PROOF)
+            proof["verifiedSubject"][key] = value
+            with self.assertRaises(OfficialConfirmationHold, msg=key):
                 make_run(row={**BASE, "officialConfirmation": proof})
 
     def test_bad_message_identity_and_clock_fail(self):
