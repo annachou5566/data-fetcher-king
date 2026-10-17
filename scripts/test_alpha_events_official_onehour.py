@@ -126,5 +126,21 @@ class OfficialOneHour(unittest.TestCase):
             make_run(row=row, prior_all=[LEGACY, old], prior_history=[LEGACY])
 
 
+\n\nclass SingleWriterWiring(unittest.TestCase):
+    def test_official_mode_always_requires_separate_gate(self):
+        from pathlib import Path
+        p = Path(__file__).parent
+        source = (p / "sync_listing_prices.py").read_text(encoding="utf-8")
+        workflow = (p.parent / ".github/workflows/sync_listing_prices.yml").read_text(encoding="utf-8")
+        self.assertIn('os.getenv("WA_ALPHA_EVENTS_OFFICIAL1H_ENABLED", "0") == "1"', source)
+        self.assertIn('if official1h_enabled and not history24h_enabled:', source)
+        self.assertIn("WA_AE_OFFICIAL1H_HOLD_MUTUALLY_EXCLUSIVE_HISTORY_MODES", source)
+        self.assertIn("WA_AE_OFFICIAL1H_HOLD_PROOF_GATES_INCOMPLETE", source)
+        self.assertIn("proposed = history_plan_official_onehour(", source)
+        self.assertIn("WA_ALPHA_EVENTS_OFFICIAL1H_APPROVED == '1'", workflow)
+        self.assertIn("WA_ALPHA_EVENTS_OFFICIAL1H_SIGNED_PUBLISHER_QUALIFIED", workflow)
+        self.assertEqual(workflow.count("cron:"), 1)
+        self.assertEqual(workflow.count("group: sync-listing-prices"), 1)
+
 if __name__ == "__main__":
     unittest.main()
