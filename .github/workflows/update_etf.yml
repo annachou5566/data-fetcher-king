@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   fetch-etf:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15  # tăng từ 10 → 15: RUN_MODE=full giờ render thêm ~8 trang
                          # bằng Chromium thật (VanEck+Grayscale qua Playwright),
                          # chậm hơn hẳn fetch tĩnh thường (mỗi trang ~5-10s)
@@ -83,9 +83,12 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
 
+      # GitHub hosted Ubuntu 24.04 has Chromium system libraries; --with-deps
+      # triggered apt downloads that took 7m44s on Ubuntu 26.04 before fetch began.
+      # Preserve actual browser install; don't apt install OS packages each run.
       - name: Install Playwright Chromium
         if: steps.mode.outputs.mode == 'full'
-        run: playwright install --with-deps chromium
+        run: playwright install chromium
 
       - name: Run ETF Fetcher
         env:
