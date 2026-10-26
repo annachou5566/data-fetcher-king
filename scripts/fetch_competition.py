@@ -403,10 +403,14 @@ def main():
     print(f"   Phase 1 xong: {phase1_elapsed:.1f}s\n")
 
     # Phase 2: fast loop với phần thời gian còn lại
-    # Tổng cửa sổ an toàn = 5.5 phút (cron 6 phút → còn 30s đệm)
-    TOTAL_WINDOW = 5.5 * 60
-    remaining_budget = max(30, TOTAL_WINDOW - phase1_elapsed)
-    run_fast_loop(target_tokens, r2, budget_sec=int(remaining_budget), interval_sec=10)
+    # Cron runs every 5 minutes; reserve >=60s for runner setup/teardown and
+    # avoid crossing into the next scheduled run. GitHub job limit is 6 min.
+    TOTAL_WINDOW = 4 * 60
+    remaining_budget = max(0, TOTAL_WINDOW - phase1_elapsed)
+    if remaining_budget >= 10:
+        run_fast_loop(target_tokens, r2, budget_sec=int(remaining_budget), interval_sec=10)
+    else:
+        print("Fast loop skipped: bounded Cron time budget exhausted")
 
     print(f"\n🏁 Tổng: {time.time() - job_start:.1f}s")
 
