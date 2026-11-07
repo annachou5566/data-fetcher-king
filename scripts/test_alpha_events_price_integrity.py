@@ -109,11 +109,33 @@ class PriceIntegrity(unittest.TestCase):
     def test_source_syntax_and_writer_integration(self):
         source = Path(__file__).with_name("sync_listing_prices.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn("select_price_integrity_retries(all_events)", source)
+        self.assertIn("select_price_integrity_retries(all_events, limit=8)", source)
         self.assertIn("apply_peak_only(e, result)", source)
         self.assertIn("candidate_is_event_anchored(e, result)", source)
         self.assertIn('e.pop("_price_integrity_mode", None)', source)
         self.assertIn('snooze_unavailable_price(e)', source)
+
+    def test_bounded_retry_batch_only_selects_eight(self):
+        rows = [priced(id=f"ae:{i:024x}") for i in range(16)]
+        selected = select_price_integrity_retries(rows, NOW, limit=8)
+        self.assertEqual(selected, {"anchor": 0, "peak": 8})
+        self.assertEqual(sum(x.get("_price_integrity_mode") == "peak" for x in rows), 8)
+
+    def test_peak_from_different_claim_day_does_not_change_last_good(self):
+        row = priced()
+        before = copy.deepcopy(row)
+        self.assertFalse(apply_peak_only(row, candidate(date="2026-10-20")))
+        self.assertEqual(row, before)
+
+    def test_manual_reset_is_not_destructive_and_slx_not_pinned(self):
+        source = Path(__file__).with_name("sync_listing_prices.py").read_text(encoding="utf-8")
+        module = ast.parse(source)
+        f = next(node for node in module.body if
+                 isinstance(node, ast.FunctionDef) and node.name == "invalidate_manual_reset_prices")
+        body = ast.get_source_segment(source, f)
+        self.assertNotIn('e["listing_price"] = None', body)
+        self.assertNotIn('e["spot_listing_price"] = None', body)
+        self.assertIn("MANUAL_RESET_PRICES = set()", source)
 
     def test_existing_writer_not_expanded(self):
         workflow = Path(__file__).resolve().parents[1] / ".github/workflows/sync_listing_prices.yml"
