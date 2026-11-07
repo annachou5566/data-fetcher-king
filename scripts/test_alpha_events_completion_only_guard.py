@@ -3,6 +3,7 @@ import unittest
 from alpha_events_completion_only_guard import (
     CompletionOnlyHold, enforce_no_unverified_history_admission as guard,
     keep_existing_history_without_unverified_admission as keep,
+    ensure_all_contains_existing_history,
 )
 CID='ae:'+'a'*24
 
@@ -77,5 +78,32 @@ class GuardTests(unittest.TestCase):
         old=[{'id':'old','market_cap':50000,'status':'ended'}]
         new=[{'id':'old','market_cap':0,'status':'ended'}]
         self.assertEqual(keep(old,new),(new,0))
+
+    def test_all_history_preservation_rejects_missing_archive(self):
+        with self.assertRaisesRegex(CompletionOnlyHold,'HISTORY_NOT_REPRESENTED_IN_ALL'):
+            ensure_all_contains_existing_history([{'id':'other'}],[{'id':'legacy'}])
+
+    def test_all_history_preservation_allows_price_enrichment(self):
+        history=[{'id':3,'symbol':'XYZ','listing_price':{'vwap':2}}]
+        all_rows=[{'id':3,'symbol':'XYZ','listing_price':{'vwap':4}}]
+        self.assertEqual(ensure_all_contains_existing_history(all_rows, history),1)
+
+    def test_all_history_preservation_rejects_price_erasure(self):
+        with self.assertRaisesRegex(CompletionOnlyHold,'ALL_ARCHIVED_PRICE_ERASURE'):
+            ensure_all_contains_existing_history([{'id':3,'listing_price':None}],
+                [{'id':3,'listing_price':5}])
+
+    def test_all_history_preservation_duplicate_identity_requires_exact_rows(self):
+        hist=[{'id':3,'symbol':'X','price_snapshot':1},
+              {'id':3,'symbol':'X','price_snapshot':2}]
+        self.assertEqual(ensure_all_contains_existing_history(hist,hist),2)
+        newer=[dict(hist[0],price_snapshot=9),hist[1]]
+        with self.assertRaisesRegex(CompletionOnlyHold,'AMBIGUOUS_ALL_HISTORY_PRICE_PAIR'):
+            ensure_all_contains_existing_history(newer,hist)
+
+    def test_all_history_preservation_450_legacy_rows(self):
+        old=[{'id':None if i%2 else 7,'event_time':str(i),
+              'symbol':'T','price_snapshot':{'last':i}} for i in range(450)]
+        self.assertEqual(ensure_all_contains_existing_history(old,old),450)
 
 if __name__=='__main__':unittest.main()
