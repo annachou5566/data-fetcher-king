@@ -84,6 +84,12 @@ def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows,
             promoted.append(cid)
             continue
         record=copy.deepcopy(prior_a if prior_a is not None else raw)
+        # An earlier All preimage may contain price enrichment but no Active
+        # activation clock. Carry the sole publisher's immutable clock across.
+        if prior_a is not None and prior_a.get('firstActiveAt') not in (None, raw.get('firstActiveAt')):
+            hold('ACTIVE_CLOCK_CONFLICT')
+        if raw.get('firstActiveAt') is not None:
+            record['firstActiveAt']=raw['firstActiveAt']
         record.update({'status':'expired_unverified','lifecycle_state':'history',
                        'archive_reason':'scheduled_time_elapsed_unverified',
                        'completion_verified':False})
