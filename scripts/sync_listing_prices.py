@@ -1768,6 +1768,7 @@ def apply_alpha_status(events, status_map, futures_symbols=None):
 
 
 def main():
+    from alpha_events_completion_only_guard import enforce_no_unverified_history_admission
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
     print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}  (chỉ dùng cho Alpha aggregator API — klines public đã chuyển hẳn sang Binance Vision, KHÔNG còn qua Render)")
     if DEBUG:
@@ -2012,6 +2013,9 @@ def main():
             if (pending24h_etag != current_pending24h_etag or
                     upcoming24h_etag != current_upcoming24h_etag):
                 raise RuntimeError("WA_AE_HISTORY24H_HOLD_ACTIVE_GENERATION_MOVED")
+        # New canonical events cannot be archived by 1h/24h plans or self-declared ended flags.
+        # This checks the actual candidate pair BEFORE either conditional R2 write.
+        enforce_no_unverified_history_admission(previous_history, proposed["history"])
         ack = history24h_publish_pair(
             r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
         if ack.get("pair_verified") is not True:
@@ -2034,6 +2038,10 @@ def main():
             print("  [legacy-active] History pair verified; Active pending/CDN retained")
         print("  [history24h] All + History CAS/readback verified; physical Live retained")
     else:
+        # Fail closed BEFORE updating either All or History. The usual price
+        # enrichment remains unchanged for the already-owned legacy archive.
+        previous_history = load_json(r2, "alpha-events/history.json")
+        enforce_no_unverified_history_admission(previous_history, history)
         upload_json(r2, "alpha-events/all.json",     all_events)
         upload_json(r2, "alpha-events/history.json", history)
 
