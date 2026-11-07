@@ -80,7 +80,7 @@ def candidate_is_event_anchored(row, candidate):
     return True
 
 
-def select_price_integrity_retries(rows, now=None):
+def select_price_integrity_retries(rows, now=None, limit=8):
     """Mark only already-priced rows; existing missing-Claim path is unchanged.
 
     Missing Peak and bad Claim anchor receive one attempt at most per 24h
@@ -89,8 +89,12 @@ def select_price_integrity_retries(rows, now=None):
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+    if not isinstance(limit, int) or not (1 <= limit <= 32):
+        raise ValueError("invalid bounded price-integrity batch limit")
     counts = {"anchor": 0, "peak": 0}
     for row in rows:
+        if counts["anchor"] + counts["peak"] >= limit:
+            break
         if not _event_instant(row) or not row.get("contract_address"):
             continue
         lp = row.get("listing_price")
@@ -130,6 +134,10 @@ def apply_peak_only(row, candidate):
         return False
     lp = row.get("listing_price")
     if not isinstance(lp, dict) or not _positive(lp.get("vwap")):
+        return False
+    # A newly fetched peak must refer to the SAME accepted Claim day.
+    # An unrelated new token-listing window cannot modify another campaign.
+    if _day(lp.get("date")) != _day(candidate.get("date")):
         return False
     lp = dict(lp)
     lp["max_since"] = {"price": peak["price"], "date": peak["date"]}
