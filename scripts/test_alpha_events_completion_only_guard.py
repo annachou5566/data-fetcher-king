@@ -106,4 +106,19 @@ class GuardTests(unittest.TestCase):
               'symbol':'T','price_snapshot':{'last':i}} for i in range(450)]
         self.assertEqual(ensure_all_contains_existing_history(old,old),450)
 
+    def test_price_enrichment_internal_flags_do_not_change_identity(self):
+        old=[{'id':42,'event_time':'2026-11-07','price_snapshot':{'last':2},
+              'listing_price_unavailable':False,'_vwap_daybound_checked':False}]
+        new=[dict(old[0],listing_price_unavailable=True,
+                  _vwap_daybound_checked=True,_multiround_checked=True)]
+        self.assertEqual(keep(old,new),(new,0))
+        self.assertEqual(ensure_all_contains_existing_history(new,old),1)
+
+    def test_event_identity_is_immutable_during_price_enrichment(self):
+        old=[{'id':42,'event_time':'2026-11-07'}]
+        bad=[{'id':42,'event_time':'2026-11-08'}]
+        self.assertEqual(keep(old,bad),(old,1))
+        with self.assertRaisesRegex(CompletionOnlyHold,'HISTORY_NOT_REPRESENTED_IN_ALL'):
+            ensure_all_contains_existing_history(bad,old)
+
 if __name__=='__main__':unittest.main()
