@@ -108,4 +108,25 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaisesRegex(LiteTerminalHold,'ACTION_OR_PARSER_NOT_APPROVED'):
             plan_verified_terminal_pair(**f)
 
+    def test_catalog_receipt_link_allows_notice_without_internal_id(self):
+        f=make()
+        original_parser=f['parse_original']
+        def parser(raw,version):
+            d=original_parser(raw,version);d.pop('canonicalId',None);return d
+        f['parse_original']=parser
+        f['catalog_event']['evidence_refs']=[{'immutableRecordId':'alpha-forecast-receipt:148',
+          'subjectDigest':'b'*64}]
+        self.assertEqual(len(plan_verified_terminal_pair(**f)['history']),451)
+        f['catalog_event']['evidence_refs'][0]['subjectDigest']='f'*64
+        with self.assertRaisesRegex(LiteTerminalHold,'CATALOG_RECEIPT_NOT_LINKED'):
+            plan_verified_terminal_pair(**f)
+    def test_partial_terminal_cannot_erase_price(self):
+        f=make()
+        f['active_buckets'][0]['rows'][0]['listing_price']=8
+        p=plan_verified_terminal_pair(**f)
+        f['all_before']=p['all']
+        f['all_before'][-1]['listing_price']=0
+        with self.assertRaisesRegex(LiteTerminalHold,'PARTIAL_PRICE_ERASURE'):
+            plan_verified_terminal_pair(**f)
+
 if __name__=='__main__':unittest.main()
