@@ -129,4 +129,33 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaisesRegex(LiteTerminalHold,'PARTIAL_PRICE_ERASURE'):
             plan_verified_terminal_pair(**f)
 
+    def test_real_private_db_snake_case_receipt_maps_without_forging_evidence(self):
+        f=make();r=f['receipt']
+        f['receipt']={'receipt_id':r['receiptId'],'receipt_kind':r['receiptKind'],
+          'source_class':r['sourceClass'],'subject_digest':r['subjectDigest'],
+          'binding':r['binding'],'server_recorded_at':'2026-11-06T10:11:00.000+00:00'}
+        p=plan_verified_terminal_pair(**f)
+        self.assertEqual(len(p['history']),451)
+        self.assertTrue(p['source_proof_verified'])
+    def test_actual_legacy_receipt_without_normalized_completion_holds(self):
+        f=make();del f['receipt']['binding']['normalizedLifecycle']
+        with self.assertRaisesRegex(LiteTerminalHold,'SOURCE_RECEIPT_BINDING'):
+            plan_verified_terminal_pair(**f)
+    def test_external_observation_is_not_forged_as_official_completion(self):
+        f=make();f['receipt']['receiptKind']='EXTERNAL_ADVISORY_OBSERVATION'
+        f['receipt']['sourceClass']='APPROVED_EXTERNAL_ADVISORY_RECEIPT'
+        with self.assertRaisesRegex(LiteTerminalHold,'SOURCE_RECEIPT_BINDING'):
+            plan_verified_terminal_pair(**f)
+    def test_private_db_receipt_ambiguous_fields_holds(self):
+        f=make();f['receipt']['receipt_id']=148
+        with self.assertRaisesRegex(LiteTerminalHold,'RECEIPT_MIXED_FORMAT'):
+            plan_verified_terminal_pair(**f)
+    def test_private_db_receipt_submillisecond_timestamp_holds(self):
+        f=make();r=f['receipt']
+        f['receipt']={'receipt_id':148,'receipt_kind':r['receiptKind'],
+          'source_class':r['sourceClass'],'subject_digest':r['subjectDigest'],
+          'binding':r['binding'],'server_recorded_at':'2026-11-06T10:11:00.123456+00:00'}
+        with self.assertRaisesRegex(LiteTerminalHold,'RECEIPT_TIMESTAMP_PRECISION'):
+            plan_verified_terminal_pair(**f)
+
 if __name__=='__main__':unittest.main()
