@@ -94,4 +94,33 @@ class TestSchedule(unittest.TestCase):
         replay=run(plan['all'],plan['history'],active,copy.deepcopy(active))
         self.assertEqual(len(replay['history']),9)
 
+    def test_recover_all_first_partial_pair_without_new_admission(self):
+        from alpha_events_lite_schedule import reconcile_partial_schedule_pair
+        old={**BASE,'status':'ended','lifecycle_state':'history',
+             'listing_price':{'vwap':99},'legacy_active_24h_verified':True}
+        archived={**old,'status':'expired_unverified',
+                  'archive_reason':'scheduled_time_elapsed_unverified',
+                  'completion_verified':False}
+        recovered=reconcile_partial_schedule_pair([archived],[old])
+        self.assertEqual(recovered,[archived])
+        self.assertEqual(reconcile_partial_schedule_pair([archived],recovered),[archived])
+        self.assertEqual(old['status'],'ended')
+    def test_recover_partial_pair_conflicting_immutable_field_holds(self):
+        from alpha_events_lite_schedule import reconcile_partial_schedule_pair
+        old={**BASE,'status':'ended'}
+        forged={**old,'symbol':'OTHER','status':'expired_unverified',
+                'archive_reason':'scheduled_time_elapsed_unverified',
+                'completion_verified':False}
+        with self.assertRaises(Exception):
+            reconcile_partial_schedule_pair([forged],[old])
+    def test_recover_partial_pair_legacy_price_never_erased(self):
+        from alpha_events_lite_schedule import reconcile_partial_schedule_pair
+        old={**BASE,'status':'ended','listing_price':{'vwap':99}}
+        forged={k:v for k,v in old.items() if k!='listing_price'}
+        forged.update(status='expired_unverified',
+                      archive_reason='scheduled_time_elapsed_unverified',
+                      completion_verified=False)
+        with self.assertRaisesRegex(ScheduledArchiveHold,'PARTIAL_PAIR_PRICE_ERASURE'):
+            reconcile_partial_schedule_pair([forged],[old])
+
 if __name__=='__main__':unittest.main()
