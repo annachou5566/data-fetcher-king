@@ -1,6 +1,11 @@
 name: Sync Alpha Event Claim & Peak Prices
 
 on:
+  # One-shot existing Claim/Peak writer for newly admitted R18 History rows.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync_listing_prices.yml'
   schedule:
     - cron: '*/30 * * * *'   # Mỗi 30 phút — chỉ token mới chưa có listing_price mới tốn request
   workflow_dispatch:
