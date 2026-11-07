@@ -165,3 +165,13 @@ def keep_existing_history_without_unverified_admission(previous_history, propose
             held += 1
     enforce_no_unverified_history_admission(old, safe)
     return safe, held
+
+def enforce_lite_no_timed_history(lite_enabled, *, history24h=False, legacy24h=False, pending24h=False, official1h=False):
+    """Lite may only promote with actual signed completion, never expiry flags.
+
+    This is intentionally opt-in, so an unrelated legacy writer deployment is
+    not modified until the operator explicitly enables the Lite contract.
+    """
+    if lite_enabled and (history24h or legacy24h or pending24h or official1h):
+        _hold('LITE_TIME_BASED_HISTORY_FORBIDDEN')
+    return True
