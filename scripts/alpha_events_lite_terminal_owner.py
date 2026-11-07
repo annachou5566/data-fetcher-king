@@ -51,6 +51,39 @@ def rows(value,label):
         hold(label+'_ROWS')
     return value
 
+def normalize_authoritative_receipt(value):
+    """Adapt a private Supabase row without inventing any lifecycle evidence.
+
+    The database uses snake_case; the immutable signer contract uses camelCase.
+    Fail closed on mixed structures, unexpected timestamp precision or a source
+    class not permitted to make official completion attestations.
+    """
+    if not isinstance(value,dict) or not isinstance(value.get('binding'),dict):
+        hold('RECEIPT_MISSING')
+    if 'receipt_id' not in value:
+        if 'receiptId' not in value: hold('RECEIPT_SHAPE')
+        return value
+    if any(k in value for k in ('receiptId','receiptKind','sourceClass',
+                                'subjectDigest','immutableRecordId','serverRecordedAt')):
+        hold('RECEIPT_MIXED_FORMAT')
+    rid=value['receipt_id']
+    if type(rid) is not int or rid<1: hold('RECEIPT_ID')
+    recorded=value.get('server_recorded_at')
+    if isinstance(recorded,str):
+        try: dt=datetime.fromisoformat(recorded.replace('Z','+00:00'))
+        except ValueError: hold('RECEIPT_TIMESTAMP')
+    elif isinstance(recorded,datetime):
+        dt=recorded
+    else: hold('RECEIPT_TIMESTAMP')
+    if dt.tzinfo is None or dt.utcoffset() is None or dt.microsecond%1000:
+        hold('RECEIPT_TIMESTAMP_PRECISION')
+    recorded=dt.astimezone(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+    return {'receiptId':rid,'receiptKind':value.get('receipt_kind'),
+            'sourceClass':value.get('source_class'),
+            'immutableRecordId':f'alpha-forecast-receipt:{rid}',
+            'subjectDigest':value.get('subject_digest'),
+            'serverRecordedAt':recorded,'binding':value['binding']}
+
 def verify_source_completion(*,attestation,original_notice,receipt,trusted_keys,
                              approved_actions,approved_versions,parse_original,catalog_event):
     """Verify real signed collector attestation + immutable receipt + raw bytes.
@@ -88,8 +121,7 @@ def verify_source_completion(*,attestation,original_notice,receipt,trusted_keys,
     except (InvalidSignature,ValueError,TypeError,AttributeError): hold('SOURCE_SIGNATURE')
     if not isinstance(original_notice,bytes) or not 1<=len(original_notice)<=262144:
         hold('ORIGINAL_BYTES')
-    if not isinstance(receipt,dict) or not isinstance(receipt.get('binding'),dict):
-        hold('RECEIPT_MISSING')
+    receipt=normalize_authoritative_receipt(receipt)
     b=receipt['binding']
     if (type(receipt.get('receiptId')) is not int or receipt['receiptId']<1
         or receipt.get('receiptKind')!='BINANCE_OFFICIAL_OBSERVATION'
