@@ -1,61 +1,118 @@
-"""Alpha Events Lite History admission fence for the EXISTING price writer.
+"""R18: preserve the complete existing History corpus without new admissions.
 
-No timer, status=ended, or row-supplied proof may create a new canonical
-History entry. Normal price-enrichment runs omit unverified additions while
-continuing to update existing History. Special CAS/cutover runs HOLD.
+Normal price runs may update allowed price-related fields on matched legacy
+rows, but neither an ID-less/duplicate legacy row nor a canonical row can
+be admitted merely by status=ended or the event's scheduled clock.
+
+A separately approved owner-CAS protocol must replace this fail-closed fence
+after real signed completion evidence is independently verified.
 """
-import re
+import copy
+import json
+from collections import Counter, defaultdict
 
-_CANONICAL_ID = re.compile(r'^ae:[0-9a-f]{24}$')
-
+_MUTABLE_ENRICHMENT = frozenset({
+    'price_snapshot', 'market_cap', 'listing_price', 'spot_listing_price',
+    'ath_since_listing_price', 'ath_since_listing_date', 'spot_ath_price',
+    'spot_ath_date', 'spot_listed', 'futures_listed', 'alpha_delisted',
+    'spot_listed_at', 'is_spot_listed',
+})
 
 class CompletionOnlyHold(RuntimeError):
     pass
 
+def _hold(code):
+    raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_' + code)
 
-def _canonical_ids(rows, name):
+def _checked(rows, label):
     if not isinstance(rows, list):
-        raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_' + name + '_NOT_LIST')
-    ids = set()
+        _hold(label + '_NOT_LIST')
     for row in rows:
         if not isinstance(row, dict):
-            raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_' + name + '_ROW_INVALID')
-        cid = row.get('id')
-        if isinstance(cid, str) and _CANONICAL_ID.fullmatch(cid):
-            if cid in ids:
-                raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_' + name + '_DUPLICATE_ID')
-            ids.add(cid)
-    return ids
+            _hold(label + '_ROW_INVALID')
+    return rows
 
+def _identity(row):
+    # Never use naive ID: historical archive contains missing/duplicated IDs.
+    immutable = {k: v for k, v in row.items() if k not in _MUTABLE_ENRICHMENT}
+    try:
+        return json.dumps(immutable, ensure_ascii=False, sort_keys=True,
+                          separators=(',', ':'), allow_nan=False)
+    except (TypeError, ValueError):
+        _hold('UNSERIALIZABLE_ARCHIVE_IDENTITY')
+
+def _no_price_erasure(old, new):
+    for key in _MUTABLE_ENRICHMENT:
+        if key not in old or old[key] is None:
+            continue
+        if key not in new or new[key] is None:
+            return False
+        if isinstance(old[key], dict):
+            if not isinstance(new[key], dict):
+                return False
+            for inner_key, value in old[key].items():
+                if value is not None and (inner_key not in new[key] or
+                                          new[key][inner_key] is None):
+                    return False
+    return True
 
 def enforce_no_unverified_history_admission(previous_history, proposed_history):
-    """Before conditional All/History CAS: abort on new canonical IDs."""
-    before = _canonical_ids(previous_history, 'PREVIOUS_HISTORY')
-    after = _canonical_ids(proposed_history, 'PROPOSED_HISTORY')
-    if after - before:
-        raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_NEW_CANONICAL_HISTORY_UNVERIFIED')
-    if before - after:
-        raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_ARCHIVED_CANONICAL_LOST')
-    if len(proposed_history) < len(previous_history):
-        raise CompletionOnlyHold('WA_AE_COMPLETION_ONLY_HOLD_HISTORY_SHRANK')
-    return len(after)
-
+    """Cutover/CAS mode: reject new, missing, forged or ambiguous History rows."""
+    old = _checked(previous_history, 'PREVIOUS_HISTORY')
+    new = _checked(proposed_history, 'PROPOSED_HISTORY')
+    if len(old) != len(new):
+        _hold('HISTORY_CARDINALITY_CHANGED')
+    prev, after = defaultdict(list), defaultdict(list)
+    for row in old:
+        prev[_identity(row)].append(row)
+    for row in new:
+        after[_identity(row)].append(row)
+    if set(prev) != set(after):
+        _hold('UNVERIFIED_HISTORY_IDENTITY_CHANGE')
+    for key, originals in prev.items():
+        candidates = after[key]
+        if len(originals) != len(candidates):
+            _hold('UNVERIFIED_HISTORY_MULTISET_CHANGE')
+        if len(originals) > 1:
+            # Ambiguous pre-canonical duplicates may not silently swap price.
+            digest = lambda rs: Counter(json.dumps(x, sort_keys=True,
+                ensure_ascii=False, separators=(',', ':')) for x in rs)
+            if digest(originals) != digest(candidates):
+                _hold('AMBIGUOUS_LEGACY_PRICE_CHANGE')
+        elif not _no_price_erasure(originals[0], candidates[0]):
+            _hold('ARCHIVED_PRICE_ERASURE')
+    return len(old)
 
 def keep_existing_history_without_unverified_admission(previous_history, proposed_history):
-    """Normal enrichment: skip ONLY unverified new canonical rows, keep prices.
-
-    No input for self-declared completed/proof/ended is accepted. The existing
-    price writer retains ownership of both R2 keys.
-    """
-    before = _canonical_ids(previous_history, 'PREVIOUS_HISTORY')
-    _canonical_ids(proposed_history, 'PROPOSED_HISTORY')
-    safe = []
+    """Normal enrichment: retain all original History in original order."""
+    old = _checked(previous_history, 'PREVIOUS_HISTORY')
+    new = _checked(proposed_history, 'PROPOSED_HISTORY')
+    prior, proposed = defaultdict(list), defaultdict(list)
+    for index, row in enumerate(old):
+        prior[_identity(row)].append((index, row))
+    for row in new:
+        proposed[_identity(row)].append(row)
+    safe = copy.deepcopy(old)
     held = 0
-    for row in proposed_history:
-        cid = row.get('id')
-        if isinstance(cid, str) and _CANONICAL_ID.fullmatch(cid) and cid not in before:
-            held += 1
+    for key, candidates in proposed.items():
+        originals = prior.get(key)
+        if not originals:
+            held += len(candidates)
+            continue
+        if len(originals) != len(candidates):
+            held += max(0, len(candidates) - len(originals))
+            continue
+        if len(originals) > 1:
+            # No unique row-to-price mapping: keep original duplicates.
+            for candidate in candidates:
+                if candidate not in [r for _, r in originals]:
+                    held += 1
+            continue
+        index, previous = originals[0]
+        candidate = candidates[0]
+        if _no_price_erasure(previous, candidate):
+            safe[index] = copy.deepcopy(candidate)
         else:
-            safe.append(row)
-    enforce_no_unverified_history_admission(previous_history, safe)
+            held += 1
+    enforce_no_unverified_history_admission(old, safe)
     return safe, held
