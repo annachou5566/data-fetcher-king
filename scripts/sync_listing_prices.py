@@ -35,6 +35,10 @@ load_dotenv()
 
 # Tái sử dụng fetch_smart() + get_session() đã có sẵn (proxy, retry, jitter, 429-backoff)
 import fetch_alpha as fa
+from alpha_events_price_integrity import (
+    select_price_integrity_retries, candidate_is_event_anchored,
+    apply_peak_only, snooze_unavailable_price,
+)
 
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "4"))
 fa._request_semaphore = threading.Semaphore(MAX_CONCURRENT)
@@ -53,7 +57,7 @@ MANUAL_CONFIRMED_DEAD = {"MIRROR", "CYPR", "RDAC"}
 # [MỚI] Token bạn TỰ XÁC NHẬN giá đang lưu bị sai (do bug đã sửa) — thêm
 # symbol vào đây để xoá giá cũ, code sẽ tự tính lại đúng ở lần chạy kế
 # tiếp. Xoá khỏi danh sách này sau khi đã xác nhận giá mới đúng.
-MANUAL_RESET_PRICES = {"SLX"}
+MANUAL_RESET_PRICES = set()  # SLX verified; no perpetual destructive reset
 
 # Exactly these two dated Alpha Box events need migration; never reset by ticker.
 EVENT_ANCHOR_REPRICE_IDS = {
@@ -1359,7 +1363,8 @@ def enrich_events(events):
 
     todo = [
         e for e in events
-        if (not e.get("listing_price") or e.get("_vwap_daybound_recompute"))
+        if (not e.get("listing_price") or e.get("_vwap_daybound_recompute")
+            or e.get("_price_integrity_mode") == "peak")
         and (e.get("symbol") or e.get("token") or "").upper() not in MANUAL_CONFIRMED_DEAD
         and e.get("contract_address")
         and (e.get("event_time") or e.get("date"))
@@ -1379,20 +1384,36 @@ def enrich_events(events):
         }
         for fut in as_completed(futures):
             e, result = fut.result()
+            mode = e.get("_price_integrity_mode")
             had_last_good = bool(e.get("listing_price"))
+
+            # Reject stale original-listing candles or pre-event peaks even
+            # if the upstream returned HTTP 200. Preserve previous evidence.
+            if result and not candidate_is_event_anchored(e, result):
+                print(f"  [price-anchor-hold] {e.get('symbol')}: "
+                      "provider price belongs to another date/event", flush=True)
+                result = None
+
             if (result and e.get("id") in EVENT_ANCHOR_REPRICE_IDS
                     and had_last_good
                     and not (result.get("max_since") or {}).get("price")):
                 print(f"  [preserve-last-good] {e.get('symbol')}: new event peak unavailable")
                 result = None
-            if result:
+
+            if mode == "peak":
+                # Missing Peak is retried separately; NEVER replace an already
+                # accepted Claim VWAP/date with a fresh unrelated computation.
+                if result and apply_peak_only(e, result):
+                    filled += 1
+                else:
+                    snooze_unavailable_price(e)
+                    print(f"  [peak-unavailable] {e.get('symbol')}: "
+                          "original Claim retained; retry after 24h", flush=True)
+            elif result:
                 e["listing_price"] = result
-                # [MỚI] Đưa ATH (max_since) ra field top-level cho dễ dùng
-                # — trước đây bị lồng bên trong listing_price.max_since,
-                # dễ bị bỏ sót khi đọc data.
                 ms = result.get("max_since")
                 e["ath_since_listing_price"] = ms.get("price") if ms else None
-                e["ath_since_listing_date"]  = ms.get("date") if ms else None
+                e["ath_since_listing_date"] = ms.get("date") if ms else None
                 filled += 1
             elif not had_last_good:
                 e["listing_price"] = None  # missing rows remain retryable
@@ -1402,7 +1423,13 @@ def enrich_events(events):
                     "replacement unavailable; keeping existing listing_price",
                     flush=True,
                 )
+                if mode == "anchor":
+                    snooze_unavailable_price(e)
+
+            # In-memory planner flags are never persisted as extra lifecycle
+            # state. Retry throttle belongs only to the enrichment subobject.
             e.pop("_vwap_daybound_recompute", None)
+            e.pop("_price_integrity_mode", None)
 
     return filled
 
@@ -1685,28 +1712,22 @@ def invalidate_at_risk_listing_prices(events, status_map):
 
 
 def invalidate_manual_reset_prices(events):
+    """Opt-in manual reprice, non-destructive and event-bound.
+
+    Keep the existing verified Claim/Peak until a replacement for the
+    SAME event has been fetched and validated. Never erase spot prices.
+    A manual reset must be explicitly reviewed and removed after one use.
     """
-    [AN TOÀN, THỦ CÔNG] Bổ sung cho invalidate_at_risk_listing_prices ở
-    trên — dùng khi bạn tự phát hiện 1 token giá sai nhưng không thuộc
-    diện tự động phát hiện được (vd không có alphaId hiện tại để kiểm
-    tra). Thêm symbol vào MANUAL_RESET_PRICES, chạy 1 lần để xoá giá cũ,
-    code tự tính lại ở lần chạy kế tiếp — rồi xoá khỏi danh sách.
-    """
-    invalidated = 0
+    marked = 0
     for e in events:
         sym = (e.get("symbol") or e.get("token") or "").upper()
-        if sym not in MANUAL_RESET_PRICES:
+        if sym not in MANUAL_RESET_PRICES or not e.get("listing_price"):
             continue
-        if e.get("listing_price"):
-            e["listing_price"] = None
-            e["ath_since_listing_price"] = None
-            e["ath_since_listing_date"] = None
-            invalidated += 1
-        if e.get("spot_listing_price"):
-            e["spot_listing_price"] = None
-            e["spot_ath_price"] = None
-            e["spot_ath_date"] = None
-    return invalidated
+        if not e.get("contract_address") or _event_start_ms(e) is None:
+            continue
+        e["_vwap_daybound_recompute"] = True
+        marked += 1
+    return marked
 
 
 def apply_alpha_status(events, status_map, futures_symbols=None):
@@ -1944,6 +1965,11 @@ def main():
     event_reprice_count = mark_event_anchor_reprices(all_events)
     if event_reprice_count:
         print(f"   [event-anchor] {event_reprice_count} BTR/CLO event row(s) selected for safe recalculation")
+    price_integrity_counts = select_price_integrity_retries(all_events, limit=8)
+    if price_integrity_counts["anchor"] or price_integrity_counts["peak"]:
+        print(f"  [price-integrity] qualified retry candidates: "
+              f"anchor={price_integrity_counts['anchor']}, "
+              f"missing_peak={price_integrity_counts['peak']}")
     filled = enrich_events(all_events)
     print(f"\n✅ Backfilled {filled} event Claim/Peak prices")
 
