@@ -57,7 +57,7 @@ MANUAL_CONFIRMED_DEAD = {"MIRROR", "CYPR", "RDAC"}
 # [MỚI] Token bạn TỰ XÁC NHẬN giá đang lưu bị sai (do bug đã sửa) — thêm
 # symbol vào đây để xoá giá cũ, code sẽ tự tính lại đúng ở lần chạy kế
 # tiếp. Xoá khỏi danh sách này sau khi đã xác nhận giá mới đúng.
-MANUAL_RESET_PRICES = {"SLX"}
+MANUAL_RESET_PRICES = set()  # SLX verified; no perpetual destructive reset
 
 # Exactly these two dated Alpha Box events need migration; never reset by ticker.
 EVENT_ANCHOR_REPRICE_IDS = {
@@ -1712,28 +1712,22 @@ def invalidate_at_risk_listing_prices(events, status_map):
 
 
 def invalidate_manual_reset_prices(events):
+    """Opt-in manual reprice, non-destructive and event-bound.
+
+    Keep the existing verified Claim/Peak until a replacement for the
+    SAME event has been fetched and validated. Never erase spot prices.
+    A manual reset must be explicitly reviewed and removed after one use.
     """
-    [AN TOÀN, THỦ CÔNG] Bổ sung cho invalidate_at_risk_listing_prices ở
-    trên — dùng khi bạn tự phát hiện 1 token giá sai nhưng không thuộc
-    diện tự động phát hiện được (vd không có alphaId hiện tại để kiểm
-    tra). Thêm symbol vào MANUAL_RESET_PRICES, chạy 1 lần để xoá giá cũ,
-    code tự tính lại ở lần chạy kế tiếp — rồi xoá khỏi danh sách.
-    """
-    invalidated = 0
+    marked = 0
     for e in events:
         sym = (e.get("symbol") or e.get("token") or "").upper()
-        if sym not in MANUAL_RESET_PRICES:
+        if sym not in MANUAL_RESET_PRICES or not e.get("listing_price"):
             continue
-        if e.get("listing_price"):
-            e["listing_price"] = None
-            e["ath_since_listing_price"] = None
-            e["ath_since_listing_date"] = None
-            invalidated += 1
-        if e.get("spot_listing_price"):
-            e["spot_listing_price"] = None
-            e["spot_ath_price"] = None
-            e["spot_ath_date"] = None
-    return invalidated
+        if not e.get("contract_address") or _event_start_ms(e) is None:
+            continue
+        e["_vwap_daybound_recompute"] = True
+        marked += 1
+    return marked
 
 
 def apply_alpha_status(events, status_map, futures_symbols=None):
@@ -1971,7 +1965,7 @@ def main():
     event_reprice_count = mark_event_anchor_reprices(all_events)
     if event_reprice_count:
         print(f"   [event-anchor] {event_reprice_count} BTR/CLO event row(s) selected for safe recalculation")
-    price_integrity_counts = select_price_integrity_retries(all_events)
+    price_integrity_counts = select_price_integrity_retries(all_events, limit=8)
     if price_integrity_counts["anchor"] or price_integrity_counts["peak"]:
         print(f"  [price-integrity] qualified retry candidates: "
               f"anchor={price_integrity_counts['anchor']}, "
