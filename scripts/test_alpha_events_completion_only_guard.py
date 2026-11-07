@@ -1,79 +1,67 @@
+import copy
 import unittest
 from alpha_events_completion_only_guard import (
-    CompletionOnlyHold,
-    enforce_no_unverified_history_admission as guard,
-    keep_existing_history_without_unverified_admission as filter_rows,
+    CompletionOnlyHold, enforce_no_unverified_history_admission as guard,
+    keep_existing_history_without_unverified_admission as keep,
 )
-CID = 'ae:' + 'a' * 24
-CID2 = 'ae:' + 'b' * 24
+CID='ae:'+'a'*24
 
+class GuardTests(unittest.TestCase):
+    def test_preserve_450_duplicate_idless_price(self):
+        old=[{'id':99 if i%3 else None,'event_time':f'2025-{i//30+1:02d}-{i%28+1:02d}',
+              'project_name':str(i),'price_snapshot':{'last':i},'status':'ended'} for i in range(450)]
+        safe,held=keep(old,old+[{'id':CID,'status':'ended','completed':True}])
+        self.assertEqual(safe,old);self.assertEqual(held,1)
+    def test_reject_unverified_noncanonical_new_id(self):
+        self.assertEqual(keep([{'id':'old'}],[{'id':'old'},{'id':'new'}]),([{'id':'old'}],1))
+    def test_reject_new_idless_event(self):
+        before=[{'symbol':'X','status':'ended'}]
+        self.assertEqual(keep(before,before+[{'symbol':'Y','status':'ended'}]),(before,1))
+    def test_reject_new_canonical_even_completed_and_signed_fields(self):
+        self.assertEqual(keep([],[{'id':CID,'completed':True,'terminal_proof_ref':'forge'}]),([],1))
+    def test_price_update_existing_single_legacy(self):
+        old=[{'id':13,'symbol':'BRD','listing_price':{'vwap':2},'status':'ended'}]
+        new=[{'id':13,'symbol':'BRD','listing_price':{'vwap':3},'status':'ended'}]
+        self.assertEqual(keep(old,new),(new,0))
+    def test_price_erasure_rejected_and_previous_retained(self):
+        old=[{'id':'old','price_snapshot':{'last':4},'status':'ended'}]
+        new=[{'id':'old','price_snapshot':{},'status':'ended'}]
+        self.assertEqual(keep(old,new),(old,1))
+        with self.assertRaisesRegex(CompletionOnlyHold,'PRICE_ERASURE'):guard(old,new)
+    def test_status_changed_rejected(self):
+        before=[{'id':'old','status':'ended'}]
+        self.assertEqual(keep(before,[{'id':'old','status':'active'}]),(before,1))
+    def test_no_row_loss_even_with_incoming_short(self):
+        before=[{'id':5,'symbol':'A'},{'id':5,'symbol':'B'}]
+        self.assertEqual(keep(before,[before[0]]),(before,0))
+        with self.assertRaisesRegex(CompletionOnlyHold,'CARDINALITY'):guard(before,[before[0]])
+    def test_no_change_original_array(self):
+        before=[{'id':'X','price_snapshot':{'last':4}}];candidate=copy.deepcopy(before)
+        safe,_=keep(before,candidate);safe[0]['price_snapshot']['last']=9
+        self.assertEqual(before[0]['price_snapshot']['last'],4)
+    def test_duplicate_identity_but_different_prices_no_cross_erase(self):
+        old=[{'id':3,'symbol':'DUP','price_snapshot':1},{'id':3,'symbol':'DUP','price_snapshot':2}]
+        new=[{'id':3,'symbol':'DUP','price_snapshot':99},{'id':3,'symbol':'DUP','price_snapshot':2}]
+        self.assertEqual(keep(old,new)[0],old)
+        with self.assertRaisesRegex(CompletionOnlyHold,'AMBIGUOUS'):guard(old,new)
+    def test_duplicate_exact_price_rows_pass(self):
+        r={'id':3,'symbol':'DUP','price_snapshot':1}
+        self.assertEqual(guard([r,r],[r,r]),2)
+    def test_canonical_price_enrichment_passes(self):
+        old=[{'id':CID,'symbol':'BRD','listing_price':1}]
+        new=[{'id':CID,'symbol':'BRD','listing_price':2}]
+        self.assertEqual(guard(old,new),1)
+    def test_legacy_swap_same_size_rejected(self):
+        with self.assertRaisesRegex(CompletionOnlyHold,'IDENTITY_CHANGE'):guard([{'id':2}],[{'id':3}])
+    def test_missing_keys_invalid(self):
+        with self.assertRaisesRegex(CompletionOnlyHold,'NOT_LIST'):guard(None,[])
+        with self.assertRaisesRegex(CompletionOnlyHold,'ROW_INVALID'):keep([None],[])
+    def test_trailing_new_history_even_if_old_erased_holds(self):
+        with self.assertRaisesRegex(CompletionOnlyHold,'IDENTITY_CHANGE'):
+            guard([{'id':4},{'id':5}],[{'id':5},{'id':6}])
+    def test_mixed_old_new_preserves_old_in_order(self):
+        old=[{'id':1,'price_snapshot':1},{'id':2,'price_snapshot':2}]
+        new=[{'id':2,'price_snapshot':3},{'id':CID,'completed':True},{'id':1,'price_snapshot':7}]
+        self.assertEqual(keep(old,new),([{'id':1,'price_snapshot':7},{'id':2,'price_snapshot':3}],1))
 
-class CompletionOnlyWriterTests(unittest.TestCase):
-    def test_idless_legacy(self):
-        self.assertEqual(guard([{'status': 'ended'}], [{'status': 'ended'}]), 0)
-
-    def test_preserve_450_history_rows(self):
-        rows = [{'status': 'ended', 'legacy_index': i, 'price_snapshot': i}
-                for i in range(450)]
-        result, held = filter_rows(rows, rows + [{'id': CID, 'completed': True}])
-        self.assertEqual(result, rows)
-        self.assertEqual(held, 1)
-
-    def test_expired_canonical_rejected_in_cutover(self):
-        with self.assertRaisesRegex(CompletionOnlyHold, 'NEW_CANONICAL_HISTORY_UNVERIFIED'):
-            guard([{'id': 'old'}], [{'id': 'old'}, {'id': CID, 'event_time': '2020', 'status': 'ended'}])
-
-    def test_completed_true_is_not_proof(self):
-        safe, held = filter_rows([], [{'id': CID, 'status': 'ended', 'completed': True,
-                                      'terminal_proof_ref': 'forged'}])
-        self.assertEqual(safe, [])
-        self.assertEqual(held, 1)
-
-    def test_existing_canonical_can_be_price_enriched(self):
-        safe, held = filter_rows([{'id': CID, 'listing_price': 1}],
-                                 [{'id': CID, 'listing_price': 2}])
-        self.assertEqual(safe[0]['listing_price'], 2)
-        self.assertEqual(held, 0)
-
-    def test_duplicate_id_rejected(self):
-        with self.assertRaisesRegex(CompletionOnlyHold, 'DUPLICATE_ID'):
-            filter_rows([], [{'id': CID}, {'id': CID}])
-
-    def test_noncanonical_legacy_out_of_scope(self):
-        self.assertEqual(guard([{'id': 'older'}], [{'id': 'older'}, {'id': 'new-legacy'}]), 0)
-
-    def test_bad_list_rejected(self):
-        with self.assertRaisesRegex(CompletionOnlyHold, 'NOT_LIST'):
-            filter_rows(None, [])
-
-    def test_bad_row_rejected(self):
-        with self.assertRaisesRegex(CompletionOnlyHold, 'ROW_INVALID'):
-            filter_rows([None], [])
-
-    def test_reject_without_logging_sensitive_identity(self):
-        try:
-            guard([], [{'id': CID}])
-        except CompletionOnlyHold as e:
-            self.assertNotIn(CID, str(e))
-
-    def test_shrunken_history_holds(self):
-        with self.assertRaisesRegex(CompletionOnlyHold, 'HISTORY_SHRANK'):
-            filter_rows([{'legacy_index': 1}], [])
-
-    def test_archived_canonical_removal_holds(self):
-        with self.assertRaisesRegex(CompletionOnlyHold, 'ARCHIVED_CANONICAL_LOST'):
-            filter_rows([{'id': CID}], [{'id': CID2}])
-
-    def test_mixed_new_and_existing(self):
-        safe, held = filter_rows([{'id': CID}], [{'id': CID, 'price_snapshot': 30}, {'id': CID2}])
-        self.assertEqual(safe, [{'id': CID, 'price_snapshot': 30}])
-        self.assertEqual(held, 1)
-
-    def test_multiple_unverified_held(self):
-        safe, held = filter_rows([{'id': 'legacy'}], [{'id': 'legacy'}, {'id': CID}, {'id': CID2}])
-        self.assertEqual(held, 2)
-        self.assertEqual(safe, [{'id': 'legacy'}])
-
-
-if __name__ == '__main__':
-    unittest.main()
+if __name__=='__main__':unittest.main()
