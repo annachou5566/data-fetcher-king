@@ -33,6 +33,16 @@ class TestSchedule(unittest.TestCase):
         with self.assertRaisesRegex(ScheduledArchiveHold,'IMMUTABLE_IDENTITY_CONFLICT'):run([{**BASE,'symbol':'WRONG'}],[])
     def test_all_price_preserved(self):
         p=run([{**BASE,'listing_price':{'vwap':100}}],[]);self.assertEqual(p['history'][0]['listing_price'],{'vwap':100})
+    def test_all_price_and_first_active_clock_survive_schedule_archive(self):
+        old={k:v for k,v in BASE.items() if k!='firstActiveAt'}
+        old['listing_price']={'vwap':123}
+        p=run([old],[])
+        self.assertEqual(p['history'][0]['listing_price'],{'vwap':123})
+        self.assertEqual(p['history'][0]['firstActiveAt'],BASE['firstActiveAt'])
+    def test_mismatched_existing_clock_holds(self):
+        old={**BASE,'firstActiveAt':'2026-10-28T00:00:00.000Z'}
+        with self.assertRaisesRegex(ScheduledArchiveHold,'ACTIVE_CLOCK_CONFLICT'):
+            run([old],[])
     def test_450_old_rows_intact(self):
         a=[{'id':None if i<435 else str(i),'symbol':str(i),'listing_price':{'vwap':i+1}} for i in range(450)]
         p=run(a,copy.deepcopy(a));self.assertEqual(p['all'][:450],a);self.assertEqual(p['history'][:450],a)
