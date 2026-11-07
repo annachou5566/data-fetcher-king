@@ -98,6 +98,38 @@ def enforce_no_unverified_history_admission(previous_history, proposed_history):
             _hold('ARCHIVED_PRICE_ERASURE')
     return len(old)
 
+def ensure_all_contains_existing_history(all_events, history_rows):
+    """Before any CAS, prove All still represents every retained History row.
+
+    Preserve legacy ID-less/duplicate entries without token/date fuzzy matches.
+    Prices may be enriched, never erased. Ambiguity holds rather than guessing.
+    """
+    all_rows = _checked(all_events, 'ALL')
+    hist_rows = _checked(history_rows, 'HISTORY')
+    by_all, by_hist = defaultdict(list), defaultdict(list)
+    for row in all_rows:
+        by_all[_identity(row)].append(row)
+    for row in hist_rows:
+        by_hist[_identity(row)].append(row)
+    for key, archived in by_hist.items():
+        counterparts = by_all.get(key, [])
+        if len(counterparts) < len(archived):
+            _hold('HISTORY_NOT_REPRESENTED_IN_ALL')
+        if len(archived) != 1 or len(counterparts) != 1:
+            # Duplicate immutable identities cannot be safely paired to a
+            # particular price update. Permit only exact legacy copies.
+            counts = Counter(json.dumps(r, sort_keys=True, ensure_ascii=False,
+                separators=(',', ':'), allow_nan=False) for r in counterparts)
+            for row in archived:
+                marker = json.dumps(row, sort_keys=True, ensure_ascii=False,
+                    separators=(',', ':'), allow_nan=False)
+                if not counts[marker]:
+                    _hold('AMBIGUOUS_ALL_HISTORY_PRICE_PAIR')
+                counts[marker] -= 1
+        elif not _no_price_erasure(archived[0], counterparts[0]):
+            _hold('ALL_ARCHIVED_PRICE_ERASURE')
+    return len(hist_rows)
+
 def keep_existing_history_without_unverified_admission(previous_history, proposed_history):
     """Normal enrichment: retain all original History in original order."""
     old = _checked(previous_history, 'PREVIOUS_HISTORY')
