@@ -15,7 +15,9 @@ _MUTABLE_ENRICHMENT = frozenset({
     'price_snapshot', 'market_cap', 'listing_price', 'spot_listing_price',
     'ath_since_listing_price', 'ath_since_listing_date', 'spot_ath_price',
     'spot_ath_date', 'spot_listed', 'futures_listed', 'alpha_delisted',
-    'spot_listed_at', 'is_spot_listed',
+    'spot_listed_at', 'is_spot_listed', 'listing_price_unavailable',
+    '_tge_date_checked', '_vwap_daybound_recompute',
+    '_multiround_checked', '_vwap_daybound_checked',
 })
 
 class CompletionOnlyHold(RuntimeError):
