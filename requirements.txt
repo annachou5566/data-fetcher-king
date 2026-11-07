@@ -9,3 +9,4 @@ playwright
 lxml
 playwright-stealth
 crawl4ai
+cryptography==46.0.4  # R18 Ed25519 source attestation verification
