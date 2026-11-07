@@ -64,4 +64,18 @@ class GuardTests(unittest.TestCase):
         new=[{'id':2,'price_snapshot':3},{'id':CID,'completed':True},{'id':1,'price_snapshot':7}]
         self.assertEqual(keep(old,new),([{'id':1,'price_snapshot':7},{'id':2,'price_snapshot':3}],1))
 
+
+    def test_price_snapshot_cannot_silently_zero(self):
+        old=[{'id':'old','price_snapshot':48.7,'status':'ended'}]
+        safe,held=keep(old,[{'id':'old','price_snapshot':0,'status':'ended'}])
+        self.assertEqual(safe,old);self.assertEqual(held,1)
+    def test_nested_listing_price_cannot_zero(self):
+        old=[{'id':'old','listing_price':{'vwap':1.4},'status':'ended'}]
+        safe,held=keep(old,[{'id':'old','listing_price':{'vwap':0},'status':'ended'}])
+        self.assertEqual(safe,old);self.assertEqual(held,1)
+    def test_market_cap_zero_is_not_conflated_with_loss(self):
+        old=[{'id':'old','market_cap':50000,'status':'ended'}]
+        new=[{'id':'old','market_cap':0,'status':'ended'}]
+        self.assertEqual(keep(old,new),(new,0))
+
 if __name__=='__main__':unittest.main()
