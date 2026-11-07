@@ -117,7 +117,7 @@ class TestSchedule(unittest.TestCase):
         from alpha_events_lite_schedule import reconcile_partial_schedule_pair
         old={**BASE,'status':'ended','listing_price':{'vwap':99}}
         forged={k:v for k,v in old.items() if k!='listing_price'}
-        forged.update(status='expired_unverified',
+        forged.update(status='expired_unverified',lifecycle_state='history',
                       archive_reason='scheduled_time_elapsed_unverified',
                       completion_verified=False)
         with self.assertRaisesRegex(ScheduledArchiveHold,'PARTIAL_PAIR_PRICE_ERASURE'):
