@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from alpha_events_completion_only_guard import ensure_all_contains_existing_history
+from alpha_events_completion_only_guard import ensure_all_contains_existing_history, _no_price_erasure
 
 SOURCE_FIELDS = ('schema', 'signerKeyId', 'canonicalId', 'eventType', 'action',
                  'actionCode', 'actualAt', 'sourcePublishedAt', 'sourceDigest',
@@ -116,11 +116,20 @@ def verify_source_completion(*,attestation,original_notice,receipt,trusted_keys,
     if (not isinstance(parsed,dict) or parsed.get('status')!='EXACT_COMPLETION_ACTION'
         or parsed.get('eventType')!=f['eventType'] or parsed.get('actionCode')!=f['actionCode']
         or parsed.get('actualAt')!=f['actualAt'] or parsed.get('sourceDigest')!=f['noticeDigest']
-        or parsed.get('canonicalId')!=f['canonicalId']):
+        or (parsed.get('canonicalId') is not None and parsed.get('canonicalId')!=f['canonicalId'])):
         hold('ORIGINAL_ACTION_NOT_COMPLETED')
     if (not isinstance(catalog_event,dict) or catalog_event.get('id')!=f['canonicalId']
         or str(catalog_event.get('event_type','')).upper()!=f['eventType']):
         hold('CATALOG_IDENTITY')
+    # Real notices need not carry a WaveAlpha-internal ID. In that case an
+    # independently loaded canonical ledger must link the exact receipt and
+    # its immutable subject digest; ticker/date proximity is insufficient.
+    if parsed.get('canonicalId') is None:
+        links=catalog_event.get('evidence_refs')
+        if not isinstance(links,list) or not any(isinstance(e,dict) and
+            e.get('immutableRecordId')==f['receiptRef'] and
+            e.get('subjectDigest')==f['receiptSubjectDigest'] for e in links):
+            hold('CATALOG_RECEIPT_NOT_LINKED')
     return {'canonicalId':f['canonicalId'],'eventType':f['eventType'],
             'actualAt':f['actualAt'],'receiptRef':f['receiptRef'],
             'sourceDigest':f['sourceDigest'],'sourceSignerKeyId':f['signerKeyId']}
@@ -157,6 +166,7 @@ def plan_verified_terminal_pair(*,attestation,original_notice,receipt,trusted_ke
               'terminal_proof_ref':proof['receiptRef'],'lifecycle_state':'history'}
     if old_a:
         existing=old_a[0]
+        if not _no_price_erasure(terminal,existing): hold('PARTIAL_PRICE_ERASURE')
         for k,v in terminal.items():
             if k not in ('price_snapshot','market_cap','listing_price','spot_listing_price',
                          'ath_since_listing_price','ath_since_listing_date','spot_ath_price','spot_ath_date'):
