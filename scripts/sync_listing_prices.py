@@ -2068,12 +2068,20 @@ def main():
         # enrichment remains unchanged for the already-owned legacy archive.
         previous_history, history24h_etag = history24h_snapshot(
             r2, R2_BUCKET_NAME, "alpha-events/history.json")
+        # If a previous All-first CAS succeeded but History CAS lost its ACK,
+        # recover only the exact pre-existing unverified History identities.
+        # Do not admit arbitrary new events or overwrite verified completion.
+        trusted_previous_history = previous_history
+        if lite_schedule_enabled:
+            from alpha_events_lite_schedule import reconcile_partial_schedule_pair
+            trusted_previous_history = reconcile_partial_schedule_pair(
+                all_events, previous_history)
         history, withheld = keep_existing_history_without_unverified_admission(
-            previous_history, history)
+            trusted_previous_history, history)
         # Fail closed on missing/changed legacy rows in All, including
         # ID-less duplicates; preserve safe price enrichment.
         ensure_all_contains_existing_history(all_events, history)
-        enforce_no_unverified_history_admission(previous_history, history)
+        enforce_no_unverified_history_admission(trusted_previous_history, history)
         if withheld:
             print(f"  [price-only] {withheld} unsupported History admissions withheld")
         proposed = {

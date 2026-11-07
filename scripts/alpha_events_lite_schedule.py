@@ -4,12 +4,15 @@ Past schedule != confirmed completion. No I/O, new service, cron or Active write
 import copy
 import re
 from datetime import datetime, timezone
-from alpha_events_completion_only_guard import ensure_all_contains_existing_history
+from alpha_events_completion_only_guard import ensure_all_contains_existing_history, _no_price_erasure, _MUTABLE_ENRICHMENT
 
 CID = re.compile(r'ae:[0-9a-f]{24}\Z')
 TIME = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\Z')
 ACTIVE_KEYS = ('alpha-events/pending.json', 'alpha-events/upcoming.json', 'alpha-events/live.json')
-IDENTITY = ('id', 'symbol', 'event_time', 'event_type', 'contract_address', 'chain_id', 'project_name')
+CORE_IDENTITY = ('id', 'symbol', 'event_time')
+OPTIONAL_IDENTITY = ('event_type', 'contract_address', 'chain_id', 'project_name')
+IDENTITY = CORE_IDENTITY + OPTIONAL_IDENTITY
+SCHEDULE_FIELDS = frozenset({'status', 'lifecycle_state', 'archive_reason', 'completion_verified'})
 
 class ScheduledArchiveHold(RuntimeError):
     pass
@@ -40,8 +43,45 @@ def _time(value):
     return dt if dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]+'Z'==value else None
 
 def _identity(current, prior):
-    for k in IDENTITY:
+    # Legacy Active may omit contract/chain already present in History.
+    # Present mismatches still HOLD; absent values never erase old evidence.
+    for k in CORE_IDENTITY:
         if current.get(k)!=prior.get(k): hold('IMMUTABLE_IDENTITY_CONFLICT')
+    for k in OPTIONAL_IDENTITY:
+        a,b=current.get(k),prior.get(k)
+        if a not in (None,'') and b not in (None,'') and a!=b:
+            hold('IMMUTABLE_IDENTITY_CONFLICT')
+
+def reconcile_partial_schedule_pair(all_rows, history_rows):
+    """Recover ONLY the existing writer's All-first / History-second CAS window.
+
+    A crashed History CAS may leave a scheduled marker in All while History
+    still has the original unverified 'ended' row. No new History admission
+    happens here: only an exact same-ID old row may catch up to that marker.
+    """
+    current_all=_rows(all_rows,'ALL')
+    previous_hist=_rows(history_rows,'HISTORY')
+    all_index=_index(current_all,'ALL')
+    result=copy.deepcopy(previous_hist)
+    for i,old in enumerate(previous_hist):
+        cid=old.get('id')
+        target=all_index.get(cid) if isinstance(cid,str) else None
+        if target is None or target==old: continue
+        if (target.get('status')!='expired_unverified' or
+            target.get('archive_reason')!='scheduled_time_elapsed_unverified' or
+            target.get('completion_verified') is not False or
+            target.get('lifecycle_state')!='history' or
+            old.get('status')!='ended' or old.get('completion_verified') is True):
+            continue
+        _identity(target,old)
+        changed={k for k in set(old)|set(target) if old.get(k)!=target.get(k)}
+        if changed-SCHEDULE_FIELDS-_MUTABLE_ENRICHMENT:
+            hold('PARTIAL_PAIR_IDENTITY_CONFLICT')
+        if not _no_price_erasure(old,target):
+            hold('PARTIAL_PAIR_PRICE_ERASURE')
+        result[i]=copy.deepcopy(target)
+    ensure_all_contains_existing_history(current_all,result)
+    return result
 
 def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows, now):
     """Pure pair candidate. Only existing writer may CAS, only Pages may retire."""
@@ -69,6 +109,7 @@ def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows,
     by_all=_index(new_all,'ALL')
     by_hist=_index(new_hist,'HISTORY')
     promoted=[]
+    upgraded_existing=set()
     for cid,raw in active.items():
         scheduled=_time(raw.get('event_time'))
         if scheduled is None or scheduled>now: continue
@@ -77,10 +118,28 @@ def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows,
         if prior_a is not None: _identity(raw,prior_a)
         if prior_h is not None: _identity(raw,prior_h)
         if prior_h is not None:
-            if (prior_h.get('status')!='expired_unverified' or
-                prior_h.get('archive_reason')!='scheduled_time_elapsed_unverified'):
+            if prior_a is None: hold('EXISTING_HISTORY_WITHOUT_ALL')
+            if (prior_h.get('status')=='expired_unverified' and
+                prior_h.get('archive_reason')=='scheduled_time_elapsed_unverified'):
+                if prior_a!=prior_h: hold('ALREADY_ARCHIVED_PAIR_CONFLICT')
+                promoted.append(cid)
                 continue
-            if prior_a is None or prior_a!=prior_h: hold('ALREADY_ARCHIVED_PAIR_CONFLICT')
+            # Existing unverified legacy History can be relabeled by schedule,
+            # without inventing a signed real-world completion or dropping data.
+            if (prior_h.get('status')!='ended' or prior_a.get('status')!='ended' or
+                prior_h.get('completion_verified') is True or
+                prior_a.get('completion_verified') is True):
+                hold('EXISTING_HISTORY_NEEDS_REVIEW')
+            record=copy.deepcopy(prior_a)
+            record.update({'status':'expired_unverified','lifecycle_state':'history',
+                           'archive_reason':'scheduled_time_elapsed_unverified',
+                           'completion_verified':False})
+            for arr in (new_all,new_hist):
+                for i,row in enumerate(arr):
+                    if row.get('id')==cid:
+                        arr[i]=copy.deepcopy(record)
+                        break
+            upgraded_existing.add(cid)
             promoted.append(cid)
             continue
         record=copy.deepcopy(prior_a if prior_a is not None else raw)
@@ -101,7 +160,13 @@ def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows,
         else: new_all.append(copy.deepcopy(record))
         new_hist.append(copy.deepcopy(record))
         promoted.append(cid)
-    if new_hist[:len(before_hist)]!=before_hist: hold('LEGACY_HISTORY_MUTATED')
+    if len(new_hist)<len(before_hist): hold('LEGACY_HISTORY_MUTATED')
+    for old,revised in zip(before_hist,new_hist):
+        if old==revised: continue
+        if old.get('id') not in upgraded_existing: hold('LEGACY_HISTORY_MUTATED')
+        changed={k for k in set(old)|set(revised) if old.get(k)!=revised.get(k)}
+        if changed-SCHEDULE_FIELDS-_MUTABLE_ENRICHMENT: hold('LEGACY_HISTORY_MUTATED')
+        if not _no_price_erasure(old,revised): hold('LEGACY_HISTORY_PRICE_ERASURE')
     ensure_all_contains_existing_history(new_all,new_hist)
     return {'all':new_all,'history':new_hist,'promoted':promoted,
             'retire_live':False,'independent_writer':False}
