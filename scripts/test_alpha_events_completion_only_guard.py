@@ -3,7 +3,7 @@ import unittest
 from alpha_events_completion_only_guard import (
     CompletionOnlyHold, enforce_no_unverified_history_admission as guard,
     keep_existing_history_without_unverified_admission as keep,
-    ensure_all_contains_existing_history,
+    ensure_all_contains_existing_history, enforce_lite_no_timed_history,
 )
 CID='ae:'+'a'*24
 
@@ -120,5 +120,14 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(keep(old,bad),(old,1))
         with self.assertRaisesRegex(CompletionOnlyHold,'HISTORY_NOT_REPRESENTED_IN_ALL'):
             ensure_all_contains_existing_history(bad,old)
+
+    def test_lite_enabled_never_allows_expiry_history_path(self):
+        for flag in ('history24h','legacy24h','pending24h','official1h'):
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(CompletionOnlyHold,'LITE_TIME_BASED_HISTORY_FORBIDDEN'):
+                    enforce_lite_no_timed_history(True,**{flag:True})
+    def test_lite_default_writer_enrichment_still_allowed(self):
+        self.assertTrue(enforce_lite_no_timed_history(True))
+        self.assertTrue(enforce_lite_no_timed_history(False,history24h=True))
 
 if __name__=='__main__':unittest.main()
