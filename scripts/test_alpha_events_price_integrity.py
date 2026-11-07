@@ -122,6 +122,7 @@ class PriceIntegrity(unittest.TestCase):
         self.assertIn("workflow_dispatch:", body)
         self.assertNotIn("\n  push:", body)
         self.assertEqual(body.count("cron:"), 1)
+        self.assertIn("cron: '*/30 * * * *'", body)
 
 
 if __name__ == "__main__":
