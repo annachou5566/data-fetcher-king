@@ -47,12 +47,27 @@ def _no_price_erasure(old, new):
             continue
         if key not in new or new[key] is None:
             return False
+        # An established positive listing/peak price cannot silently become zero.
+        # A market-cap or market-status transition may legitimately reach zero.
+        if key in {'price_snapshot', 'listing_price', 'spot_listing_price',
+                   'ath_since_listing_price', 'spot_ath_price'}:
+            if (isinstance(old[key], (int, float)) and not isinstance(old[key], bool)
+                    and old[key] > 0 and isinstance(new[key], (int, float))
+                    and not isinstance(new[key], bool) and new[key] == 0):
+                return False
         if isinstance(old[key], dict):
             if not isinstance(new[key], dict):
                 return False
             for inner_key, value in old[key].items():
                 if value is not None and (inner_key not in new[key] or
                                           new[key][inner_key] is None):
+                    return False
+                if (key in {'price_snapshot', 'listing_price', 'spot_listing_price',
+                            'ath_since_listing_price', 'spot_ath_price'}
+                        and isinstance(value, (int, float)) and not isinstance(value, bool)
+                        and value > 0 and isinstance(new[key].get(inner_key), (int, float))
+                        and not isinstance(new[key].get(inner_key), bool)
+                        and new[key][inner_key] == 0):
                     return False
     return True
 
