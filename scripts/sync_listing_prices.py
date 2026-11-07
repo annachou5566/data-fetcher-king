@@ -1771,6 +1771,7 @@ def main():
     from alpha_events_completion_only_guard import (
         enforce_no_unverified_history_admission,
         keep_existing_history_without_unverified_admission,
+        ensure_all_contains_existing_history,
     )
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
     print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}  (chỉ dùng cho Alpha aggregator API — klines public đã chuyển hẳn sang Binance Vision, KHÔNG còn qua Render)")
@@ -1852,7 +1853,14 @@ def main():
             r2, R2_BUCKET_NAME, "alpha-events/all.json")
         before_price_enrichment = json.loads(json.dumps(all_events))
     else:
-        all_events = load_json(r2, "alpha-events/all.json")
+        # The default price-enrichment path must never interpret a failed
+        # R2 GET as an empty source or silently overwrite the archive.
+        from history24h_cutover import (
+            snapshot as history24h_snapshot,
+            publish_pair as history24h_publish_pair,
+        )
+        all_events, all24h_etag = history24h_snapshot(
+            r2, R2_BUCKET_NAME, "alpha-events/all.json")
     print(f"   {len(all_events)} events loaded")
 
     if not all_events:
@@ -2043,13 +2051,24 @@ def main():
     else:
         # Fail closed BEFORE updating either All or History. The usual price
         # enrichment remains unchanged for the already-owned legacy archive.
-        previous_history = load_json(r2, "alpha-events/history.json")
+        previous_history, history24h_etag = history24h_snapshot(
+            r2, R2_BUCKET_NAME, "alpha-events/history.json")
         history, withheld = keep_existing_history_without_unverified_admission(
             previous_history, history)
+        # Fail closed on missing/changed legacy rows in All, including
+        # ID-less duplicates; preserve safe price enrichment.
+        ensure_all_contains_existing_history(all_events, history)
+        enforce_no_unverified_history_admission(previous_history, history)
         if withheld:
             print(f"  [completion-only] {withheld} unverified canonical event(s) retained outside History")
-        upload_json(r2, "alpha-events/all.json",     all_events)
-        upload_json(r2, "alpha-events/history.json", history)
+        # Reuse the single existing writer's conditional pair + readback.
+        # Never claim completion/retire Active from this price-only path.
+        ack = history24h_publish_pair(r2, R2_BUCKET_NAME, {
+            "all": all_events, "history": history, "promoted": [],
+            "retire_live": False, "independent_writer": False,
+        }, all24h_etag, history24h_etag)
+        if ack.get("pair_verified") is not True:
+            raise RuntimeError("WA_AE_COMPLETION_ONLY_HOLD_PRICE_PAIR_UNVERIFIED")
 
     print("🏁 DONE")
 
