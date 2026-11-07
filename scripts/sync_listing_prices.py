@@ -1772,6 +1772,7 @@ def main():
         enforce_no_unverified_history_admission,
         keep_existing_history_without_unverified_admission,
         ensure_all_contains_existing_history,
+        enforce_lite_no_timed_history,
     )
     print(f"🔑 API_AGG_KLINES configured: {bool(API_AGG_KLINES)}")
     print(f"🔑 PROXY_WORKER_URL configured: {bool(fa.PROXY_WORKER_URL)}  (chỉ dùng cho Alpha aggregator API — klines public đã chuyển hẳn sang Binance Vision, KHÔNG còn qua Render)")
@@ -1785,6 +1786,13 @@ def main():
     legacy_pending_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED", "0") == "1"
     pending24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED", "0") == "1"
     official1h_enabled = os.getenv("WA_ALPHA_EVENTS_OFFICIAL1H_ENABLED", "0") == "1"
+    # Lite production mode is explicit and fails closed before any R2 connection
+    # if a legacy timer-derived History promotion mechanism was also enabled.
+    enforce_lite_no_timed_history(
+        os.getenv("WA_ALPHA_EVENTS_LITE_COMPLETION_ONLY_ENABLED", "0") == "1",
+        history24h=history24h_enabled, legacy24h=legacy_pending_enabled,
+        pending24h=pending24h_enabled, official1h=official1h_enabled,
+    )
     if official1h_enabled and (pending24h_enabled or legacy_pending_enabled):
         raise RuntimeError("WA_AE_OFFICIAL1H_HOLD_MUTUALLY_EXCLUSIVE_HISTORY_MODES")
     if official1h_enabled and not history24h_enabled:
