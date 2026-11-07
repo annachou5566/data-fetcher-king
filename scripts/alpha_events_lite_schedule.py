@@ -52,6 +52,37 @@ def _identity(current, prior):
         if a not in (None,'') and b not in (None,'') and a!=b:
             hold('IMMUTABLE_IDENTITY_CONFLICT')
 
+def reconcile_partial_schedule_pair(all_rows, history_rows):
+    """Recover ONLY the existing writer's All-first / History-second CAS window.
+
+    A crashed History CAS may leave a scheduled marker in All while History
+    still has the original unverified 'ended' row. No new History admission
+    happens here: only an exact same-ID old row may catch up to that marker.
+    """
+    current_all=_rows(all_rows,'ALL')
+    previous_hist=_rows(history_rows,'HISTORY')
+    all_index=_index(current_all,'ALL')
+    result=copy.deepcopy(previous_hist)
+    for i,old in enumerate(previous_hist):
+        cid=old.get('id')
+        target=all_index.get(cid) if isinstance(cid,str) else None
+        if target is None or target==old: continue
+        if (target.get('status')!='expired_unverified' or
+            target.get('archive_reason')!='scheduled_time_elapsed_unverified' or
+            target.get('completion_verified') is not False or
+            target.get('lifecycle_state')!='history' or
+            old.get('status')!='ended' or old.get('completion_verified') is True):
+            continue
+        _identity(target,old)
+        changed={k for k in set(old)|set(target) if old.get(k)!=target.get(k)}
+        if changed-SCHEDULE_FIELDS-_MUTABLE_ENRICHMENT:
+            hold('PARTIAL_PAIR_IDENTITY_CONFLICT')
+        if not _no_price_erasure(old,target):
+            hold('PARTIAL_PAIR_PRICE_ERASURE')
+        result[i]=copy.deepcopy(target)
+    ensure_all_contains_existing_history(current_all,result)
+    return result
+
 def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows, now):
     """Pure pair candidate. Only existing writer may CAS, only Pages may retire."""
     if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:
