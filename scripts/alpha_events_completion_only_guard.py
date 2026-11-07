@@ -1,11 +1,10 @@
-"""R18: preserve the complete existing History corpus without new admissions.
+"""Preserve legacy History and price enrichment.
 
-Normal price runs may update allowed price-related fields on matched legacy
-rows, but neither an ID-less/duplicate legacy row nor a canonical row can
-be admitted merely by status=ended or the event's scheduled clock.
-
-A separately approved owner-CAS protocol must replace this fail-closed fence
-after real signed completion evidence is independently verified.
+Default price enrichment cannot silently admit events. The dedicated Lite
+schedule planner admits only exact canonical Active events whose event_time
+elapsed, marked expired_unverified (never completed). The existing writer
+CAS-publishes both All/History. Signed evidence is required only when claiming
+real completion, not when moving a missed schedule to History.
 """
 import copy
 import json
@@ -167,10 +166,10 @@ def keep_existing_history_without_unverified_admission(previous_history, propose
     return safe, held
 
 def enforce_lite_no_timed_history(lite_enabled, *, history24h=False, legacy24h=False, pending24h=False, official1h=False):
-    """Lite may only promote with actual signed completion, never expiry flags.
+    """Block legacy 1h/24h inference when Lite is selected.
 
-    This is intentionally opt-in, so an unrelated legacy writer deployment is
-    not modified until the operator explicitly enables the Lite contract.
+    This does NOT block the separate event_time-based schedule archive,
+    which is always labeled expired_unverified, not completed.
     """
     if lite_enabled and (history24h or legacy24h or pending24h or official1h):
         _hold('LITE_TIME_BASED_HISTORY_FORBIDDEN')
