@@ -1786,6 +1786,13 @@ def main():
     legacy_pending_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_LEGACY_PENDING_ENABLED", "0") == "1"
     pending24h_enabled = os.getenv("WA_ALPHA_EVENTS_HISTORY24H_ACTIVE24H_ENABLED", "0") == "1"
     official1h_enabled = os.getenv("WA_ALPHA_EVENTS_OFFICIAL1H_ENABLED", "0") == "1"
+    # The existing price writer automatically archives passed schedules.
+    # No new task/cron: the normal recurring price run provides the cadence.
+    # A 1h/24h legacy cutover uses its own path and is left untouched.
+    lite_schedule_enabled = (
+        os.getenv("WA_ALPHA_EVENTS_LITE_SCHEDULE_ARCHIVE", "1") == "1"
+        and not history24h_enabled
+    )
     # Lite production mode is explicit and fails closed before any R2 connection
     # if a legacy timer-derived History promotion mechanism was also enabled.
     enforce_lite_no_timed_history(
@@ -2068,13 +2075,44 @@ def main():
         ensure_all_contains_existing_history(all_events, history)
         enforce_no_unverified_history_admission(previous_history, history)
         if withheld:
-            print(f"  [completion-only] {withheld} unverified canonical event(s) retained outside History")
-        # Reuse the single existing writer's conditional pair + readback.
-        # Never claim completion/retire Active from this price-only path.
-        ack = history24h_publish_pair(r2, R2_BUCKET_NAME, {
+            print(f"  [price-only] {withheld} unsupported History admissions withheld")
+        proposed = {
             "all": all_events, "history": history, "promoted": [],
             "retire_live": False, "independent_writer": False,
-        }, all24h_etag, history24h_etag)
+        }
+        archive_source_etags = {}
+        if lite_schedule_enabled:
+            from alpha_events_lite_schedule import plan_scheduled_archive
+            # Read only the already existing Active and public keys.
+            # Snapshot stability prevents archiving a row that has been
+            # revised/replaced by the authorized Active publisher.
+            source = []
+            for key in ("alpha-events/pending.json", "alpha-events/upcoming.json",
+                        "alpha-events/live.json"):
+                rows, etag = history24h_snapshot(r2, R2_BUCKET_NAME, key)
+                source.append({"key": key, "rows": rows})
+                archive_source_etags[key] = etag
+            public_key = "alpha-events/public/active.json"
+            public_rows, archive_source_etags[public_key] = history24h_snapshot(
+                r2, R2_BUCKET_NAME, public_key)
+            proposed = plan_scheduled_archive(
+                all_events, history, source, public_rows, datetime.now(timezone.utc))
+            for key, etag in archive_source_etags.items():
+                _, fresh = history24h_snapshot(r2, R2_BUCKET_NAME, key)
+                if fresh != etag:
+                    raise RuntimeError("WA_AE_LITE_SCHEDULE_HOLD_ACTIVE_VERSION_MOVED")
+        # CAS All then History, independent readbacks, no Active writes.
+        # Signed real completion is NOT required for status=expired_unverified.
+        ack = history24h_publish_pair(
+            r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
+        if lite_schedule_enabled and ack.get("pair_verified") is True:
+            for key, etag in archive_source_etags.items():
+                _, fresh = history24h_snapshot(r2, R2_BUCKET_NAME, key)
+                if fresh != etag:
+                    raise RuntimeError("WA_AE_LITE_SCHEDULE_HOLD_ACTIVE_CHANGED_AFTER_PAIR")
+            if proposed["promoted"]:
+                print(f"  [lite-schedule] {len(proposed['promoted'])} elapsed event(s) "
+                      "archived as expired_unverified; Active owner retires after pair readback")
         if ack.get("pair_verified") is not True:
             raise RuntimeError("WA_AE_COMPLETION_ONLY_HOLD_PRICE_PAIR_UNVERIFIED")
 
