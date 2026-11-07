@@ -2,7 +2,7 @@ name: Sync Alpha Event Claim & Peak Prices
 
 on:
   schedule:
-    - cron: '7,37 * * * *'   # Same 30m cadence, off peak :00/:30 (GitHub may delay/drop)
+    - cron: '*/30 * * * *'   # Mỗi 30 phút — chỉ token mới chưa có listing_price mới tốn request
   workflow_dispatch:
     inputs:
       legacy_history24h_cutover:
