@@ -48,4 +48,50 @@ class TestSchedule(unittest.TestCase):
         p=run(a,copy.deepcopy(a));self.assertEqual(p['all'][:450],a);self.assertEqual(p['history'][:450],a)
     def test_before_event_not_promoted(self):
         p=run(now=datetime(2026,10,31,tzinfo=timezone.utc));self.assertFalse(p['promoted'])
+    def test_legacy_history_relabels_without_loss_and_replays(self):
+        old={**BASE,'status':'ended','lifecycle_state':'history',
+             'contract_address':'confirmed-contract','chain_id':'CT_784',
+             'firstActiveAt':'2026-10-07T00:00:00.000Z',
+             'listing_price':{'vwap':42},'legacy_active_24h_verified':True}
+        active={k:v for k,v in BASE.items() if k not in ('contract_address','chain_id')}
+        before=copy.deepcopy(old)
+        plan=run([old],[copy.deepcopy(old)],[active],[copy.deepcopy(active)])
+        self.assertEqual(old,before)
+        self.assertEqual(plan['all'],plan['history'])
+        rec=plan['history'][0]
+        self.assertEqual(rec['contract_address'],'confirmed-contract')
+        self.assertEqual(rec['chain_id'],'CT_784')
+        self.assertEqual(rec['firstActiveAt'],'2026-10-07T00:00:00.000Z')
+        self.assertEqual(rec['listing_price'],{'vwap':42})
+        self.assertTrue(rec['legacy_active_24h_verified'])
+        self.assertEqual(rec['status'],'expired_unverified')
+        self.assertFalse(rec['completion_verified'])
+        replay=run(plan['all'],plan['history'],[active],[copy.deepcopy(active)])
+        self.assertEqual(replay['all'],plan['all'])
+        self.assertEqual(replay['history'],plan['history'])
+        self.assertEqual(len(replay['promoted']),1)
+    def test_present_contract_conflict_still_holds(self):
+        prior={**BASE,'contract_address':'0x111','status':'ended'}
+        active={**BASE,'contract_address':'0x222'}
+        with self.assertRaisesRegex(ScheduledArchiveHold,'IMMUTABLE_IDENTITY_CONFLICT'):
+            run([prior],[copy.deepcopy(prior)],[active],[copy.deepcopy(active)])
+    def test_verified_completion_is_never_relabelled(self):
+        prior={**BASE,'status':'ended','completion_verified':True}
+        with self.assertRaisesRegex(ScheduledArchiveHold,'EXISTING_HISTORY_NEEDS_REVIEW'):
+            run([prior],[copy.deepcopy(prior)])
+    def test_nine_elapsed_four_new_five_existing(self):
+        active=[{**BASE,'id':'ae:'+format(i,'024x'),'symbol':str(i)} for i in range(1,10)]
+        past=[{**a,'status':'ended','listing_price':{'vwap':i+1}} for i,a in enumerate(active[4:])]
+        all_rows=copy.deepcopy(past)
+        hist_rows=copy.deepcopy(past)
+        plan=run(all_rows,hist_rows,active,copy.deepcopy(active))
+        self.assertEqual(len(plan['promoted']),9)
+        self.assertEqual(len(plan['all']),9)
+        self.assertEqual(len(plan['history']),9)
+        self.assertEqual(plan['all'],plan['history'])
+        self.assertEqual(all(r['status']=='expired_unverified' for r in plan['history']),True)
+        self.assertEqual(len({r['id'] for r in plan['history']}),9)
+        replay=run(plan['all'],plan['history'],active,copy.deepcopy(active))
+        self.assertEqual(len(replay['history']),9)
+
 if __name__=='__main__':unittest.main()
