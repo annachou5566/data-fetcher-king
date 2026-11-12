@@ -1,4 +1,4 @@
-name: PNJ History — year-by-year bounded backfill
+name: PNJ History — full-year daily checkpoint backfill
 
 on:
   schedule:
@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       max_days:
-        description: 'Maximum historical dates to process (1–24)'
+        description: 'Historical dates per run (366 = scan one full year, saved day-by-day)'
         type: choice
-        options: ['1', '6', '12', '18', '24']
-        default: '18'
+        options: ['1', '18', '120', '366']
+        default: '366'
 
 # ONE owner; never run overlapping checkpoints or cancel a partial day.
 concurrency:
@@ -25,7 +25,7 @@ jobs:
     # Emergency pause: set repo variable WA_PNJ_HISTORY_PAUSED=1.
     if: ${{ vars.WA_PNJ_HISTORY_PAUSED != '1' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,5 +43,5 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          MAX_DAYS_INPUT: ${{ inputs.max_days || '18' }}
+          MAX_DAYS_INPUT: ${{ inputs.max_days || '366' }}
         run: python scripts/pnj_history_backfill.py --run --max-days "$MAX_DAYS_INPUT" --delay-seconds 10
