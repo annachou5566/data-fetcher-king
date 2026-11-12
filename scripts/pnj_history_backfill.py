@@ -63,6 +63,9 @@ def new_year_progress(day: date) -> dict:
         'started_from_january_1': (day.month, day.day) == (1, 1),
         'days_committed': 0, 'days_observed': 0,
         'empty_unverified_days': 0, 'quarantined_rows': 0,
+        'days_with_both_targets': 0, 'days_missing_sjc': 0,
+        'days_missing_pnj_ring': 0, 'invalid_price_rows': 0,
+        'inverted_spread_rows': 0,
         'scan_status': 'IN_PROGRESS',
     }
 
@@ -92,13 +95,22 @@ def commit_year_progress(storage, day: date, summary: dict) -> str:
     progress['days_observed'] += (summary['coverage'] == 'OBSERVED')
     progress['empty_unverified_days'] += (summary['coverage'] != 'OBSERVED')
     progress['quarantined_rows'] += summary['quarantined_row_count']
+    progress['days_with_both_targets'] += (summary.get('target_coverage') == 'BOTH')
+    progress['days_missing_sjc'] += not bool(summary.get('sjc_valid_rows'))
+    progress['days_missing_pnj_ring'] += not bool(summary.get('pnj_ring_valid_rows'))
+    progress['invalid_price_rows'] += int(summary.get('invalid_price_rows', 0))
+    progress['inverted_spread_rows'] += int(summary.get('inverted_spread_rows', 0))
     if after.year != day.year:
         if not progress['started_from_january_1']:
             progress['scan_status'] = 'PARTIAL_YEAR_PRIOR_DAYS_UNVERIFIED'
         elif progress['empty_unverified_days']:
             progress['scan_status'] = 'SCANNED_YEAR_HAS_EMPTY_UNVERIFIED_DAYS'
+        elif progress['days_missing_sjc'] or progress['days_missing_pnj_ring']:
+            progress['scan_status'] = 'SCANNED_YEAR_TARGET_PRODUCT_GAPS'
+        elif progress['quarantined_rows']:
+            progress['scan_status'] = 'SCANNED_YEAR_QUALITY_ANOMALIES'
         else:
-            progress['scan_status'] = 'SCANNED_YEAR_DAYS_OBSERVED'
+            progress['scan_status'] = 'SCANNED_YEAR_TARGETS_OBSERVED_NO_FLAGGED_ROWS'
     storage.write(key, progress)
     return progress['scan_status']
 
