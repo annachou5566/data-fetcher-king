@@ -152,7 +152,7 @@ class TestPNJ(unittest.TestCase):
         yr = s.read(pnj.year_key(2016))
         self.assertEqual(yr['days_committed'], 366)
         self.assertEqual(yr['days_observed'], 366)
-        self.assertEqual(yr['scan_status'], 'SCANNED_YEAR_DAYS_OBSERVED')
+        self.assertEqual(yr['scan_status'], 'SCANNED_YEAR_TARGETS_OBSERVED_NO_FLAGGED_ROWS')
         self.assertEqual(yr['next_date'], '2017-01-01')
         self.assertTrue(yr['started_from_january_1'])
         self.assertEqual(out['year'], 2016)
@@ -227,6 +227,68 @@ class TestPNJ(unittest.TestCase):
         self.assertEqual(yr['days_observed'], 0)
         self.assertEqual(yr['empty_unverified_days'], 366)
         self.assertTrue(yr['started_from_january_1'])
+
+
+
+    def test_valid_source_product_completeness(self):
+        s = pnj.inspect_payload(sample('2016-12-15'), date(2016,12,15))
+        self.assertEqual(s['target_coverage'], 'BOTH')
+        self.assertEqual(s['sjc_valid_rows'], 1)
+        self.assertEqual(s['pnj_ring_valid_rows'], 1)
+        self.assertEqual(s['invalid_price_rows'], 0)
+
+    def test_invalid_price_quarantined_no_fake_coverage(self):
+        d = sample()
+        row = d['locations'][0]['gold_type'][0]['data'][0]
+        row['gia_mua'] = '35.85abc'
+        s = pnj.inspect_payload(d, date(2016,12,15))
+        self.assertEqual(s['invalid_price_rows'], 1)
+        self.assertEqual(s['target_coverage'], 'RING_ONLY')
+        self.assertEqual(s['updates_with_valid_date'], 1)
+
+    def test_inverted_buy_sell_quarantined(self):
+        d = sample()
+        row = d['locations'][1]['gold_type'][0]['data'][0]
+        row['gia_mua'] = '34.580'
+        row['gia_ban'] = '33.580'
+        s = pnj.inspect_payload(d, date(2016,12,15))
+        self.assertEqual(s['inverted_spread_rows'], 1)
+        self.assertEqual(s['target_coverage'], 'SJC_ONLY')
+        self.assertEqual(s['quarantined_row_count'], 1)
+
+    def test_missing_prices_never_counted_as_valid(self):
+        d = sample()
+        for x in d['locations']:
+            for y in x['gold_type']:
+                for v in y['data']:
+                    v['gia_mua'] = ''
+                    v['gia_ban'] = ''
+        s = pnj.inspect_payload(d, date(2016,12,15))
+        self.assertEqual(s['coverage'], 'EMPTY_UNVERIFIED')
+        self.assertEqual(s['quarantined_row_count'], 2)
+        self.assertEqual(s['target_coverage'], 'NEITHER')
+
+    def test_product_missing_marks_year_gap_without_claiming_full(self):
+        storage = MemoryR2()
+        def fetch(day):
+            p = sample(day.isoformat())
+            p['locations'][1]['gold_type'] = []
+            return p, pnj.inspect_payload(p, day)
+        for _ in range(16):
+            out=pnj.backfill(storage,first=date(2016,1,1),last=date(2016,12,31),
+                max_days=24,delay=8,fetcher=fetch,sleeper=lambda _:None)
+            if out['year_boundary_reached']: break
+        y=storage.read(pnj.year_key(2016))
+        self.assertEqual(y['scan_status'],'SCANNED_YEAR_TARGET_PRODUCT_GAPS')
+        self.assertEqual(y['days_missing_pnj_ring'],366)
+        self.assertEqual(y['days_missing_sjc'],0)
+        self.assertEqual(y['days_with_both_targets'],0)
+
+    def test_source_response_missing_product_name_holds(self):
+        d=sample()
+        d['locations'][0]['gold_type'][0].pop('name')
+        with self.assertRaisesRegex(pnj.CollectionHold, 'SCHEMA_PRODUCT_NAME_CHANGED'):
+            pnj.inspect_payload(d,date(2016,12,15))
 
 
 if __name__ == '__main__': unittest.main()
