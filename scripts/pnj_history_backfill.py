@@ -93,7 +93,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def fetch_day(day: date, *, opener=None):
-    opener = opener or urllib.request.build_opener(NoRedirect())
+    opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     url = ENDPOINT + '?date=' + day.strftime('%Y%m%d')
     req = urllib.request.Request(url, headers={'Accept': 'application/json', 'User-Agent': UA})
     try:
@@ -221,7 +221,7 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
             try:
                 payload, summary = fetcher(cursor)
             except CollectionHold as exc:
-                if str(exc) in ('UPSTREAM_HTTP_401', 'UPSTREAM_HTTP_403', 'UPSTREAM_HTTP_429'):
+                if str(exc) in ('UPSTREAM_HTTP_301', 'UPSTREAM_HTTP_302', 'UPSTREAM_HTTP_307', 'UPSTREAM_HTTP_308', 'UPSTREAM_HTTP_401', 'UPSTREAM_HTTP_403', 'UPSTREAM_HTTP_418', 'UPSTREAM_HTTP_429', 'UPSTREAM_HTTP_451'):
                     state['paused_reason'] = str(exc)
                     state['paused_date'] = cursor.isoformat()
                     storage.write(STATE_KEY, state)
