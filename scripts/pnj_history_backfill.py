@@ -279,6 +279,10 @@ class R2:
             raise CollectionHold('R2_WRITE_TOO_LARGE')
         self.client.put_object(Bucket=self.bucket, Key=key, Body=body,
             ContentType='application/json', CacheControl='private, no-store')
+        # R2 guarantees strong read-after-write consistency. Do not advance a
+        # day/year/global cursor until the exact stored JSON has been verified.
+        if self.read(key) != doc:
+            raise CollectionHold('R2_WRITE_READBACK_MISMATCH')
 
 
 def check_approvals():
