@@ -291,4 +291,31 @@ class TestPNJ(unittest.TestCase):
             pnj.inspect_payload(d,date(2016,12,15))
 
 
+
+    def test_r2_write_requires_verified_readback(self):
+        class Fake:
+            def __init__(self): self.writes = []
+            def put_object(self, **kw): self.writes.append(kw)
+        store = pnj.R2.__new__(pnj.R2)
+        store.bucket = 'demo'
+        store.client = Fake()
+        doc={'schema':'demo','status':'ok'}
+        store.read = lambda key: doc
+        store.write('safe/test.json',doc)
+        self.assertEqual(len(store.client.writes),1)
+        self.assertEqual(json.loads(store.client.writes[0]['Body']),doc)
+
+    def test_r2_write_detects_corrupted_readback(self):
+        class Fake:
+            def put_object(self, **kw): pass
+        store = pnj.R2.__new__(pnj.R2)
+        store.bucket = 'demo'
+        store.client = Fake()
+        store.read = lambda key: {'status':'CORRUPT'}
+        with self.assertRaisesRegex(pnj.CollectionHold,'R2_WRITE_READBACK_MISMATCH'):
+            store.write('safe/test.json',{'status':'ok'})
+
+    def test_raw_response_size_cap_free_tier(self):
+        self.assertLessEqual(pnj.MAX_BYTES,128_000)
+
 if __name__ == '__main__': unittest.main()
