@@ -30,7 +30,7 @@ The bot intentionally **does not download an entire 365/366-day year in one GitH
 1. Read the exact day object (idempotent if it already exists).
 2. If missing, make one PNJ request and write `metal/pnj/history-v1/days/YYYY/MM/YYYY-MM-DD.json` immediately; this object contains all source regions, product categories, and intraday quotes.
 3. Read/update `metal/pnj/history-v1/years/YYYY/_progress.json`; the receipt carries `next_date`, processed counts, `EMPTY_UNVERIFIED` counts, quarantined row counts, and whether the scan genuinely started on January 1.
-4. **Only after both writes succeed**, advance global `metal/pnj/history-v1/_state.json`.
+4. **Only after both writes succeed and R2 strong read-after-write verification passes for each object**, advance global `metal/pnj/history-v1/_state.json`. Global cursor writes are also read back before the job reports success.
 5. On crash at any point, replay reads the existing day and year receipt and **does not fetch or double-count** a completed day.
 
 Year terminal states are explicitly scan states, NOT a certificate of complete series: `SCANNED_YEAR_DAYS_OBSERVED`, `SCANNED_YEAR_HAS_EMPTY_UNVERIFIED_DAYS`, or `PARTIAL_YEAR_PRIOR_DAYS_UNVERIFIED` when an old V25 cursor started in the middle of a year. Even a scanned date may lack an individual product such as SJC or 999.9 rings; product-level completeness is a future independent audit.
@@ -60,3 +60,11 @@ From 2016-01-01 through 2026-11-11: 3,968 calendar dates. At 18 dates/hour, a fu
 **STATUS:** V27 SOURCE & OFFLINE QA PASS / ONE REAL DAY VERIFIED IN R2 / HOURLY CRON CONFIGURED; ongoing coverage and hosted run results must be checked separately.
 **REMAINING RISK:** PNJ undocumented backend policy, real history coverage, source response drift, R2 Free quota/authorization, PNJ rate limit.
 **NEXT BEST ACTION:** Review terms/robot access and get explicit activation + R2 write authorization, then controlled one-day live trial, assess source/status/coverage, finally enable bounded backfill.
+
+## V27 acceptance checkpoint — 2026-11-12
+
+- `31/31` exact `main` Python tests PASS in an isolated runtime after source-quality and R2 readback hardening.
+- One real PNJ source date `2016-01-01` persisted and individually read back from existing Standard R2 bucket: day object, year receipt, global cursor. `next_date=2016-01-02`; no other data is claimed until hosted receipts are checked.
+- GitHub `main` hourly scheduled source is deployed with owner GO; GitHub-hosted PNJ workflow RUN SUCCESS is **not yet verified**. Scheduled jobs may be delayed/held, so inspect Action runs and R2 cursor before claiming ongoing progress.
+- Rate-limit (401/403/429), schema drift, invalid date, abnormal prices and missing target products retain fail-closed/quarantine semantics. Results stay `INTERNAL_REVIEW_ONLY` until coverage audited.
+- R2 account Standard usage snapshot at audit: approximately 2.48 GB storage, November 2026 70,739 PutObject / 247,113 GetObject. This demonstrates Free headroom **at audit**, not a perpetual no-charge guarantee if unrelated traffic or data grows.
