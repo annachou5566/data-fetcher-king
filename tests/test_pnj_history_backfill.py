@@ -43,9 +43,10 @@ class TestPNJ(unittest.TestCase):
     def test_day_key(self):
         self.assertEqual(pnj.key_for(date(2016,12,15)), 'metal/pnj/history-v1/days/2016/12/2016-12-15.json')
     def test_day_bound(self):
-        for n in [0,25,-1]:
+        for n in [0,367,-1]:
             with self.assertRaises(ValueError): pnj.limit_days(n)
         self.assertEqual(pnj.limit_days(24), 24)
+        self.assertEqual(pnj.limit_days(366), 366)
     def test_schema(self):
         self.assertEqual(pnj.inspect_payload(sample(), date(2016,12,15))['updates_with_valid_date'], 2)
     def test_cross_date_quarantine_not_fabricated(self):
@@ -317,5 +318,43 @@ class TestPNJ(unittest.TestCase):
 
     def test_raw_response_size_cap_free_tier(self):
         self.assertLessEqual(pnj.MAX_BYTES,128_000)
+
+
+    def test_full_leap_year_in_single_bounded_run(self):
+        storage = MemoryR2()
+        called = []
+        def synthetic(day):
+            called.append(day)
+            data = sample(day.isoformat())
+            return data, pnj.inspect_payload(data, day)
+        out = pnj.backfill(storage, first=date(2016,1,1), last=date(2017,1,3),
+                           max_days=366, delay=10, fetcher=synthetic,
+                           sleeper=lambda _:None)
+        self.assertEqual(out['processed'], 366)
+        self.assertTrue(out['year_boundary_reached'])
+        self.assertEqual(out['next_date'], '2017-01-01')
+        self.assertFalse(out['time_budget_reached'])
+        self.assertEqual(len(called), 366)
+        self.assertEqual(storage.read(pnj.year_key(2016))['days_committed'], 366)
+        self.assertEqual(storage.read(pnj.year_key(2016))['scan_status'],
+                         'SCANNED_YEAR_TARGETS_OBSERVED_NO_FLAGGED_ROWS')
+
+    def test_graceful_runtime_cap_preserves_cursor(self):
+        s = MemoryR2()
+        def must_not_fetch(day):
+            raise AssertionError('TIME_BUDGET_MUST_SKIP_FETCH')
+        with patch.object(pnj.time, 'monotonic',
+                          side_effect=[0, pnj.MAX_RUNTIME_SECONDS + 1]):
+            out = pnj.backfill(s, first=date(2016,12,15), last=date(2016,12,16),
+                               max_days=366, delay=10, fetcher=must_not_fetch)
+        self.assertTrue(out['time_budget_reached'])
+        self.assertEqual(out['processed'], 0)
+        self.assertEqual(out['next_date'], '2016-12-15')
+        self.assertIsNone(s.read(pnj.STATE_KEY))
+
+    def test_default_plan_supports_year_without_egress(self):
+        with patch.object(pnj,'R2',side_effect=AssertionError('R2 must not be called')):
+            with patch.object(pnj,'fetch_day',side_effect=AssertionError('fetch must not be called')):
+                self.assertEqual(pnj.main([]),0)
 
 if __name__ == '__main__': unittest.main()
