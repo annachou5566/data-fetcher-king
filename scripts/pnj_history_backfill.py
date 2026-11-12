@@ -23,6 +23,7 @@ SOURCE = 'https://giavang.pnj.com.vn/'
 ENDPOINT = 'https://edge-cf-api.pnj.io/ecom-frontend/v1/get-gold-price-history'
 PREFIX = 'metal/pnj/history-v1/'
 STATE_KEY = PREFIX + '_state.json'
+YEAR_SCHEMA = 'wa-pnj-year-progress-v1'
 MAX_DAYS_HARD = 24
 MAX_BYTES = 2_000_000
 UTC7 = ZoneInfo('Asia/Ho_Chi_Minh')
@@ -46,6 +47,59 @@ def exact_date(s: str) -> date:
 
 def key_for(day: date) -> str:
     return f'{PREFIX}days/{day:%Y/%m}/{day:%Y-%m-%d}.json'
+
+
+def year_key(year: int) -> str:
+    if year < START_DATE.year or year > today_vn().year:
+        raise ValueError('YEAR_OUTSIDE_SOURCE_RANGE')
+    return f'{PREFIX}years/{year}/_progress.json'
+
+
+def new_year_progress(day: date) -> dict:
+    return {
+        'schema': YEAR_SCHEMA, 'year': day.year,
+        'next_date': day.isoformat(),
+        'started_from_january_1': (day.month, day.day) == (1, 1),
+        'days_committed': 0, 'days_observed': 0,
+        'empty_unverified_days': 0, 'quarantined_rows': 0,
+        'scan_status': 'IN_PROGRESS',
+    }
+
+
+def commit_year_progress(storage, day: date, summary: dict) -> str:
+    """Idempotently advance per-year receipt; each day was already saved to R2.
+
+    If a prior attempt wrote this receipt but the global cursor failed,
+    only acknowledge the receipt, never double-increment the counters.
+    """
+    key = year_key(day.year)
+    progress = storage.read(key)
+    if progress is None:
+        progress = new_year_progress(day)
+    if not isinstance(progress, dict) or progress.get('schema') != YEAR_SCHEMA or progress.get('year') != day.year:
+        raise CollectionHold('YEAR_PROGRESS_SCHEMA_MISMATCH')
+    if summary.get('coverage') not in ('OBSERVED', 'EMPTY_UNVERIFIED'):
+        raise CollectionHold('DAY_COVERAGE_UNQUALIFIED')
+    nxt = exact_date(progress['next_date'])
+    after = day + timedelta(days=1)
+    if nxt == after:
+        return progress['scan_status']  # Previous attempt already committed.
+    if nxt != day or progress.get('scan_status') != 'IN_PROGRESS':
+        raise CollectionHold('YEAR_PROGRESS_CURSOR_CONFLICT')
+    progress['next_date'] = after.isoformat()
+    progress['days_committed'] += 1
+    progress['days_observed'] += (summary['coverage'] == 'OBSERVED')
+    progress['empty_unverified_days'] += (summary['coverage'] != 'OBSERVED')
+    progress['quarantined_rows'] += summary['quarantined_row_count']
+    if after.year != day.year:
+        if not progress['started_from_january_1']:
+            progress['scan_status'] = 'PARTIAL_YEAR_PRIOR_DAYS_UNVERIFIED'
+        elif progress['empty_unverified_days']:
+            progress['scan_status'] = 'SCANNED_YEAR_HAS_EMPTY_UNVERIFIED_DAYS'
+        else:
+            progress['scan_status'] = 'SCANNED_YEAR_DAYS_OBSERVED'
+    storage.write(key, progress)
+    return progress['scan_status']
 
 
 def limit_days(max_days: int) -> int:
@@ -207,7 +261,9 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
                  'days_processed': 0, 'days_with_updates': 0, 'empty_unverified_days': 0,
                  'quarantined_rows': 0}
     done = fetched = reused = 0
-    while cursor <= last and done < max_days:
+    active_year = cursor.year  # One run handles one year only, never crosses rollover.
+    year_scan_status = 'IN_PROGRESS'
+    while cursor <= last and done < max_days and cursor.year == active_year:
         key = key_for(cursor)
         existing = storage.read(key)
         if existing is not None:
@@ -230,6 +286,9 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
             doc = snapshot(cursor, payload, summary, observation)
             storage.write(key, doc)  # Save exact day BEFORE advancing cursor.
             fetched += 1
+        year_scan_status = commit_year_progress(storage, cursor, summary)
+        # Only advance the global cursor AFTER the day object and year receipt
+        # have both been durably persisted. Retry can safely reconcile a crash.
         state['days_processed'] += 1
         state['days_with_updates'] += summary['coverage'] == 'OBSERVED'
         state['empty_unverified_days'] += summary['coverage'] != 'OBSERVED'
@@ -244,6 +303,9 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
         if cursor <= last and done < max_days:
             sleeper(delay)
     return {'processed': done, 'fetched': fetched, 'reused': reused,
+            'year': active_year, 'year_state_key': year_key(active_year),
+            'year_scan_status': year_scan_status,
+            'year_boundary_reached': cursor.year != active_year,
             'next_date': state['next_date'], 'historical_through': last.isoformat(),
             'complete_through_target': cursor > last}
 
@@ -261,6 +323,8 @@ def main(argv=None):
             print('PNJ_HISTORY_PLAN_BEGIN')
             print('MODE=OFFLINE_NO_EGRESS_NO_R2')
             print('DAY_RANGE=2016-01-01..YESTERDAY_ASIA_HO_CHI_MINH')
+            print('MODE_STRATEGY=ONE_YEAR_PER_RUN_DAY_OBJECT_FIRST_YEAR_RECEIPT_SECOND_CURSOR_LAST')
+            print('YEAR_PROGRESS=metal/pnj/history-v1/years/YYYY/_progress.json')
             print('MAX_DAYS_PER_RUN=' + str(args.max_days))
             print('SLEEP_SECONDS=' + str(args.delay_seconds))
             print('PNJ_HISTORY_PLAN_END')
