@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -112,12 +113,30 @@ def inspect_payload(payload: object, day: date) -> dict:
     if not isinstance(payload, dict) or not isinstance(payload.get('locations'), list):
         raise CollectionHold('SCHEMA_UNKNOWN')
     products, prices, anomalies = 0, 0, 0
+    sjc_rows = ring_rows = invalid_price_rows = inverted_spread_rows = 0
+    integer_price = re.compile(r'(?:[0-9]{1,3}(?:\.[0-9]{3})+|[0-9]+)')
+
+    def parse_thousand_vnd(value):
+        if value is None or value == '':
+            return None
+        if not isinstance(value, str) or not integer_price.fullmatch(value):
+            raise ValueError('INVALID_PRICE_ENCODING')
+        amount = int(value.replace('.', ''))
+        if not 1_000 <= amount <= 1_000_000:
+            raise ValueError('PRICE_OUTSIDE_SAFETY_RANGE')
+        return amount
     for loc in payload['locations']:
         if not isinstance(loc, dict) or not isinstance(loc.get('gold_type'), list):
             raise CollectionHold('SCHEMA_LOCATION_CHANGED')
+        region = loc.get('name')
+        if not isinstance(region, str) or not region.strip():
+            raise CollectionHold('SCHEMA_REGION_NAME_CHANGED')
         for product in loc['gold_type']:
             if not isinstance(product, dict) or not isinstance(product.get('data'), list):
                 raise CollectionHold('SCHEMA_PRODUCT_CHANGED')
+            name = product.get('name')
+            if not isinstance(name, str) or not name.strip():
+                raise CollectionHold('SCHEMA_PRODUCT_NAME_CHANGED')
             products += 1
             for row in product['data']:
                 if not isinstance(row, dict):
@@ -135,9 +154,31 @@ def inspect_payload(payload: object, day: date) -> dict:
                 if stamp.date() != day:
                     anomalies += 1
                     continue
+                try:
+                    buy = parse_thousand_vnd(row.get('gia_mua'))
+                    sell = parse_thousand_vnd(row.get('gia_ban'))
+                    if buy is None and sell is None:
+                        raise ValueError('NO_QUOTE')
+                except ValueError:
+                    anomalies += 1
+                    invalid_price_rows += 1
+                    continue
+                if buy is not None and sell is not None and buy > sell:
+                    anomalies += 1
+                    inverted_spread_rows += 1
+                    continue
                 prices += 1
+                if region in ('TPHCM', 'Hà Nội', 'Đà Nẵng', 'Miền Tây', 'Tây Nguyên', 'Đông Nam Bộ') and name == 'SJC':
+                    sjc_rows += 1
+                if name == 'Nhẫn Trơn PNJ 999.9':
+                    ring_rows += 1
+    targets = 'BOTH' if sjc_rows and ring_rows else 'SJC_ONLY' if sjc_rows else 'RING_ONLY' if ring_rows else 'NEITHER'
     return {'locations': len(payload['locations']), 'products': products,
             'updates_with_valid_date': prices, 'quarantined_row_count': anomalies,
+            'invalid_price_rows': invalid_price_rows,
+            'inverted_spread_rows': inverted_spread_rows,
+            'sjc_valid_rows': sjc_rows, 'pnj_ring_valid_rows': ring_rows,
+            'target_coverage': targets,
             'coverage': 'OBSERVED' if prices else 'EMPTY_UNVERIFIED'}
 
 
