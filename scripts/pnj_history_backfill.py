@@ -25,8 +25,9 @@ ENDPOINT = 'https://edge-cf-api.pnj.io/ecom-frontend/v1/get-gold-price-history'
 PREFIX = 'metal/pnj/history-v1/'
 STATE_KEY = PREFIX + '_state.json'
 YEAR_SCHEMA = 'wa-pnj-year-progress-v1'
-MAX_DAYS_HARD = 24
+MAX_DAYS_HARD = 366  # At most one calendar year of historical dates per run
 MAX_BYTES = 128_000  # Per-day hard cap: <= ~0.5 GB across full 2016–2026 backfill.
+MAX_RUNTIME_SECONDS = 150 * 60  # Graceful stop before 180-minute hosted runner deadline.
 UTC7 = ZoneInfo('Asia/Ho_Chi_Minh')
 UA = 'WaveAlpha-MetalMarket-HistoryCollector/0.1 (single-threaded, fail-closed)'
 
@@ -293,7 +294,7 @@ def check_approvals():
 
 
 def backfill(storage, *, first: date = START_DATE, last: date | None = None,
-             max_days: int = 18, delay: float = 10.0, fetcher=fetch_day, sleeper=time.sleep,
+             max_days: int = 366, delay: float = 10.0, fetcher=fetch_day, sleeper=time.sleep,
              now=None) -> dict:
     max_days = limit_days(max_days)
     if delay < 8:
@@ -318,9 +319,14 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
                  'days_processed': 0, 'days_with_updates': 0, 'empty_unverified_days': 0,
                  'quarantined_rows': 0}
     done = fetched = reused = 0
+    started_at = time.monotonic()
+    time_budget_reached = False
     active_year = cursor.year  # One run handles one year only, never crosses rollover.
     year_scan_status = 'IN_PROGRESS'
     while cursor <= last and done < max_days and cursor.year == active_year:
+        if time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
+            time_budget_reached = True
+            break  # R2 day/year/global cursors were already saved and verified.
         key = key_for(cursor)
         existing = storage.read(key)
         if existing is not None:
@@ -363,6 +369,7 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
             'year': active_year, 'year_state_key': year_key(active_year),
             'year_scan_status': year_scan_status,
             'year_boundary_reached': cursor.year != active_year,
+            'time_budget_reached': time_budget_reached,
             'next_date': state['next_date'], 'historical_through': last.isoformat(),
             'complete_through_target': cursor > last}
 
@@ -370,7 +377,7 @@ def backfill(storage, *, first: date = START_DATE, last: date | None = None,
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--run', action='store_true', help='Requires two explicit approval flags')
-    p.add_argument('--max-days', type=int, default=18)
+    p.add_argument('--max-days', type=int, default=366)
     p.add_argument('--delay-seconds', type=float, default=10.0)
     args = p.parse_args(argv)
     try:
@@ -380,7 +387,8 @@ def main(argv=None):
             print('PNJ_HISTORY_PLAN_BEGIN')
             print('MODE=OFFLINE_NO_EGRESS_NO_R2')
             print('DAY_RANGE=2016-01-01..YESTERDAY_ASIA_HO_CHI_MINH')
-            print('MODE_STRATEGY=ONE_YEAR_PER_RUN_DAY_OBJECT_FIRST_YEAR_RECEIPT_SECOND_CURSOR_LAST')
+            print('MODE_STRATEGY=ONE_YEAR_PER_JOB_DAY_OBJECT_FIRST_YEAR_RECEIPT_SECOND_CURSOR_LAST')
+            print('MAX_RUNTIME_SECONDS=' + str(MAX_RUNTIME_SECONDS))
             print('YEAR_PROGRESS=metal/pnj/history-v1/years/YYYY/_progress.json')
             print('MAX_DAYS_PER_RUN=' + str(args.max_days))
             print('SLEEP_SECONDS=' + str(args.delay_seconds))
