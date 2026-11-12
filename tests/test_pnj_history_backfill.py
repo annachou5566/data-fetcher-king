@@ -101,4 +101,132 @@ class TestPNJ(unittest.TestCase):
         with self.assertRaises(ValueError):
             pnj.backfill(MemoryR2(),last=date(2016,1,1),delay=0)
 
+
+    def test_year_checkpoint_written_for_every_processed_day(self):
+        s = MemoryR2()
+        def fetch(d):
+            doc = sample(d.isoformat())
+            return doc, pnj.inspect_payload(doc, d)
+        out = pnj.backfill(s, first=date(2016, 12, 15), last=date(2016, 12, 16),
+                           max_days=2, delay=8, fetcher=fetch, sleeper=lambda _: None)
+        self.assertEqual(out['year'], 2016)
+        self.assertEqual(out['year_scan_status'], 'IN_PROGRESS')
+        y = s.read(pnj.year_key(2016))
+        self.assertEqual(y['days_committed'], 2)
+        self.assertEqual(y['days_observed'], 2)
+        self.assertEqual(y['next_date'], '2016-12-17')
+        self.assertFalse(y['started_from_january_1'])
+
+    def test_hard_year_boundary_then_next_run_moves_to_next_year(self):
+        s = MemoryR2()
+        calls = []
+        def fetch(d):
+            calls.append(d)
+            doc = sample(d.isoformat())
+            return doc, pnj.inspect_payload(doc, d)
+        first = pnj.backfill(s, first=date(2016, 12, 30), last=date(2017, 1, 2),
+                            max_days=10, delay=8, fetcher=fetch, sleeper=lambda _: None)
+        self.assertEqual(first['processed'], 2)
+        self.assertTrue(first['year_boundary_reached'])
+        self.assertEqual(first['next_date'], '2017-01-01')
+        self.assertEqual(first['year_scan_status'], 'PARTIAL_YEAR_PRIOR_DAYS_UNVERIFIED')
+        next_batch = pnj.backfill(s, first=date(2016, 12, 30), last=date(2017, 1, 2),
+                                  max_days=10, delay=8, fetcher=fetch, sleeper=lambda _: None)
+        self.assertEqual(next_batch['year'], 2017)
+        self.assertEqual(next_batch['processed'], 2)
+        self.assertTrue(next_batch['complete_through_target'])
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(s.read(pnj.year_key(2017))['days_committed'], 2)
+
+    def test_real_full_leap_year_receipt_without_gaps(self):
+        s = MemoryR2()
+        def fetch(d):
+            doc = sample(d.isoformat())
+            return doc, pnj.inspect_payload(doc, d)
+        out = None
+        for _ in range(16):  # 366 days / max 24 days per run => 16 bounded calls
+            out = pnj.backfill(s, first=date(2016, 1, 1), last=date(2017, 1, 2),
+                               max_days=24, delay=8, fetcher=fetch, sleeper=lambda _: None)
+            if out['year_boundary_reached']:
+                break
+        yr = s.read(pnj.year_key(2016))
+        self.assertEqual(yr['days_committed'], 366)
+        self.assertEqual(yr['days_observed'], 366)
+        self.assertEqual(yr['scan_status'], 'SCANNED_YEAR_DAYS_OBSERVED')
+        self.assertEqual(yr['next_date'], '2017-01-01')
+        self.assertTrue(yr['started_from_january_1'])
+        self.assertEqual(out['year'], 2016)
+        self.assertTrue(out['year_boundary_reached'])
+
+    def test_global_cursor_failure_after_year_receipt_is_idempotent(self):
+        s = MemoryR2(fail_state_once=True)
+        calls = []
+        def fetch(d):
+            calls.append(d)
+            doc = sample(d.isoformat())
+            return doc, pnj.inspect_payload(doc, d)
+        with self.assertRaises(pnj.CollectionHold):
+            pnj.backfill(s, first=date(2016, 12, 15), last=date(2016, 12, 15),
+                         max_days=1, delay=8, fetcher=fetch)
+        self.assertEqual(s.read(pnj.year_key(2016))['days_committed'], 1)
+        out = pnj.backfill(s, first=date(2016, 12, 15), last=date(2016, 12, 15),
+                           max_days=1, delay=8, fetcher=fetch)
+        self.assertEqual(out['reused'], 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(s.read(pnj.year_key(2016))['days_committed'], 1)
+
+    def test_year_receipt_failure_after_day_object_retry_has_no_refetch(self):
+        class FailYearOnce(MemoryR2):
+            fail_year = True
+            def write(self, key, doc):
+                if self.fail_year and key == pnj.year_key(2016):
+                    self.fail_year = False
+                    raise pnj.CollectionHold('SIMULATED_YEAR_WRITE_ERROR')
+                super().write(key, doc)
+        s = FailYearOnce()
+        calls = []
+        def fetch(d):
+            calls.append(d)
+            doc = sample(d.isoformat())
+            return doc, pnj.inspect_payload(doc, d)
+        with self.assertRaises(pnj.CollectionHold):
+            pnj.backfill(s, first=date(2016, 12, 15), last=date(2016, 12, 15),
+                         max_days=1, delay=8, fetcher=fetch)
+        self.assertIn(pnj.key_for(date(2016,12,15)), s.d)
+        out = pnj.backfill(s, first=date(2016, 12, 15), last=date(2016, 12, 15),
+                           max_days=1, delay=8, fetcher=fetch)
+        self.assertEqual(out['reused'], 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(s.read(pnj.year_key(2016))['days_committed'], 1)
+
+    def test_year_progress_cursor_conflict_fails_closed(self):
+        s = MemoryR2()
+        bad = pnj.new_year_progress(date(2016, 12, 15))
+        bad['next_date'] = '2016-12-20'
+        s.write(pnj.year_key(2016), bad)
+        def fetch(d):
+            doc = sample(d.isoformat())
+            return doc, pnj.inspect_payload(doc, d)
+        with self.assertRaisesRegex(pnj.CollectionHold, 'YEAR_PROGRESS_CURSOR_CONFLICT'):
+            pnj.backfill(s, first=date(2016, 12, 15), last=date(2016, 12, 15),
+                         max_days=1, delay=8, fetcher=fetch)
+        self.assertIsNone(s.read(pnj.STATE_KEY))
+
+    def test_empty_year_not_claimed_complete_coverage(self):
+        s = MemoryR2()
+        def fetch(d):
+            p = {'locations': []}
+            return p, pnj.inspect_payload(p, d)
+        for _ in range(16):
+            out = pnj.backfill(s, first=date(2016,1,1), last=date(2016,12,31),
+                               max_days=24, delay=8, fetcher=fetch, sleeper=lambda _: None)
+            if out['year_boundary_reached']:
+                break
+        yr = s.read(pnj.year_key(2016))
+        self.assertEqual(yr['scan_status'], 'SCANNED_YEAR_HAS_EMPTY_UNVERIFIED_DAYS')
+        self.assertEqual(yr['days_observed'], 0)
+        self.assertEqual(yr['empty_unverified_days'], 366)
+        self.assertTrue(yr['started_from_january_1'])
+
+
 if __name__ == '__main__': unittest.main()
