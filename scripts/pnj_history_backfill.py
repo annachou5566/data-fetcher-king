@@ -26,7 +26,7 @@ PREFIX = 'metal/pnj/history-v1/'
 STATE_KEY = PREFIX + '_state.json'
 YEAR_SCHEMA = 'wa-pnj-year-progress-v1'
 MAX_DAYS_HARD = 24
-MAX_BYTES = 2_000_000
+MAX_BYTES = 128_000  # Per-day hard cap: <= ~0.5 GB across full 2016–2026 backfill.
 UTC7 = ZoneInfo('Asia/Ho_Chi_Minh')
 UA = 'WaveAlpha-MetalMarket-HistoryCollector/0.1 (single-threaded, fail-closed)'
 
