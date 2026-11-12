@@ -1,0 +1,46 @@
+name: PNJ History — bounded backfill (OFF by default)
+
+on:
+  schedule:
+    - cron: '17 * * * *' # Once per hour, non-peak minute; only default branch triggers
+  workflow_dispatch:
+    inputs:
+      max_days:
+        description: 'Maximum historical dates to process (1–24)'
+        type: choice
+        options: ['1', '6', '12', '18', '24']
+        default: '18'
+
+# ONE owner; never run overlapping checkpoints or cancel a partial day.
+concurrency:
+  group: pnj-history-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pnj-history:
+    # OFF until access-method AND R2-namespace owner approvals are independently set.
+    if: ${{ vars.WA_PNJ_HISTORY_COLLECT_APPROVED == '1' && vars.WA_PNJ_HISTORY_R2_WRITE_APPROVED == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Targeted offline tests (no egress to PNJ)
+        run: python -m unittest discover -s tests -p 'test_pnj_history_backfill.py' -v
+      - name: Only R2 dependency
+        run: python -m pip install boto3
+      - name: PNJ backfill (bounded)
+        env:
+          PNJ_HISTORY_COLLECT_APPROVED: ${{ vars.WA_PNJ_HISTORY_COLLECT_APPROVED }}
+          PNJ_HISTORY_R2_WRITE_APPROVED: ${{ vars.WA_PNJ_HISTORY_R2_WRITE_APPROVED }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          MAX_DAYS_INPUT: ${{ inputs.max_days || '18' }}
+        run: python scripts/pnj_history_backfill.py --run --max-days "$MAX_DAYS_INPUT" --delay-seconds 10
