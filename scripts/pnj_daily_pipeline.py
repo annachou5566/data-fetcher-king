@@ -60,6 +60,30 @@ def persist_recheck(storage, day, payload, summary, *, now=None):
                 raise CollectionHold('IMMUTABLE_SOURCE_REVISION_CONFLICT')
         else:
             storage.write(rev_key, candidate)
+    previous = current.get('summary') or {}
+    # A transient PNJ partial/empty upstream response must not silently erase
+    # an already validated historical quote series. Preserve it for review,
+    # without moving the source pointer or clean daily view.
+    regressed = ((previous.get('coverage') == 'OBSERVED' and
+                  summary.get('coverage') != 'OBSERVED') or
+                 (previous.get('target_coverage') == 'BOTH' and
+                  summary.get('target_coverage') != 'BOTH'))
+    if regressed:
+        review = {'schema': 'wa-pnj-source-revision-review-v1',
+                  'date': day.isoformat(), 'candidate_key': rev_key,
+                  'candidate_sha256': fresh_sha, 'previous_key': current_key,
+                  'previous_sha256': current_sha,
+                  'reason': 'SOURCE_TARGET_COVERAGE_REGRESSION',
+                  'publication_status': 'INTERNAL_REVIEW_ONLY'}
+        review_key = ('metal/pnj/history-v1/review/' +
+                      f'{day:%Y/%m}/{day:%Y-%m-%d}/{fresh_sha}.json')
+        existing_review = storage.read(review_key)
+        if existing_review is not None and existing_review != review:
+            raise CollectionHold('SOURCE_REVIEW_RECEIPT_CONFLICT')
+        if existing_review is None:
+            storage.write(review_key, review)
+        return {'date': day.isoformat(), 'status': 'SOURCE_REVISION_HELD_FOR_REVIEW',
+                'clean_updated': False, 'coverage': previous.get('target_coverage')}
     latest_key = revision_pointer_key(day)
     pointer = {'schema':'wa-pnj-source-latest-v1', 'date':day.isoformat(),
                'object_key':rev_key, 'raw_sha256':fresh_sha,
