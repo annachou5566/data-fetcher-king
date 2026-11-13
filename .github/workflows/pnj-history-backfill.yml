@@ -1,17 +1,26 @@
-name: PNJ History — full-year daily checkpoint backfill
+name: PNJ — daily official quotes + clean V1
 
+# Asia/Ho_Chi_Minh is UTC+7: 03:13 UTC = 10:13 ICT.
+# GitHub Free cron may be delayed or skipped; one source cursor safely resumes.
 on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/pnj_clean_v1.py
+      - scripts/pnj_daily_pipeline.py
+      - tests/test_pnj_clean_v1.py
+      - .github/workflows/pnj-history-backfill.yml
   schedule:
-    - cron: '17 * * * *' # Once per hour, no year overlap; GitHub cron runs only on default branch
+    - cron: '13 3 * * *'
   workflow_dispatch:
     inputs:
-      max_days:
-        description: 'Historical dates per run (366 = scan one full year, saved day-by-day)'
+      task:
+        description: 'Run the safe daily catch-up, or finish historical clean V1'
         type: choice
-        options: ['1', '18', '120', '366']
-        default: '366'
+        options: ['daily', 'clean-history']
+        default: 'daily'
 
-# ONE owner; never run overlapping checkpoints or cancel a partial day.
+# Never run two PNJ source/clean jobs at once, including across triggers.
 concurrency:
   group: pnj-history-backfill
   cancel-in-progress: false
@@ -20,9 +29,7 @@ permissions:
   contents: read
 
 jobs:
-  pnj-history:
-    # Owner GO 2026-11-12 after real PNJ day/R2 readback and R2 Standard Free checks.
-    # Emergency pause: set repo variable WA_PNJ_HISTORY_PAUSED=1.
+  pnj:
     if: ${{ vars.WA_PNJ_HISTORY_PAUSED != '1' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -31,17 +38,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Targeted offline tests (no egress to PNJ)
-        run: python -m unittest discover -s tests -p 'test_pnj_history_backfill.py' -v
-      - name: Only R2 dependency
+      - name: Offline PNJ source, clean, and revision QA
+        run: |
+          python -m unittest discover -s tests -p 'test_pnj_history_backfill.py' -q
+          python -m unittest discover -s tests -p 'test_pnj_clean_v1.py' -q
+      - name: Existing R2 client dependency only
         run: python -m pip install boto3
-      - name: PNJ backfill (one year per run, save each day immediately)
+      - name: Historical clean build only, no PNJ egress
+        if: ${{ github.event_name == 'push' || inputs.task == 'clean-history' }}
         env:
+          PNJ_CLEAN_R2_WRITE_APPROVED: '1'
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/pnj_clean_v1.py --run --max-days 4000
+      - name: Daily source catch-up + three-day revision audit
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.task == 'daily') }}
+        env:
+          PNJ_DAILY_APPROVED: '1'
           PNJ_HISTORY_COLLECT_APPROVED: '1'
           PNJ_HISTORY_R2_WRITE_APPROVED: '1'
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          MAX_DAYS_INPUT: ${{ inputs.max_days || '366' }}
-        run: python scripts/pnj_history_backfill.py --run --max-days "$MAX_DAYS_INPUT" --delay-seconds 10
+        run: python scripts/pnj_daily_pipeline.py --run --max-catchup 7
+      - name: Materialize newly collected days into clean V1
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.task == 'daily') }}
+        env:
+          PNJ_CLEAN_R2_WRITE_APPROVED: '1'
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/pnj_clean_v1.py --run --max-days 4000
