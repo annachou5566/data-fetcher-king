@@ -58,7 +58,8 @@ class CleanTests(unittest.TestCase):
         self.assertEqual(c['quotes'][0]['sell_vnd_per_luong'],137900000)
         self.assertEqual(c['quotes'][1]['buy_vnd_per_luong'],136000000)
         self.assertEqual(len(c['quotes']),2)
-        self.assertNotIn('ohlc',str(c).lower())
+        for q in c['quotes']:
+            self.assertFalse(set(q).intersection({'open','high','low','close','volume'}))
 
     def test_inverted_spread_quarantined_without_repair(self):
         d=raw();d['locations'][0]['gold_type'][0]['data'][0]['gia_mua']='140.000'
