@@ -88,7 +88,22 @@ def run_daily(storage, *, max_catchup=MAX_CATCHUP, days_to_recheck=RECHECK_DAYS,
             continue
         # Confirm source already persisted before any fresh HTTP query.
         source_for_day(storage, day)
-        payload, summary = fetcher(day)
+        try:
+            payload, summary = fetcher(day)
+        except CollectionHold as exc:
+            # Source access denial applies to rechecks too, not only new days.
+            # Persist the same fail-closed pause as the historical backfiller.
+            if str(exc) in (
+                'UPSTREAM_HTTP_301', 'UPSTREAM_HTTP_302',
+                'UPSTREAM_HTTP_307', 'UPSTREAM_HTTP_308',
+                'UPSTREAM_HTTP_401', 'UPSTREAM_HTTP_403',
+                'UPSTREAM_HTTP_418', 'UPSTREAM_HTTP_429',
+                'UPSTREAM_HTTP_451',
+            ):
+                state['paused_reason'] = str(exc)
+                state['paused_date'] = day.isoformat()
+                storage.write('metal/pnj/history-v1/_state.json', state)
+            raise
         rechecks.append(persist_recheck(storage, day, payload, summary))
         if age > 0:
             sleeper(10.0)
