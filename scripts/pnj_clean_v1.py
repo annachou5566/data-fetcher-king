@@ -137,11 +137,25 @@ def normalize(day: date, source_doc: dict, source_key: str) -> dict:
                          'time_local': stamp.isoformat(),
                          'buy_vnd_per_luong': buy, 'sell_vnd_per_luong': sell}
                 if key in rows:
-                    if rows[key] != quote and rows[key] is not None:
+                    if rows[key] is None:
                         rejected.append({'symbol': symbol, 'region': region,
-                                         'updated_at': ts, 'reason': 'CONFLICTING_SAME_TIMESTAMP'})
+                                         'updated_at': ts,
+                                         'reason': 'CONFLICTING_SAME_TIMESTAMP'})
+                    elif rows[key] != quote:
+                        # Quarantine both sides: a source conflict must never
+                        # arbitrarily choose a winner as an accepted quote.
+                        rejected.append({'symbol': symbol, 'region': region,
+                                         'updated_at': ts,
+                                         'reason': 'CONFLICTING_SAME_TIMESTAMP',
+                                         'source_buy_vnd': rows[key]['buy_vnd_per_luong'],
+                                         'source_sell_vnd': rows[key]['sell_vnd_per_luong']})
+                        rejected.append({'symbol': symbol, 'region': region,
+                                         'updated_at': ts,
+                                         'reason': 'CONFLICTING_SAME_TIMESTAMP',
+                                         'source_buy_vnd': buy,
+                                         'source_sell_vnd': sell})
                         rows[key] = None
-                    elif rows[key] == quote:
+                    else:
                         duplicate_identical += 1
                 else:
                     rows[key] = quote
