@@ -357,4 +357,75 @@ class TestPNJ(unittest.TestCase):
             with patch.object(pnj,'fetch_day',side_effect=AssertionError('fetch must not be called')):
                 self.assertEqual(pnj.main([]),0)
 
+
+    def test_network_drop_retries_same_day_then_succeeds(self):
+        import urllib.error
+        class Reply:
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self, _): return json.dumps(sample('2023-09-06')).encode('utf-8')
+        class Opener:
+            def __init__(self): self.calls = []; self.reply = Reply()
+            def open(self, req, timeout):
+                self.calls.append(req.full_url)
+                if len(self.calls) <= 2:
+                    raise urllib.error.URLError('simulated timeout')
+                return self.reply
+        op = Opener()
+        delays = []
+        raw, s = pnj.fetch_day(date(2023,9,6), opener=op, sleeper=delays.append)
+        self.assertEqual(len(op.calls), 3)
+        self.assertEqual(len(set(op.calls)), 1)
+        self.assertIn('date=20230906', op.calls[0])
+        self.assertEqual(delays, [10.0,25.0])
+        self.assertEqual(s['target_coverage'], 'BOTH')
+        self.assertEqual(raw['locations'][0]['name'], 'TPHCM')
+
+    def test_network_drop_exhausts_only_three_attempts(self):
+        import urllib.error
+        class Opener:
+            def __init__(self): self.calls = 0
+            def open(self, req, timeout):
+                self.calls += 1
+                raise urllib.error.URLError('simulated dropped connection')
+        op=Opener(); sleeps=[]
+        with self.assertRaisesRegex(pnj.CollectionHold,'UPSTREAM_NETWORK_ERROR'):
+            pnj.fetch_day(date(2023,9,6),opener=op,sleeper=sleeps.append)
+        self.assertEqual(op.calls,3)
+        self.assertEqual(sleeps,[10.0,25.0])
+
+    def test_http_403_and_429_never_retry(self):
+        import urllib.error
+        for status in (403,429,503):
+            class Opener:
+                calls = 0
+                def open(self, req, timeout):
+                    self.calls+=1
+                    raise urllib.error.HTTPError(req.full_url,status,'blocked',{},None)
+            op=Opener(); sleeps=[]
+            with self.assertRaisesRegex(pnj.CollectionHold,'UPSTREAM_HTTP_'+str(status)):
+                pnj.fetch_day(date(2023,9,6),opener=op,sleeper=sleeps.append)
+            self.assertEqual(op.calls,1)
+            self.assertEqual(sleeps,[])
+
+    def test_network_failure_leaves_cursor_and_existing_days_intact(self):
+        storage=MemoryR2()
+        doc=sample('2023-09-05')
+        s=pnj.inspect_payload(doc,date(2023,9,5))
+        storage.write(pnj.key_for(date(2023,9,5)),
+                      pnj.snapshot(date(2023,9,5),doc,s,'2026-11-13T00:00:00+00:00'))
+        state={'schema':'wa-pnj-history-backfill-state-v1',
+               'next_date':'2023-09-06','days_processed':1,
+               'days_with_updates':1,'empty_unverified_days':0,'quarantined_rows':0}
+        storage.write(pnj.STATE_KEY,state)
+        def dropped(_): raise pnj.CollectionHold('UPSTREAM_NETWORK_ERROR')
+        with self.assertRaisesRegex(pnj.CollectionHold,'UPSTREAM_NETWORK_ERROR'):
+            pnj.backfill(storage,first=date(2023,9,5),last=date(2023,9,7),
+                         max_days=366,delay=10,fetcher=dropped)
+        self.assertEqual(storage.read(pnj.STATE_KEY),state)
+        self.assertIsNotNone(storage.read(pnj.key_for(date(2023,9,5))))
+        self.assertIsNone(storage.read(pnj.key_for(date(2023,9,6))))
+
 if __name__ == '__main__': unittest.main()
