@@ -228,5 +228,56 @@ class CleanTests(unittest.TestCase):
                 self.assertEqual(daily.main(['--run']),2)
 
 
+
+    def test_revision_revert_uses_original_immutable_day(self):
+        store=FakeR2();day=date(2026,11,12)
+        original=historical();store.write(pnj.key_for(day),original)
+        modified=raw();modified['locations'][0]['gold_type'][0]['data'][0]['gia_mua']='136.500'
+        daily.persist_recheck(store,day,modified,pnj.inspect_payload(modified,day))
+        result=daily.persist_recheck(store,day,raw(),original['summary'])
+        self.assertEqual(result['status'],'SOURCE_REVISION_SAVED')
+        source,key=clean.source_for_day(store,day)
+        self.assertEqual(key,pnj.key_for(day))
+        self.assertEqual(source,original)
+        self.assertEqual(store.read(clean.day_key(day))['source_sha256'],
+                         original['response_sha256'])
+
+    def test_source_denial_during_recheck_persists_pause(self):
+        store=FakeR2()
+        for day in (date(2026,11,10),date(2026,11,11),date(2026,11,12)):
+            store.write(pnj.key_for(day),historical(day.isoformat()))
+        store.write(pnj.STATE_KEY,{'schema':'wa-pnj-history-backfill-state-v1',
+                         'next_date':'2026-11-13','days_processed':3969,
+                         'days_with_updates':3357,'empty_unverified_days':612,
+                         'quarantined_rows':243})
+        def denied(_):raise pnj.CollectionHold('UPSTREAM_HTTP_429')
+        with self.assertRaisesRegex(pnj.CollectionHold,'UPSTREAM_HTTP_429'):
+            daily.run_daily(store,fetcher=denied,date_now=lambda:date(2026,11,13),
+                            sleeper=lambda _:None)
+        final=store.read(pnj.STATE_KEY)
+        self.assertEqual(final['paused_reason'],'UPSTREAM_HTTP_429')
+        self.assertEqual(final['paused_date'],'2026-11-10')
+        self.assertEqual(final['next_date'],'2026-11-13')
+        with self.assertRaisesRegex(pnj.CollectionHold,'STATE_PAUSED_UPSTREAM_HTTP_429'):
+            daily.run_daily(store,fetcher=denied,date_now=lambda:date(2026,11,13),
+                            sleeper=lambda _:None)
+
+    def test_network_drop_during_recheck_does_not_pause_or_modify_raw(self):
+        store=FakeR2()
+        for day in (date(2026,11,10),date(2026,11,11),date(2026,11,12)):
+            store.write(pnj.key_for(day),historical(day.isoformat()))
+        state={'schema':'wa-pnj-history-backfill-state-v1',
+               'next_date':'2026-11-13','days_processed':3969,
+               'days_with_updates':3357,'empty_unverified_days':612,
+               'quarantined_rows':243}
+        store.write(pnj.STATE_KEY,state)
+        def failed(_):raise pnj.CollectionHold('UPSTREAM_NETWORK_ERROR')
+        with self.assertRaisesRegex(pnj.CollectionHold,'UPSTREAM_NETWORK_ERROR'):
+            daily.run_daily(store,fetcher=failed,date_now=lambda:date(2026,11,13),
+                            sleeper=lambda _:None)
+        self.assertEqual(store.read(pnj.STATE_KEY),state)
+        self.assertIsNone(store.read(clean.revision_pointer_key(date(2026,11,10))))
+
+
 if __name__=='__main__':
     unittest.main()
