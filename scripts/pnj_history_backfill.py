@@ -200,25 +200,39 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch_day(day: date, *, opener=None):
+NETWORK_RETRY_DELAYS = (10.0, 25.0)  # Only transport errors; HTTP 4xx/429 NEVER retried.
+
+
+def fetch_day(day: date, *, opener=None, sleeper=time.sleep):
     opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     url = ENDPOINT + '?date=' + day.strftime('%Y%m%d')
     req = urllib.request.Request(url, headers={'Accept': 'application/json', 'User-Agent': UA})
-    try:
-        with opener.open(req, timeout=18) as resp:
-            if resp.status != 200:
-                raise CollectionHold('UPSTREAM_NON_200')
-            content_type = resp.headers.get('Content-Type', '').lower()
-            if 'json' not in content_type:
-                raise CollectionHold('UPSTREAM_NOT_JSON')
-            raw = resp.read(MAX_BYTES + 1)
-            if len(raw) > MAX_BYTES:
-                raise CollectionHold('UPSTREAM_RESPONSE_TOO_LARGE')
-    except urllib.error.HTTPError as exc:
-        # No bypass, proxies, cookie impersonation, retries on access denial or rate limits.
-        raise CollectionHold('UPSTREAM_HTTP_' + str(exc.code)) from None
-    except (urllib.error.URLError, TimeoutError):
-        raise CollectionHold('UPSTREAM_NETWORK_ERROR') from None
+    # No concurrency, host switching, bypass or retry on any HTTP response.
+    # A transport drop may be retried at most twice for the SAME calendar date.
+    for attempt in range(len(NETWORK_RETRY_DELAYS) + 1):
+        try:
+            with opener.open(req, timeout=18) as resp:
+                if resp.status != 200:
+                    raise CollectionHold('UPSTREAM_NON_200')
+                content_type = resp.headers.get('Content-Type', '').lower()
+                if 'json' not in content_type:
+                    raise CollectionHold('UPSTREAM_NOT_JSON')
+                raw = resp.read(MAX_BYTES + 1)
+                if len(raw) > MAX_BYTES:
+                    raise CollectionHold('UPSTREAM_RESPONSE_TOO_LARGE')
+            break
+        except urllib.error.HTTPError as exc:
+            # Fail closed on 301/302, 401/403, 429, 5xx, or any HTTP status.
+            raise CollectionHold('UPSTREAM_HTTP_' + str(exc.code)) from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt >= len(NETWORK_RETRY_DELAYS):
+                raise CollectionHold('UPSTREAM_NETWORK_ERROR') from None
+            delay = NETWORK_RETRY_DELAYS[attempt]
+            print('UPSTREAM_NETWORK_RETRY date=' + day.isoformat()
+                  + ' retry=' + str(attempt + 1)
+                  + '/' + str(len(NETWORK_RETRY_DELAYS))
+                  + ' sleep_seconds=' + str(delay), flush=True)
+            sleeper(delay)
     try:
         payload = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError):
