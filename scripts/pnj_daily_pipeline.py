@@ -17,7 +17,7 @@ from pnj_history_backfill import (
 )
 from pnj_clean_v1 import (
     canonical_hash, materialize_day, revision_pointer_key,
-    source_for_day, snapshot_key
+    source_for_day, validate_source
 )
 
 RECHECK_DAYS = 3
@@ -43,13 +43,23 @@ def persist_recheck(storage, day, payload, summary, *, now=None):
                 'clean_updated':bool(updated), 'coverage':clean['target_status']}
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     candidate = snapshot(day, payload, summary, stamp)
-    rev_key = revision_key(day, fresh_sha)
-    old = storage.read(rev_key)
-    if old is not None:
-        if old.get('schema') != 'wa-pnj-history-raw-v1' or old.get('response_sha256') != fresh_sha:
-            raise CollectionHold('IMMUTABLE_SOURCE_REVISION_CONFLICT')
+    baseline_key = key_for(day)
+    baseline = storage.read(baseline_key)
+    if baseline is None:
+        raise CollectionHold('IMMUTABLE_BASELINE_MISSING')
+    if baseline.get('response_sha256') == fresh_sha:
+        # PNJ returned to the original source version: use its existing
+        # immutable object instead of writing a duplicate revision.
+        rev_key = baseline_key
     else:
-        storage.write(rev_key, candidate)
+        rev_key = revision_key(day, fresh_sha)
+        old = storage.read(rev_key)
+        if old is not None:
+            validate_source(old, day)
+            if old.get('response_sha256') != fresh_sha:
+                raise CollectionHold('IMMUTABLE_SOURCE_REVISION_CONFLICT')
+        else:
+            storage.write(rev_key, candidate)
     latest_key = revision_pointer_key(day)
     pointer = {'schema':'wa-pnj-source-latest-v1', 'date':day.isoformat(),
                'object_key':rev_key, 'raw_sha256':fresh_sha,
