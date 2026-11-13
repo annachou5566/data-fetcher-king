@@ -279,5 +279,38 @@ class CleanTests(unittest.TestCase):
         self.assertIsNone(store.read(clean.revision_pointer_key(date(2026,11,10))))
 
 
+
+    def test_source_empty_regression_is_archived_but_not_promoted(self):
+        store=FakeR2();day=date(2026,11,12)
+        original=historical()
+        store.write(pnj.key_for(day),original)
+        clean.materialize_day(store,day)
+        before=store.read(clean.day_key(day))
+        partial={'locations':[]}
+        summary=pnj.inspect_payload(partial,day)
+        result=daily.persist_recheck(store,day,partial,summary)
+        self.assertEqual(result['status'],'SOURCE_REVISION_HELD_FOR_REVIEW')
+        self.assertFalse(result['clean_updated'])
+        self.assertEqual(store.read(clean.day_key(day)),before)
+        self.assertEqual(store.read(pnj.key_for(day)),original)
+        self.assertIsNone(store.read(clean.revision_pointer_key(day)))
+        review_paths=[x for x in store.objects if '/review/' in x]
+        self.assertEqual(len(review_paths),1)
+        self.assertEqual(store.read(review_paths[0])['reason'],
+                         'SOURCE_TARGET_COVERAGE_REGRESSION')
+
+    def test_partial_ring_regression_is_not_auto_promoted(self):
+        store=FakeR2();day=date(2026,11,12)
+        original=historical();store.write(pnj.key_for(day),original)
+        partial=raw()
+        partial['locations'][2]['gold_type']=[]
+        summary=pnj.inspect_payload(partial,day)
+        self.assertEqual(summary['target_coverage'],'SJC_ONLY')
+        result=daily.persist_recheck(store,day,partial,summary)
+        self.assertEqual(result['status'],'SOURCE_REVISION_HELD_FOR_REVIEW')
+        self.assertIsNone(store.read(clean.revision_pointer_key(day)))
+        self.assertEqual(store.read(pnj.key_for(day)),original)
+
+
 if __name__=='__main__':
     unittest.main()
