@@ -7,7 +7,7 @@ from history24h_cutover import plan
 from alpha_events_official_onehour import (
     OfficialConfirmationHold, plan_qualified_official_onehour, qualify_confirmation,
 )
-from official_history_policy import reconcile_authenticated
+from official_history_policy import reconcile_authenticated, OfficialHistoryHold
 
 UTC = timezone.utc
 ID = "ae:0123456789abcdef01234567"
@@ -181,7 +181,7 @@ class OfficialOneHour(unittest.TestCase):
         row = {**BASE, "officialConfirmation": copy.deepcopy(PROOF)}
         old = {**BASE, "officialConfirmation": copy.deepcopy(PROOF)}
         old["officialConfirmation"]["binding"]["sourceMessageId"] = 1999
-        with self.assertRaises(OfficialConfirmationHold):
+        with self.assertRaises(OfficialHistoryHold):
             make_run(row=row, prior_all=[LEGACY, old], prior_history=[LEGACY])
 
 
