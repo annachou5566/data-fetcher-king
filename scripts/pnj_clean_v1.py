@@ -212,6 +212,20 @@ def build_history(storage, *, first=START_DATE, last=None, max_days=MAX_BATCH,
     last = last or (today_vn() - timedelta(days=1))
     if last > today_vn() - timedelta(days=1) or first < START_DATE:
         raise CollectionHold('HISTORY_CLEAN_DATE_RANGE')
+    # Clean is strictly downstream of the source collector. When today's
+    # daily collection has not yet run, do not request a missing yesterday
+    # object or incorrectly mark the hosted job as failed.
+    raw_state = storage.read('metal/pnj/history-v1/_state.json')
+    if (not isinstance(raw_state, dict) or
+            raw_state.get('schema') != 'wa-pnj-history-backfill-state-v1'):
+        raise CollectionHold('HISTORY_SOURCE_CURSOR_UNAVAILABLE')
+    try:
+        source_next = exact_date(raw_state['next_date'])
+    except (KeyError, TypeError, ValueError):
+        raise CollectionHold('HISTORY_SOURCE_CURSOR_INVALID') from None
+    if source_next < START_DATE or source_next > today_vn() + timedelta(days=1):
+        raise CollectionHold('HISTORY_SOURCE_CURSOR_OUTSIDE_RANGE')
+    last = min(last, source_next - timedelta(days=1))
     state = storage.read(STATE_KEY)
     if state is None:
         state = {'schema': 'wa-pnj-clean-progress-v1',
