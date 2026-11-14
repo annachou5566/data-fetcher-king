@@ -15,6 +15,7 @@ SOURCE = "telegram:binance_wallet_announcements:1866"
 DIGEST = "a" * 64
 BASE = {
     "id": ID, "symbol": "ABC", "event_time": "2026-10-17T03:00:00.000Z",
+    "chain_id": "56", "contract_address": "0x" + "a"*40,
     "status": "PREDICTED", "firstActiveAt": "2026-10-15T00:00:00.000Z",
 }
 PROOF = {
@@ -34,6 +35,13 @@ PROOF = {
         "sourceIdentity": SOURCE, "sourceDigest": DIGEST,
         "confirmedAction": "AIRDROP", "noticeStage": "CONFIRMED",
         "preAnnouncement": False,
+        # Offline-only synthetic terminal; R26R runtime currently emits CLAIM_OPEN.
+        "lifecycleAction": "AIRDROP_DISTRIBUTION_COMPLETED",
+        "originalTerminalVerified": True,
+        "terminalSourceIdentity": SOURCE, "terminalSourceDigest": DIGEST,
+        "verifiedChainId": "56", "verifiedTokenContract": "0x" + "a"*40,
+        "verifiedTokenSource": "BINANCE_ALPHA_TOKEN_MASTER",
+        "eventTime": "2026-10-17T03:00:00.000Z",
     }
 }
 LEGACY = {"id": "old-legacy", "symbol": "OLD", "status": "ended",
@@ -76,6 +84,30 @@ class OfficialOneHour(unittest.TestCase):
         self.assertEqual(b["official_overdue"], [ID])
         self.assertEqual(b["official_promoted"], [ID])
 
+    def test_claim_open_never_archives(self):
+        proof = copy.deepcopy(PROOF)
+        proof["verifiedSubject"]["lifecycleAction"] = "CLAIM_OPEN"
+        row = {**BASE, "officialConfirmation": proof}
+        result = make_run(row=row)
+        self.assertEqual(result["official_promoted"], [])
+        self.assertEqual(result["history"], [LEGACY])
+
+    def test_missing_terminal_lifecycle_never_archives(self):
+        proof = copy.deepcopy(PROOF)
+        proof["verifiedSubject"].pop("lifecycleAction")
+        result = make_run(row={**BASE, "officialConfirmation": proof})
+        self.assertEqual(result["official_promoted"], [])
+
+    def test_terminal_original_or_token_mismatch_holds(self):
+        for key, value in (("originalTerminalVerified", False),
+                           ("terminalSourceDigest", "bad"),
+                           ("verifiedChainId", "1"),
+                           ("eventTime", "2026-10-17T04:00:00.000Z")):
+            proof = copy.deepcopy(PROOF)
+            proof["verifiedSubject"][key] = value
+            with self.assertRaises(OfficialConfirmationHold, msg=key):
+                make_run(row={**BASE, "officialConfirmation": proof})
+
     def test_external_advisory_cannot_qualify(self):
         proof = copy.deepcopy(PROOF)
         proof["sourceClass"] = "APPROVED_EXTERNAL_ADVISORY_RECEIPT"
@@ -117,6 +149,9 @@ class OfficialOneHour(unittest.TestCase):
             proof = copy.deepcopy(PROOF)
             proof["binding"]["eventType"] = "ALPHA_EVENT"
             proof["verifiedSubject"]["confirmedAction"] = action
+            proof["verifiedSubject"]["lifecycleAction"] = {
+                "LISTING": "LISTING_LIVE", "TGE": "TGE_COMPLETED",
+            }[action]
             self.assertEqual(
                 make_run(row={**BASE, "officialConfirmation": proof})["official_promoted"],
                 [ID],
