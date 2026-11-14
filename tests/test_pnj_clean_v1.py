@@ -146,6 +146,8 @@ class CleanTests(unittest.TestCase):
                     raise pnj.CollectionHold('SIMULATED_STATE_WRITE_FAILURE')
                 return super().write(key,doc)
         s=FailState()
+        s.write(pnj.STATE_KEY,{'schema':'wa-pnj-history-backfill-state-v1',
+                               'next_date':'2016-01-03'})
         for x in (date(2016,1,1),date(2016,1,2)):
             s.write(pnj.key_for(x),historical(x.isoformat()))
         with self.assertRaisesRegex(pnj.CollectionHold,'SIMULATED_STATE_WRITE_FAILURE'):
@@ -158,6 +160,8 @@ class CleanTests(unittest.TestCase):
 
     def test_history_catches_up_with_seeded_two_days(self):
         s=FakeR2()
+        s.write(pnj.STATE_KEY,{'schema':'wa-pnj-history-backfill-state-v1',
+                               'next_date':'2016-01-03'})
         for x in (date(2016,1,1),date(2016,1,2)):
             s.write(pnj.key_for(x),historical(x.isoformat()))
         out=clean.build_history(s,last=date(2016,1,2),max_days=4000)
@@ -310,6 +314,56 @@ class CleanTests(unittest.TestCase):
         self.assertEqual(result['status'],'SOURCE_REVISION_HELD_FOR_REVIEW')
         self.assertIsNone(store.read(clean.revision_pointer_key(day)))
         self.assertEqual(store.read(pnj.key_for(day)),original)
+
+
+
+    def test_clean_stops_at_last_committed_source_day_not_uncollected_yesterday(self):
+        s=FakeR2()
+        # Exactly the live production state on 2026-11-14 at 09:10 ICT.
+        s.write(pnj.STATE_KEY,{'schema':'wa-pnj-history-backfill-state-v1',
+                               'next_date':'2026-11-13','days_processed':3969})
+        old={'schema':'wa-pnj-clean-progress-v1',
+             'next_date':'2026-11-13','days_done':3969,
+             'days_with_both_targets':3303,'days_without_target':617}
+        s.write(clean.STATE_KEY,old)
+        count=len(s.writes)
+        with patch.object(clean,'today_vn',return_value=date(2026,11,14)):
+            out=clean.build_history(s,last=date(2026,11,13),max_days=4000)
+        self.assertTrue(out['caught_up'])
+        self.assertEqual(out['processed'],0)
+        self.assertEqual(out['target_through'],'2026-11-12')
+        self.assertEqual(out['next_date'],'2026-11-13')
+        self.assertEqual(s.read(clean.STATE_KEY),old)
+        self.assertEqual(len(s.writes),count)
+
+    def test_clean_resumes_exactly_one_new_day_after_source_catches_up(self):
+        s=FakeR2()
+        s.write(pnj.STATE_KEY,{'schema':'wa-pnj-history-backfill-state-v1',
+                               'next_date':'2026-11-14','days_processed':3970})
+        s.write(pnj.key_for(date(2026,11,13)),historical('2026-11-13'))
+        s.write(clean.STATE_KEY,{'schema':'wa-pnj-clean-progress-v1',
+             'next_date':'2026-11-13','days_done':3969,
+             'days_with_both_targets':3303,'days_without_target':617})
+        with patch.object(clean,'today_vn',return_value=date(2026,11,14)):
+            out=clean.build_history(s,last=date(2026,11,13),max_days=4000)
+        self.assertTrue(out['caught_up'])
+        self.assertEqual(out['processed'],1)
+        self.assertEqual(out['target_through'],'2026-11-13')
+        self.assertEqual(out['next_date'],'2026-11-14')
+        self.assertEqual(s.read(clean.STATE_KEY)['days_done'],3970)
+        self.assertIsNotNone(s.read(clean.day_key(date(2026,11,13))))
+
+    def test_missing_or_invalid_source_cursor_holds_without_writes(self):
+        for malformed in (None,{'schema':'bad','next_date':'2026-11-13'},
+                          {'schema':'wa-pnj-history-backfill-state-v1',
+                           'next_date':'not-a-date'}):
+            s=FakeR2()
+            if malformed is not None:s.write(pnj.STATE_KEY,malformed)
+            before=len(s.writes)
+            with patch.object(clean,'today_vn',return_value=date(2026,11,14)):
+                with self.assertRaisesRegex(pnj.CollectionHold,'HISTORY_SOURCE_CURSOR'):
+                    clean.build_history(s,last=date(2026,11,13))
+            self.assertEqual(len(s.writes),before)
 
 
 if __name__=='__main__':
