@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 from history24h_cutover import plan
 from alpha_events_official_onehour import (
-    OfficialConfirmationHold, plan_qualified_official_onehour,
+    OfficialConfirmationHold, plan_qualified_official_onehour, qualify_confirmation,
 )
+from official_history_policy import reconcile_authenticated
 
 UTC = timezone.utc
 ID = "ae:0123456789abcdef01234567"
@@ -42,6 +43,9 @@ PROOF = {
         "verifiedChainId": "56", "verifiedTokenContract": "0x" + "a"*40,
         "verifiedTokenSource": "BINANCE_ALPHA_TOKEN_MASTER",
         "eventTime": "2026-10-17T03:00:00.000Z",
+        "officialTerms": {
+            "amount_per_user": 270, "points_threshold": 256, "points_cost": 15,
+        },
     }
 }
 LEGACY = {"id": "old-legacy", "symbol": "OLD", "status": "ended",
@@ -51,13 +55,20 @@ LEGACY = {"id": "old-legacy", "symbol": "OLD", "status": "ended",
 def make_run(now=T, row=None, prior_all=None, prior_history=None):
     allrows = [LEGACY] if prior_all is None else prior_all
     histrows = [LEGACY] if prior_history is None else prior_history
-    return plan_qualified_official_onehour(
+    selected = copy.deepcopy(row if row is not None else BASE)
+    # Synthetic Canonical readback fixture, NOT public R2 authority or real RPC.
+    canonical = [copy.deepcopy(selected)] if selected.get("officialConfirmation") else []
+    return reconcile_authenticated(
         plan(allrows, histrows, [], now),
-        [copy.deepcopy(row if row is not None else BASE)], now,
+        [selected], now, qualify_confirmation, durable_canonical_rows=canonical,
     )
 
 
 class OfficialOneHour(unittest.TestCase):
+    def test_active_only_planner_is_retired(self):
+        with self.assertRaisesRegex(OfficialConfirmationHold, "ACTIVE_ONLY_HISTORY_AUTHORITY_RETIRED"):
+            plan_qualified_official_onehour({}, [], T)
+
     def test_five_day_old_prediction_never_archives(self):
         result = make_run(T + timedelta(days=5))
         self.assertEqual(result["official_promoted"], [])
