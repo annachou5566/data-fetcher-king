@@ -28,6 +28,11 @@ SHA = re.compile(r'[0-9a-f]{64}\Z')
 EVM = re.compile(r'0x[0-9a-f]{40}\Z')
 CHANNELS = {'BINANCE_WALLET':'binance_wallet_announcements',
             'BINANCE_ANNOUNCEMENTS':'binance_announcements'}
+# Original Binance messages must explicitly certify a terminal transition;
+# claim opening alone remains nonterminal. The existing R26R release only
+# emits CLAIM_OPEN; no terminal will be manufactured by this reader.
+TERMINAL_LIFECYCLE = {'AIRDROP':'AIRDROP_DISTRIBUTION_COMPLETED',
+                      'LISTING':'LISTING_LIVE','TGE':'TGE_COMPLETED'}
 MAX_BYTES = 1024 * 1024
 
 class CanonicalReadHold(RuntimeError):
@@ -75,13 +80,26 @@ def _check_provenance(row):
         p.get('receiptKind')!='BINANCE_OFFICIAL_OBSERVATION' or
         p.get('sourceClass')!='APPROVED_BINANCE_OFFICIAL_RECEIPT' or
         b.get('relevant') is not True or b.get('relevanceReason')!='MATCH' or
-        b.get('eventType')!='AIRDROP'):
+        b.get('eventType') not in ('AIRDROP', 'ALPHA_EVENT')):
         hold('SOURCE_CUSTODY')
+    action=s.get('confirmedAction')
+    lifecycle=s.get('lifecycleAction')
     if (s.get('productFamily')!='ALPHA_EVENTS' or s.get('competitionExcluded') is not True or
         s.get('canonicalId')!=c.get('canonicalId') or s.get('symbol')!=c.get('symbol') or
         s.get('sourceIdentity')!=b['sourceIdentity'] or s.get('sourceDigest')!=b['sourceDigest'] or
         s.get('noticeStage')!='CONFIRMED' or s.get('preAnnouncement') is not False or
-        s.get('confirmedAction')!='AIRDROP' or s.get('lifecycleAction')!='CLAIM_OPEN'):
+        action not in TERMINAL_LIFECYCLE):
+        hold('OFFICIAL_ACTION_UNQUALIFIED')
+    claim_open = lifecycle=='CLAIM_OPEN' and action=='AIRDROP' and b['eventType']=='AIRDROP'
+    terminal = lifecycle==TERMINAL_LIFECYCLE[action] and (
+        (action=='AIRDROP' and b['eventType']=='AIRDROP') or
+        (action!='AIRDROP' and b['eventType']=='ALPHA_EVENT'))
+    if terminal:
+        if (s.get('originalTerminalVerified') is not True or
+            s.get('terminalSourceIdentity') != b['sourceIdentity'] or
+            s.get('terminalSourceDigest') != b['sourceDigest']):
+            hold('TERMINAL_ORIGINAL_UNVERIFIED')
+    if not (claim_open or terminal):
         hold('OFFICIAL_ACTION_UNQUALIFIED')
     contract=str(c.get('contractAddress') or '').lower()
     chain=str(s.get('verifiedChainId') or '')
@@ -108,7 +126,7 @@ def _check_provenance(row):
     if any(r is not matches[0] and isinstance(r,dict) and (r.get('receiptId')==rid or r.get('sourceIdentity')==b['sourceIdentity']) for r in refs):
         hold('DUPLICATE_RECEIPT')
     return {'id':c['canonicalId'],'symbol':c['symbol'],'project_name':c.get('projectName'),
-        'event_time':c['eventTime'],'event_type':'AIRDROP',
+        'event_time':c['eventTime'],'event_type':c.get('eventType') or action,
         'contract_address':contract,'chain_id':chain,
         'officialConfirmation':p}
 
