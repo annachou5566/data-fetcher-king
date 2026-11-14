@@ -2135,6 +2135,26 @@ def main():
                 _, fresh = history24h_snapshot(r2, R2_BUCKET_NAME, key)
                 if fresh != etag:
                     raise RuntimeError("WA_AE_LITE_SCHEDULE_HOLD_ACTIVE_VERSION_MOVED")
+        # Official claim-open enrichment: only the existing All/History writer,
+        # never a second writer or a completion/Active retirement assertion.
+        # Requires two explicit gates; defaults OFF with missing credentials.
+        if os.getenv("WA_ALPHA_EVENTS_OFFICIAL_CLAIM_OPEN_ENABLED", "0") == "1":
+            if os.getenv("WA_ALPHA_EVENTS_OFFICIAL_CLAIM_OPEN_OWNER_APPROVED", "0") != "1":
+                raise RuntimeError("WA_OFFICIAL_CLAIM_OPEN_HOLD_OWNER_GATE")
+            if history24h_enabled or not lite_schedule_enabled:
+                raise RuntimeError("WA_OFFICIAL_CLAIM_OPEN_HOLD_WRITER_MODE")
+            from canonical_rpc_readonly import read_authenticated_canonical_rows
+            from official_history_lifecycle import reconcile_authenticated_claim_open
+            from alpha_events_official_onehour import qualify_confirmation
+            canonical_rows = read_authenticated_canonical_rows(
+                publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY", ""),
+                machine_read_key=os.getenv("WA_ALPHA_EVENTS_SYNC_MACHINE_READ_KEY", ""),
+            )
+            proposed = reconcile_authenticated_claim_open(
+                proposed, [], datetime.now(timezone.utc), qualify_confirmation,
+                durable_canonical_rows=canonical_rows,
+            )
+            ensure_all_contains_existing_history(proposed["all"], proposed["history"])
         # CAS All then History, independent readbacks, no Active writes.
         # Signed real completion is NOT required for status=expired_unverified.
         ack = history24h_publish_pair(
