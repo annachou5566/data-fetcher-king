@@ -19,6 +19,45 @@ SOURCE_CHANNEL = {
     "BINANCE_ANNOUNCEMENTS": "binance_announcements",
 }
 HOUR = timedelta(hours=1)
+# A confirmed action can be nonterminal (e.g. verified claim opening).
+# These terminal states may ONLY originate from the authenticated original
+# Binance content classifier with the exact durable Canonical receipt.
+TERMINAL_LIFECYCLE = {
+    "AIRDROP": "AIRDROP_DISTRIBUTION_COMPLETED",
+    "LISTING": "LISTING_LIVE",
+    "TGE": "TGE_COMPLETED",
+}
+
+
+def _terminal_verified(row, binding, subject, action):
+    lifecycle = subject.get("lifecycleAction")
+    if lifecycle in (None, "CLAIM_OPEN"):
+        # The currently deployed R26R Oracle CAS only emits CLAIM_OPEN.
+        # Never certify event completion from noticeStage=CONFIRMED alone.
+        return False
+    if lifecycle != TERMINAL_LIFECYCLE[action]:
+        hold("UNQUALIFIED_TERMINAL_ACTION")
+    if (subject.get("originalTerminalVerified") is not True
+            or subject.get("terminalSourceIdentity") != binding.get("sourceIdentity")
+            or subject.get("terminalSourceDigest") != binding.get("sourceDigest")):
+        hold("TERMINAL_ORIGINAL_CUSTODY")
+    if (not isinstance(row.get("chain_id"), str)
+            or not re.fullmatch(r"[1-9][0-9]*", row["chain_id"])
+            or subject.get("verifiedChainId") != row["chain_id"]
+            or not isinstance(row.get("contract_address"), str)
+            or not re.fullmatch(r"0x[0-9a-fA-F]{40}", row["contract_address"])
+            or not isinstance(subject.get("verifiedTokenContract"), str)
+            or subject["verifiedTokenContract"].lower() != row["contract_address"].lower()
+            or subject.get("verifiedTokenSource") != "BINANCE_ALPHA_TOKEN_MASTER"):
+        hold("TERMINAL_TOKEN_CONTRACT")
+    try:
+        if (not isinstance(row.get("event_time"), str)
+                or not isinstance(subject.get("eventTime"), str)
+                or _stamp(row["event_time"]) != _stamp(subject["eventTime"])):
+            hold("TERMINAL_ROUND_MISMATCH")
+    except (ValueError, TypeError, OverflowError):
+        hold("TERMINAL_ROUND_MISMATCH")
+    return True
 
 
 class OfficialConfirmationHold(RuntimeError):
@@ -86,9 +125,10 @@ def qualify_confirmation(row, now):
     observed = _stamp(b.get("observedAt"))
     if published > observed or observed > now:
         hold("OFFICIAL_CLOCK")
+    terminal = _terminal_verified(row, b, sub, action)
     return {"published": published, "deadline": published + HOUR,
             "sourceIdentity": b["sourceIdentity"], "receiptId": proof["receiptId"],
-            "action": action}
+            "action": action, "terminal": terminal}
 
 
 def plan_qualified_official_onehour(plan_value, active_rows, now):
@@ -117,8 +157,8 @@ def plan_qualified_official_onehour(plan_value, active_rows, now):
             hold("ACTIVE_DUPLICATE_OR_ID")
         seen.add(cid)
         confirmation = qualify_confirmation(row, now)
-        if confirmation is None:
-            continue  # Unconfirmed forecast remains Active; never archive.
+        if confirmation is None or not confirmation["terminal"]:
+            continue  # Claim-open, teaser and unconfirmed remain nonterminal.
         old_all = all_rows[all_ids[cid]] if cid in all_ids else None
         old_history = history_rows[history_ids[cid]] if cid in history_ids else None
         for prev in (old_all, old_history):
