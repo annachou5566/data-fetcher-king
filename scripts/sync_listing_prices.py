@@ -1878,8 +1878,11 @@ def main():
             plan_qualified_active24h as history24h_plan_active,
         )
         if official1h_enabled:
-            from alpha_events_official_onehour import (
-                plan_qualified_official_onehour as history_plan_official_onehour,
+            from alpha_events_official_onehour import qualify_confirmation
+            from canonical_rpc_readonly import read_authenticated_canonical_rows
+            from official_history_policy import (
+                reconcile_authenticated,
+                enforce_authenticated_history_guard,
             )
 
     r2 = get_r2()
@@ -2022,8 +2025,17 @@ def main():
             if len(set(ids)) != len(ids):
                 raise RuntimeError("WA_AE_HISTORY24H_HOLD_DUAL_ACTIVE_MEMBERSHIP")
             if official1h_enabled:
-                proposed = history_plan_official_onehour(
-                    proposed, physical_live + upcoming24h_rows + pending24h_rows, now24h)
+                # Trust ONLY the existing authenticated post-CAS Canonical RPC,
+                # never a self-asserted officialConfirmation from public R2.
+                canonical_rows = read_authenticated_canonical_rows(
+                    publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY", ""),
+                    machine_read_key=os.getenv("WA_ALPHA_EVENTS_SYNC_MACHINE_READ_KEY", ""),
+                )
+                proposed = reconcile_authenticated(
+                    proposed, physical_live + upcoming24h_rows + pending24h_rows,
+                    now24h, qualify_confirmation,
+                    durable_canonical_rows=canonical_rows,
+                )
             else:
                 proposed = history24h_plan_active(
                     proposed, physical_live + upcoming24h_rows + pending24h_rows, now24h)
@@ -2065,9 +2077,17 @@ def main():
             if (pending24h_etag != current_pending24h_etag or
                     upcoming24h_etag != current_upcoming24h_etag):
                 raise RuntimeError("WA_AE_HISTORY24H_HOLD_ACTIVE_GENERATION_MOVED")
-        # New canonical events cannot be archived by 1h/24h plans or self-declared ended flags.
-        # This checks the actual candidate pair BEFORE either conditional R2 write.
-        enforce_no_unverified_history_admission(previous_history, proposed["history"])
+        # Authenticate the final History candidate BEFORE either conditional
+        # R2 write. Qualified terminal rows alone bypass the legacy no-admission
+        # guard; all ordinary/claim-open rows remain subject to that guard.
+        if official1h_enabled:
+            enforce_authenticated_history_guard(
+                previous_history, proposed["history"],
+                proposed["official_qualified_proofs"], qualify_confirmation, now24h,
+                enforce_no_unverified_history_admission,
+            )
+        else:
+            enforce_no_unverified_history_admission(previous_history, proposed["history"])
         ack = history24h_publish_pair(
             r2, R2_BUCKET_NAME, proposed, all24h_etag, history24h_etag)
         if ack.get("pair_verified") is not True:
