@@ -331,6 +331,7 @@ class CleanTests(unittest.TestCase):
             out=clean.build_history(s,last=date(2026,11,13),max_days=4000)
         self.assertTrue(out['caught_up'])
         self.assertEqual(out['processed'],0)
+        self.assertEqual(out['materialized'],0)
         self.assertEqual(out['target_through'],'2026-11-12')
         self.assertEqual(out['next_date'],'2026-11-13')
         self.assertEqual(s.read(clean.STATE_KEY),old)
