@@ -131,60 +131,10 @@ def qualify_confirmation(row, now):
             "action": action, "terminal": terminal}
 
 
-def plan_qualified_official_onehour(plan_value, active_rows, now):
-    """Immediately archive only matching confirmed official events, not old forecasts.
+def plan_qualified_official_onehour(*args, **kwargs):
+    """Retired Active/R2-only entrypoint: never authorize History from public R2.
 
-    The 60-minute threshold is an SLA deadline FROM source publication, not a
-    mandatory waiting period. Do not infer confirmation from event_time or
-    firstActiveAt. Never authorize deleting physical Active without History CAS.
+    Use official_history_policy.reconcile_authenticated with a genuine
+    post-CAS Canonical V2 readback in the EXISTING writer instead.
     """
-    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
-        hold("UTC_NOW")
-    if (not isinstance(plan_value, dict) or plan_value.get("retire_live") is not False
-            or plan_value.get("independent_writer") is not False):
-        hold("UNQUALIFIED_PLAN")
-    active = _rows(active_rows, "OFFICIAL_ACTIVE")
-    all_rows = copy.deepcopy(_rows(plan_value["all"], "OFFICIAL_ALL"))
-    history_rows = copy.deepcopy(_rows(plan_value["history"], "OFFICIAL_HISTORY"))
-    all_ids = _indexes(all_rows, "OFFICIAL_ALL")
-    history_ids = _indexes(history_rows, "OFFICIAL_HISTORY")
-    seen = set()
-    promoted = []
-    overdue = []
-    for row in active:
-        cid = row.get("id")
-        if not isinstance(cid, str) or not CID.fullmatch(cid) or cid in seen:
-            hold("ACTIVE_DUPLICATE_OR_ID")
-        seen.add(cid)
-        confirmation = qualify_confirmation(row, now)
-        if confirmation is None or not confirmation["terminal"]:
-            continue  # Claim-open, teaser and unconfirmed remain nonterminal.
-        old_all = all_rows[all_ids[cid]] if cid in all_ids else None
-        old_history = history_rows[history_ids[cid]] if cid in history_ids else None
-        for prev in (old_all, old_history):
-            if prev is not None:
-                _compatible(prev, row)
-                for key in ("event_time", "chain_id", "project_name", "firstActiveAt", "officialConfirmation"):
-                    if prev.get(key) is not None and prev.get(key) != row.get(key):
-                        hold("IMMUTABLE_PROOF_OR_IDENTITY")
-        combined = copy.deepcopy(row)
-        if old_all is not None:
-            combined = _overlay_without_erasing(combined, old_all)
-        if old_history is not None:
-            combined = _overlay_without_erasing(combined, old_history)
-        combined["status"] = "ended"
-        combined["lifecycle_state"] = "history"
-        # Exact proof carried into both versions for independent Pages check.
-        for result, positions in ((all_rows, all_ids), (history_rows, history_ids)):
-            if cid in positions:
-                result[positions[cid]] = copy.deepcopy(combined)
-            else:
-                positions[cid] = len(result)
-                result.append(copy.deepcopy(combined))
-        promoted.append(cid)
-        if now > confirmation["deadline"]:
-            overdue.append(cid)
-    return {**plan_value, "all": all_rows, "history": history_rows,
-            "official_promoted": sorted(promoted), "official_overdue": sorted(overdue),
-            "retire_live": False, "retire_pending": False,
-            "retire_public_active": False}
+    hold("ACTIVE_ONLY_HISTORY_AUTHORITY_RETIRED")
