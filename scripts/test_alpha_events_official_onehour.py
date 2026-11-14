@@ -177,11 +177,28 @@ class OfficialOneHour(unittest.TestCase):
         self.assertEqual(second["history"], first["history"])
         self.assertEqual(second["history"][0]["listing_price"], LEGACY["listing_price"])
 
+    def test_authenticated_claim_receipt_can_be_superseded_by_new_terminal_receipt(self):
+        old_claim = copy.deepcopy(PROOF)
+        old_claim["receiptId"] = 599
+        old_claim["binding"]["sourceMessageId"] = 1865
+        old_claim["binding"]["sourceIdentity"] = (
+            "telegram:binance_wallet_announcements:1865")
+        old_claim["verifiedSubject"]["sourceIdentity"] = (
+            old_claim["binding"]["sourceIdentity"])
+        old_claim["verifiedSubject"]["lifecycleAction"] = "CLAIM_OPEN"
+        previous = {**BASE, "officialConfirmation": old_claim}
+        terminal = {**BASE, "officialConfirmation": copy.deepcopy(PROOF)}
+        result = make_run(row=terminal, prior_all=[LEGACY, previous],
+                          prior_history=[LEGACY])
+        self.assertEqual(result["official_promoted"], [ID])
+        self.assertEqual(result["history"][1]["officialConfirmation"]["receiptId"], 600)
+        self.assertFalse(result["retire_live"])
+
     def test_conflicting_existing_immutable_proof_fails(self):
         row = {**BASE, "officialConfirmation": copy.deepcopy(PROOF)}
         old = {**BASE, "officialConfirmation": copy.deepcopy(PROOF)}
         old["officialConfirmation"]["binding"]["sourceMessageId"] = 1999
-        with self.assertRaises(OfficialHistoryHold):
+        with self.assertRaises((OfficialHistoryHold, OfficialConfirmationHold)):
             make_run(row=row, prior_all=[LEGACY, old], prior_history=[LEGACY])
 
 
