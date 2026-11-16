@@ -151,12 +151,15 @@ class EventPriceAnchorTests(unittest.TestCase):
             self.assertEqual(symbol, "BTR")
             if interval == "1m":
                 self.assertEqual(start_ms, event)
-                return [
+                rows = [
                     candle(old, 8),
                     candle(event - 60000, 5),
                     candle(event + 60000, .10),
                     candle(event + 120000, .12),
                 ]
+                for k in rows:
+                    k[7] = str(float(k[4]) * float(k[5]))
+                return rows
             self.assertEqual(interval, "1d")
             self.assertEqual(start_ms, ms("2026-10-09T00:00:00Z"))
             return [
