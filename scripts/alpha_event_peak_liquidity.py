@@ -225,6 +225,19 @@ def refresh_liquidity_peaks(events, *, event_ms, alpha_info, fetch_alpha,
                 if spot_ms is not None:
                     e["spot_listed_at"] = utc_day(spot_ms)
             if spot_ms is None:
+                # Record this HOLD in the same existing per-event checkpoint.
+                # Otherwise unresolvable Spot events would occupy the first
+                # batch forever and starve all later events.
+                lp = e["listing_price"]
+                state = lp.get(STATE_KEY)
+                if not isinstance(state, dict):
+                    state = {"version": 1, "anchor_ms": anchor,
+                             "cursor_ms": anchor, "best_price": None,
+                             "best_date": None, "method": METHOD}
+                state["checked_at"] = datetime.fromtimestamp(
+                    now_ms / 1000, timezone.utc).isoformat()
+                state["status"] = "spot_listing_day_unavailable"
+                lp[STATE_KEY] = state
                 return False, "spot_listing_day_unavailable"
         return _process(e, anchor=anchor, alpha_id=alpha_id,
                         alpha_listing_ms=listing_ms, spot_ms=spot_ms,
