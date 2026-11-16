@@ -1,0 +1,1095 @@
+{
+  "prereg_sha256": "52733a19faf42b6296808f77fe976642b34d30a1d84db06204f4a5193272268c",
+  "data_zip_sha256": "0f4d36ad27bb7907abeef6a34c9966efe06b558fbf0805322a73a5c9ba72f841",
+  "lookahead_unit_checks": {
+    "H1_N24_A2": true,
+    "H1_N24_A3": true,
+    "H1_N48_A2": true,
+    "H1_N48_A3": true,
+    "H1_N96_A2": true,
+    "H1_N96_A3": true,
+    "H2_L48_A2": true,
+    "H2_L48_A3": true,
+    "H2_L96_A2": true,
+    "H2_L96_A3": true,
+    "H2_L168_A2": true,
+    "H2_L168_A3": true,
+    "H3_F1_H8": true,
+    "H3_F1_H16": true,
+    "H3_F2_H8": true,
+    "H3_F2_H16": true,
+    "H3_F3_H8": true,
+    "H3_F3_H16": true,
+    "H2_L96_A3_minus20pct": true,
+    "H2_L96_A3_plus20pct": true
+  },
+  "n_unique_parameter_configurations": 20,
+  "ledger": [
+    {
+      "id": "H1_N24_A2",
+      "family": "H1",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H1_N24_A3",
+      "family": "H1",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H1_N48_A2",
+      "family": "H1",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H1_N48_A3",
+      "family": "H1",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H1_N96_A2",
+      "family": "H1",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H1_N96_A3",
+      "family": "H1",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L48_A2",
+      "family": "H2",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L48_A3",
+      "family": "H2",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L96_A2",
+      "family": "H2",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L96_A3",
+      "family": "H2",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L168_A2",
+      "family": "H2",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L168_A3",
+      "family": "H2",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H3_F1_H8",
+      "family": "H3",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H3_F1_H16",
+      "family": "H3",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H3_F2_H8",
+      "family": "H3",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H3_F2_H16",
+      "family": "H3",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H3_F3_H8",
+      "family": "H3",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H3_F3_H16",
+      "family": "H3",
+      "kind": "primary",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L96_A3_minus20pct",
+      "family": "H2",
+      "kind": "robustness",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    },
+    {
+      "id": "H2_L96_A3_plus20pct",
+      "family": "H2",
+      "kind": "robustness",
+      "splits_tested": [
+        "train",
+        "validation"
+      ]
+    }
+  ],
+  "primary_results": {
+    "H1_N24_A2": {
+      "spec": {
+        "id": "H1_N24_A2",
+        "family": "H1",
+        "lookback": 24,
+        "atr_mult": 2.0
+      },
+      "train": {
+        "trades": 1013,
+        "win_rate": 0.30306021717670284,
+        "expectancy_R": -0.063309971232265,
+        "PF": 0.873434849077503,
+        "sharpe": -0.7537876224020866,
+        "max_drawdown": 0.38163263888957033,
+        "total_return": -0.29071592893194365,
+        "net_pnl": -2907.1592893194465,
+        "fees": 2726.012268228308,
+        "funding": -197.65930187618503,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 270,
+        "win_rate": 0.32592592592592595,
+        "expectancy_R": -0.043078661391803774,
+        "PF": 0.8989175881372022,
+        "sharpe": -0.5489378550818231,
+        "max_drawdown": 0.1402187266253162,
+        "total_return": -0.06223001632488612,
+        "net_pnl": -622.300163248866,
+        "fees": 919.1724689264464,
+        "funding": -52.4710638647736,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H1_N24_A3": {
+      "spec": {
+        "id": "H1_N24_A3",
+        "family": "H1",
+        "lookback": 24,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 798,
+        "win_rate": 0.31453634085213034,
+        "expectancy_R": 0.02079558515097877,
+        "PF": 1.031585276653272,
+        "sharpe": 0.21048129123701736,
+        "max_drawdown": 0.1635770202177803,
+        "total_return": 0.06460445506183632,
+        "net_pnl": 646.0445506183432,
+        "fees": 1879.129268299426,
+        "funding": -264.5067518796275,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 211,
+        "win_rate": 0.3175355450236967,
+        "expectancy_R": -0.009133296078352811,
+        "PF": 0.9706904376886448,
+        "sharpe": -0.10463973492400677,
+        "max_drawdown": 0.0817584105771757,
+        "total_return": -0.0138303935642613,
+        "net_pnl": -138.3039356426329,
+        "fees": 500.02610709758994,
+        "funding": -44.29520221277298,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H1_N48_A2": {
+      "spec": {
+        "id": "H1_N48_A2",
+        "family": "H1",
+        "lookback": 48,
+        "atr_mult": 2.0
+      },
+      "train": {
+        "trades": 670,
+        "win_rate": 0.3119402985074627,
+        "expectancy_R": -0.02756924437486897,
+        "PF": 0.9352496749624863,
+        "sharpe": -0.259617910749447,
+        "max_drawdown": 0.21435448533205803,
+        "total_return": -0.10310827489410801,
+        "net_pnl": -1031.082748941099,
+        "fees": 1875.1134106944505,
+        "funding": -218.1220527714559,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 183,
+        "win_rate": 0.32786885245901637,
+        "expectancy_R": -0.033676399704314665,
+        "PF": 0.9241268997115509,
+        "sharpe": -0.35549369108518786,
+        "max_drawdown": 0.12039576202853186,
+        "total_return": -0.035111692810399275,
+        "net_pnl": -351.11692810401655,
+        "fees": 602.1299437375147,
+        "funding": -43.053592006235476,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H1_N48_A3": {
+      "spec": {
+        "id": "H1_N48_A3",
+        "family": "H1",
+        "lookback": 48,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 534,
+        "win_rate": 0.32209737827715357,
+        "expectancy_R": 0.05726704928361044,
+        "PF": 1.1084467821575945,
+        "sharpe": 0.46376698864722105,
+        "max_drawdown": 0.11368313215195514,
+        "total_return": 0.14859345629205079,
+        "net_pnl": 1485.9345629205104,
+        "fees": 1247.1649746883759,
+        "funding": -301.0337805605481,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 144,
+        "win_rate": 0.3611111111111111,
+        "expectancy_R": 0.047043591665290437,
+        "PF": 1.09095626397193,
+        "sharpe": 0.4211526880543542,
+        "max_drawdown": 0.05436641391119679,
+        "total_return": 0.030848343992513128,
+        "net_pnl": 308.48343992511457,
+        "fees": 336.07723189221167,
+        "funding": -38.36872516681453,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H1_N96_A2": {
+      "spec": {
+        "id": "H1_N96_A2",
+        "family": "H1",
+        "lookback": 96,
+        "atr_mult": 2.0
+      },
+      "train": {
+        "trades": 428,
+        "win_rate": 0.3317757009345794,
+        "expectancy_R": 0.01904190544375043,
+        "PF": 1.0280729795280321,
+        "sharpe": 0.13596227478396675,
+        "max_drawdown": 0.12125647734711498,
+        "total_return": 0.02997179565790531,
+        "net_pnl": 299.71795657902805,
+        "fees": 1201.2922172844396,
+        "funding": -197.48294827473146,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 116,
+        "win_rate": 0.3793103448275862,
+        "expectancy_R": -0.00505603119502583,
+        "PF": 0.977502464475235,
+        "sharpe": -0.049491133076768716,
+        "max_drawdown": 0.08664677445978286,
+        "total_return": -0.006140619679166015,
+        "net_pnl": -61.40619679165714,
+        "fees": 359.70390425365196,
+        "funding": -35.109956324694515,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H1_N96_A3": {
+      "spec": {
+        "id": "H1_N96_A3",
+        "family": "H1",
+        "lookback": 96,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 344,
+        "win_rate": 0.3372093023255814,
+        "expectancy_R": 0.1102497992394594,
+        "PF": 1.2282470901075107,
+        "sharpe": 0.687994358244419,
+        "max_drawdown": 0.07347193403758556,
+        "total_return": 0.19733676033273984,
+        "net_pnl": 1973.3676033273823,
+        "fees": 743.0180040328736,
+        "funding": -265.64936114699645,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 89,
+        "win_rate": 0.43820224719101125,
+        "expectancy_R": 0.1421104540990062,
+        "PF": 1.3751524463612452,
+        "sharpe": 0.9820996292187449,
+        "max_drawdown": 0.040460533921329866,
+        "total_return": 0.06294426580243018,
+        "net_pnl": 629.4426580243038,
+        "fees": 195.4863792422216,
+        "funding": -35.215829749279486,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L48_A2": {
+      "spec": {
+        "id": "H2_L48_A2",
+        "family": "H2",
+        "lookback": 48,
+        "atr_mult": 2.0
+      },
+      "train": {
+        "trades": 1206,
+        "win_rate": 0.3208955223880597,
+        "expectancy_R": -0.039846465849174124,
+        "PF": 0.9126132542906356,
+        "sharpe": -0.578009202830832,
+        "max_drawdown": 0.3626783932247222,
+        "total_return": -0.23228258099958043,
+        "net_pnl": -2322.825809995847,
+        "fees": 3414.0288774170294,
+        "funding": -389.27156552207765,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 303,
+        "win_rate": 0.31683168316831684,
+        "expectancy_R": -0.019261710952450984,
+        "PF": 0.9447131088831295,
+        "sharpe": -0.30177508898847244,
+        "max_drawdown": 0.1286204679504247,
+        "total_return": -0.03459130805798272,
+        "net_pnl": -345.9130805797994,
+        "fees": 887.254162612045,
+        "funding": -64.26791293491084,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L48_A3": {
+      "spec": {
+        "id": "H2_L48_A3",
+        "family": "H2",
+        "lookback": 48,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 858,
+        "win_rate": 0.3356643356643357,
+        "expectancy_R": 0.036744026006632145,
+        "PF": 1.0816022622226773,
+        "sharpe": 0.4417467068701611,
+        "max_drawdown": 0.1094759190988448,
+        "total_return": 0.15097344588240813,
+        "net_pnl": 1509.734458824094,
+        "fees": 1987.897745427899,
+        "funding": -331.6276425438799,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 214,
+        "win_rate": 0.397196261682243,
+        "expectancy_R": 0.12162813528448696,
+        "PF": 1.3305403020351236,
+        "sharpe": 1.4441005452172968,
+        "max_drawdown": 0.08770820463855478,
+        "total_return": 0.13362629495021006,
+        "net_pnl": 1336.2629495021129,
+        "fees": 461.23332290505607,
+        "funding": -50.556139205432984,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L96_A2": {
+      "spec": {
+        "id": "H2_L96_A2",
+        "family": "H2",
+        "lookback": 96,
+        "atr_mult": 2.0
+      },
+      "train": {
+        "trades": 1193,
+        "win_rate": 0.3269069572506287,
+        "expectancy_R": -0.028577568826271507,
+        "PF": 0.9317471406250971,
+        "sharpe": -0.40649071719685587,
+        "max_drawdown": 0.31506663764909004,
+        "total_return": -0.17624549934653877,
+        "net_pnl": -1762.4549934654083,
+        "fees": 3436.672827610643,
+        "funding": -404.60120058688,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 295,
+        "win_rate": 0.3423728813559322,
+        "expectancy_R": -0.011141338984279816,
+        "PF": 0.9651489270797459,
+        "sharpe": -0.14328427742757868,
+        "max_drawdown": 0.060397335850359446,
+        "total_return": -0.02084850530580118,
+        "net_pnl": -208.485053058001,
+        "fees": 888.8894584765254,
+        "funding": -56.716187285537295,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L96_A3": {
+      "spec": {
+        "id": "H2_L96_A3",
+        "family": "H2",
+        "lookback": 96,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 829,
+        "win_rate": 0.3341375150784077,
+        "expectancy_R": 0.06389863159845625,
+        "PF": 1.1501371874703288,
+        "sharpe": 0.7431056206989965,
+        "max_drawdown": 0.11412396511425726,
+        "total_return": 0.2804593906728985,
+        "net_pnl": 2804.5939067289805,
+        "fees": 2043.9527159722545,
+        "funding": -360.8885494511106,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 207,
+        "win_rate": 0.43478260869565216,
+        "expectancy_R": 0.1251942133769779,
+        "PF": 1.3643217533918541,
+        "sharpe": 1.589918795261489,
+        "max_drawdown": 0.05276010238497553,
+        "total_return": 0.1350512267701729,
+        "net_pnl": 1350.5122677016993,
+        "fees": 470.1514072398757,
+        "funding": -37.805514656933795,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L168_A2": {
+      "spec": {
+        "id": "H2_L168_A2",
+        "family": "H2",
+        "lookback": 168,
+        "atr_mult": 2.0
+      },
+      "train": {
+        "trades": 1196,
+        "win_rate": 0.3193979933110368,
+        "expectancy_R": -0.05139579214768034,
+        "PF": 0.8814376849106242,
+        "sharpe": -0.7490669515809435,
+        "max_drawdown": 0.3924830271695934,
+        "total_return": -0.2802536309606448,
+        "net_pnl": -2802.5363096064584,
+        "fees": 3104.95615259035,
+        "funding": -461.9643653682419,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 300,
+        "win_rate": 0.29333333333333333,
+        "expectancy_R": -0.1043896841404516,
+        "PF": 0.7598249198118987,
+        "sharpe": -1.591641458972212,
+        "max_drawdown": 0.19205587828797188,
+        "total_return": -0.14900979355757282,
+        "net_pnl": -1490.0979355757468,
+        "fees": 818.7059319731959,
+        "funding": -81.11738626162342,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L168_A3": {
+      "spec": {
+        "id": "H2_L168_A3",
+        "family": "H2",
+        "lookback": 168,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 825,
+        "win_rate": 0.3527272727272727,
+        "expectancy_R": 0.061326372767890706,
+        "PF": 1.1481547405647756,
+        "sharpe": 0.7277246317189943,
+        "max_drawdown": 0.10430109599694903,
+        "total_return": 0.26631509665433417,
+        "net_pnl": 2663.1509665433723,
+        "fees": 2007.0897617312646,
+        "funding": -432.27265809118035,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 211,
+        "win_rate": 0.3744075829383886,
+        "expectancy_R": 0.0027606954315330975,
+        "PF": 0.9996197101667667,
+        "sharpe": 0.054597779002507923,
+        "max_drawdown": 0.06569262881446403,
+        "total_return": -0.0001576347035304737,
+        "net_pnl": -1.5763470352721498,
+        "fees": 428.92494076547894,
+        "funding": -56.524157341087985,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H3_F1_H8": {
+      "spec": {
+        "id": "H3_F1_H8",
+        "family": "H3",
+        "threshold": 0.0001,
+        "horizon": 8,
+        "atr_mult": 2.5
+      },
+      "train": {
+        "trades": 2762,
+        "win_rate": 0.43627805937726283,
+        "expectancy_R": -0.04857573567889276,
+        "PF": 0.8020827709426401,
+        "sharpe": -1.8942280167144165,
+        "max_drawdown": 0.5041501691342694,
+        "total_return": -0.4963711334892579,
+        "net_pnl": -4963.711334892571,
+        "fees": 4083.2441316423606,
+        "funding": 638.8165925983168,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 676,
+        "win_rate": 0.39201183431952663,
+        "expectancy_R": -0.10295759950091808,
+        "PF": 0.6503190484243205,
+        "sharpe": -4.041625382208095,
+        "max_drawdown": 0.3114605325221743,
+        "total_return": -0.2963384596501445,
+        "net_pnl": -2963.3845965014816,
+        "fees": 1467.5339391691675,
+        "funding": 165.84774470957333,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H3_F1_H16": {
+      "spec": {
+        "id": "H3_F1_H16",
+        "family": "H3",
+        "threshold": 0.0001,
+        "horizon": 16,
+        "atr_mult": 2.5
+      },
+      "train": {
+        "trades": 1604,
+        "win_rate": 0.428927680798005,
+        "expectancy_R": -0.025489267453172874,
+        "PF": 0.9210535520127604,
+        "sharpe": -0.5599109330842095,
+        "max_drawdown": 0.33399773936936794,
+        "total_return": -0.19901384882858142,
+        "net_pnl": -1990.1384882858292,
+        "fees": 3065.5429547502204,
+        "funding": 788.9426954633341,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 390,
+        "win_rate": 0.3717948717948718,
+        "expectancy_R": -0.11051050608082792,
+        "PF": 0.7183395669810567,
+        "sharpe": -2.4597712652822814,
+        "max_drawdown": 0.2191621527594909,
+        "total_return": -0.1968051954663852,
+        "net_pnl": -1968.0519546638247,
+        "fees": 892.9360691414968,
+        "funding": 172.16442653908774,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H3_F2_H8": {
+      "spec": {
+        "id": "H3_F2_H8",
+        "family": "H3",
+        "threshold": 0.0002,
+        "horizon": 8,
+        "atr_mult": 2.5
+      },
+      "train": {
+        "trades": 732,
+        "win_rate": 0.45491803278688525,
+        "expectancy_R": -0.009354028026067896,
+        "PF": 0.9595023101631788,
+        "sharpe": -0.17978899199565485,
+        "max_drawdown": 0.11058062411348768,
+        "total_return": -0.03796251190188282,
+        "net_pnl": -379.6251190188113,
+        "fees": 1240.9576434183862,
+        "funding": 515.6733492822523,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 127,
+        "win_rate": 0.4094488188976378,
+        "expectancy_R": -0.11325483510270688,
+        "PF": 0.6331254207059087,
+        "sharpe": -1.8730877945744087,
+        "max_drawdown": 0.08559139686679773,
+        "total_return": -0.0700206340744497,
+        "net_pnl": -700.2063407444898,
+        "fees": 261.40852999489283,
+        "funding": 62.72648534923181,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H3_F2_H16": {
+      "spec": {
+        "id": "H3_F2_H16",
+        "family": "H3",
+        "threshold": 0.0002,
+        "horizon": 16,
+        "atr_mult": 2.5
+      },
+      "train": {
+        "trades": 442,
+        "win_rate": 0.47737556561085975,
+        "expectancy_R": 0.07890785354353462,
+        "PF": 1.2461004981194355,
+        "sharpe": 0.8652594612916336,
+        "max_drawdown": 0.0664507312391841,
+        "total_return": 0.18426170695117405,
+        "net_pnl": 1842.6170695117899,
+        "fees": 822.9934821073529,
+        "funding": 569.9033072298132,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 82,
+        "win_rate": 0.4146341463414634,
+        "expectancy_R": -0.06076018914629252,
+        "PF": 0.840265823307916,
+        "sharpe": -0.5703054624297809,
+        "max_drawdown": 0.072343605914855,
+        "total_return": -0.0255201562822569,
+        "net_pnl": -255.20156282256613,
+        "fees": 174.64624188755195,
+        "funding": 64.26083665898342,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H3_F3_H8": {
+      "spec": {
+        "id": "H3_F3_H8",
+        "family": "H3",
+        "threshold": 0.00030000000000000003,
+        "horizon": 8,
+        "atr_mult": 2.5
+      },
+      "train": {
+        "trades": 570,
+        "win_rate": 0.47017543859649125,
+        "expectancy_R": 0.006487373414231874,
+        "PF": 1.0202380359162493,
+        "sharpe": 0.10849733671819342,
+        "max_drawdown": 0.09724126291686042,
+        "total_return": 0.015063030338231531,
+        "net_pnl": 150.63030338230237,
+        "fees": 985.7691473070561,
+        "funding": 474.9743032416583,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 73,
+        "win_rate": 0.410958904109589,
+        "expectancy_R": -0.1154189079338257,
+        "PF": 0.5992725548476571,
+        "sharpe": -1.4897812664961367,
+        "max_drawdown": 0.058394998302322754,
+        "total_return": -0.04157090743525771,
+        "net_pnl": -415.7090743525627,
+        "fees": 149.19389672969265,
+        "funding": 44.57414312595748,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H3_F3_H16": {
+      "spec": {
+        "id": "H3_F3_H16",
+        "family": "H3",
+        "threshold": 0.00030000000000000003,
+        "horizon": 16,
+        "atr_mult": 2.5
+      },
+      "train": {
+        "trades": 345,
+        "win_rate": 0.4782608695652174,
+        "expectancy_R": 0.0768228768798317,
+        "PF": 1.229557413062638,
+        "sharpe": 0.7359332807053967,
+        "max_drawdown": 0.06681000099539158,
+        "total_return": 0.13722467296027752,
+        "net_pnl": 1372.2467296027435,
+        "fees": 638.1046943853529,
+        "funding": 521.3945679059067,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 50,
+        "win_rate": 0.38,
+        "expectancy_R": -0.13745337415312708,
+        "PF": 0.6462955706257189,
+        "sharpe": -1.0931419059289775,
+        "max_drawdown": 0.05631337359446287,
+        "total_return": -0.03416619688645073,
+        "net_pnl": -341.66196886451775,
+        "fees": 103.6807008549957,
+        "funding": 47.49289630986343,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    }
+  },
+  "family_winners_train": {
+    "H1": "H1_N96_A3",
+    "H2": "H2_L96_A3",
+    "H3": "H3_F2_H16"
+  },
+  "validation_eligible_ids": [
+    "H2_L96_A3",
+    "H1_N96_A3"
+  ],
+  "champion_id": "H2_L96_A3",
+  "robustness": {
+    "H2_L96_A3_minus20pct": {
+      "spec": {
+        "id": "H2_L96_A3_minus20pct",
+        "family": "H2",
+        "lookback": 77,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 871,
+        "win_rate": 0.3030998851894374,
+        "expectancy_R": -0.01595011619376436,
+        "PF": 0.9535087131727754,
+        "sharpe": -0.20161374156933345,
+        "max_drawdown": 0.2524652507766262,
+        "total_return": -0.08318974335100082,
+        "net_pnl": -831.8974335099413,
+        "fees": 1824.6713127318387,
+        "funding": -362.17134496868596,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 201,
+        "win_rate": 0.4626865671641791,
+        "expectancy_R": 0.17875935852449393,
+        "PF": 1.5472144919027089,
+        "sharpe": 2.1618823717332263,
+        "max_drawdown": 0.04322058980800836,
+        "total_return": 0.19283943507301782,
+        "net_pnl": 1928.394350730202,
+        "fees": 457.0210240688891,
+        "funding": -54.13460531326628,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    },
+    "H2_L96_A3_plus20pct": {
+      "spec": {
+        "id": "H2_L96_A3_plus20pct",
+        "family": "H2",
+        "lookback": 115,
+        "atr_mult": 3.0
+      },
+      "train": {
+        "trades": 857,
+        "win_rate": 0.3278879813302217,
+        "expectancy_R": 0.023375568393247555,
+        "PF": 1.0471745747746264,
+        "sharpe": 0.2784717488407196,
+        "max_drawdown": 0.16732133718174935,
+        "total_return": 0.08616494047997092,
+        "net_pnl": 861.6494047997701,
+        "fees": 1930.6037060953217,
+        "funding": -392.85670635139854,
+        "masked_hours": 39,
+        "risk_violations": 0
+      },
+      "validation": {
+        "trades": 204,
+        "win_rate": 0.4166666666666667,
+        "expectancy_R": 0.10009949390834501,
+        "PF": 1.281021990131035,
+        "sharpe": 1.2611006189987604,
+        "max_drawdown": 0.03187041973079918,
+        "total_return": 0.10409734230594836,
+        "net_pnl": 1040.9734230594445,
+        "fees": 448.25900166070437,
+        "funding": -45.90413494191954,
+        "masked_hours": 5,
+        "risk_violations": 0
+      }
+    }
+  },
+  "robustness_pass": true,
+  "blind_executed": true,
+  "friction": {
+    "taker_fee_per_side": 0.0005,
+    "slippage_per_side": 0.0003,
+    "stress_slippage_per_side": 0.0006,
+    "funding": "actual historic settled rates/times times 1h bar OPEN mark-price proxy"
+  },
+  "windows": {
+    "train": [
+      "2020-01-01T00:00:00Z",
+      "2024-01-01T00:00:00Z"
+    ],
+    "validation": [
+      "2024-01-01T00:00:00Z",
+      "2025-01-01T00:00:00Z"
+    ],
+    "blind": [
+      "2025-01-01T00:00:00Z",
+      "2026-11-16T00:00:00Z"
+    ]
+  },
+  "blind_metrics": {
+    "trades": 433,
+    "win_rate": 0.302540415704388,
+    "expectancy_R": -0.05978158705794851,
+    "PF": 0.8527648081752236,
+    "sharpe": -0.8211709593500941,
+    "max_drawdown": 0.2037392713791315,
+    "total_return": -0.13018528473622704,
+    "net_pnl": -1301.8528473622896,
+    "fees": 1104.9263314363152,
+    "funding": 2.930970954527485,
+    "masked_hours": 0,
+    "risk_violations": 0
+  },
+  "blind_stress_metrics": {
+    "trades": 433,
+    "win_rate": 0.2956120092378753,
+    "expectancy_R": -0.09182265294104205,
+    "PF": 0.7907862121892125,
+    "sharpe": -1.2482329565248498,
+    "max_drawdown": 0.24677344103120058,
+    "total_return": -0.1884859904409113,
+    "net_pnl": -1884.8599044091152,
+    "fees": 1068.7775626493376,
+    "funding": 2.301992886759701,
+    "masked_hours": 0,
+    "risk_violations": 0
+  },
+  "blind_years": {
+    "2025": {
+      "trades": 231,
+      "win_rate": 0.3246753246753247,
+      "expectancy_R": -0.014697593257000834,
+      "PF": 0.9547903464383709,
+      "sharpe": -0.18333881430616167,
+      "max_drawdown": 0.10077354119447735,
+      "total_return": -0.02134976468150107,
+      "net_pnl": -213.49764681503535,
+      "fees": 616.8156419880694,
+      "funding": -15.082304975824748,
+      "masked_hours": 0,
+      "risk_violations": 0
+    },
+    "2026": {
+      "trades": 202,
+      "win_rate": 0.27722772277227725,
+      "expectancy_R": -0.11133803541447773,
+      "PF": 0.7358107512637788,
+      "sharpe": -1.581906691310379,
+      "max_drawdown": 0.1494544831503435,
+      "total_return": -0.11120982361926579,
+      "net_pnl": -1112.0982361926822,
+      "fees": 498.75907840495455,
+      "funding": 18.406244928240294,
+      "masked_hours": 0,
+      "risk_violations": 0
+    }
+  },
+  "blind_expectancy_bootstrap_95CI": [
+    -0.1757404099682792,
+    0.07773122141518456
+  ],
+  "buy_hold_perpetual": {
+    "trades": 1,
+    "win_rate": 0.0,
+    "expectancy_R": -76.814260276476,
+    "PF": 0.0,
+    "sharpe": -0.34199872052430796,
+    "max_drawdown": 0.5689829622850039,
+    "total_return": -0.38407130138238,
+    "net_pnl": -3840.7130138238003,
+    "fees": 8.491133595513785,
+    "funding": -808.4890712558582,
+    "masked_hours": 0,
+    "risk_violations": 0
+  },
+  "vol_matched_buy_hold": {
+    "annualized_sharpe": -0.4895134544777357,
+    "exposure_factor": 0.18516412963143133,
+    "total_return": -0.07111622823687958
+  },
+  "controls": {
+    "random_entry_1000": {
+      "repetitions": 1000,
+      "failed_schedules": 0,
+      "planned_trades": 433,
+      "trades_min": 403,
+      "trades_max": 425,
+      "overlaps_max": 30,
+      "sharpe_p95": -0.1408775245674014,
+      "sharpe_median": -1.3881880947230467,
+      "return_p95": -0.020797915029268525,
+      "return_median": -0.14841445093929034,
+      "PF_p95": 0.9665645423423768
+    },
+    "shift_signal_1000": {
+      "repetitions": 1000,
+      "failed_schedules": 0,
+      "planned_trades": 433,
+      "trades_min": 413,
+      "trades_max": 430,
+      "overlaps_max": 20,
+      "sharpe_p95": -0.14151848267036404,
+      "sharpe_median": -1.4336818882089855,
+      "return_p95": -0.021738425584699735,
+      "return_median": -0.15412071088029206,
+      "PF_p95": 0.9699867998196637
+    }
+  },
+  "decision": "NO_GO",
+  "failure_reasons": [
+    "PF_BELOW_1_3",
+    "NONPOSITIVE_EXPECTANCY",
+    "MAX_DD_ABOVE_15_PERCENT",
+    "NONPOSITIVE_SHARPE",
+    "NOT_POSITIVE_EACH_OOS_YEAR",
+    "BOOTSTRAP_95CI_CROSSES_ZERO",
+    "STRESS_SLIPPAGE_FAIL",
+    "BUY_HOLD_RISK_ADJUSTED_FAIL",
+    "RANDOM_BASELINE_FAIL",
+    "SHIFT_BASELINE_FAIL",
+    "RANDOM_CONTROL_TRADE_COUNT_MISMATCH"
+  ],
+  "blind_trade_count": 433
+}

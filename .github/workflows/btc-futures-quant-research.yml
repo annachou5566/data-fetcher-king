@@ -1,0 +1,52 @@
+name: BTC futures frozen quant research (validation only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: btc-futures-validation-offline
+  cancel-in-progress: false
+
+jobs:
+  validation-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install only isolated research dependencies
+        run: |
+          python -m pip install 'numpy==2.3.5' 'pandas==2.2.3'
+      - name: Re-download frozen public Binance archives with official SHA256
+        run: python quant_btc/download_btc_vision.py
+      - name: Guard exact historical dataset (fail closed if Binance revises files)
+        run: |
+          cp quant_btc/funding_nov_api.json /tmp/btc_vision/funding_nov_api.json
+          python quant_btc/verify_frozen_data.py
+      - name: Audit and package normalized offline data
+        run: |
+          python quant_btc/audit_btc_vision.py
+          python quant_btc/package_dataset.py
+      - name: Test lookahead and next-open mechanics, train-only
+        env:
+          DATASET_ZIP: /tmp/btc_vision/BTCUSDT_BINANCE_VISION_AUDITED_20261116.zip
+        run: python quant_btc/test_research.py
+      - name: Reproduce TRAIN and VALIDATION ONLY (blind is prohibited in cron)
+        run: |
+          python quant_btc/research.py \
+            --zip /tmp/btc_vision/BTCUSDT_BINANCE_VISION_AUDITED_20261116.zip \
+            --prereg quant_btc/PREREGISTRATION_V1.md \
+            --output /tmp/quant-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btc-frozen-validation-${{ github.run_id }}
+          path: |
+            /tmp/quant-results/training_validation_results.json
+            /tmp/btc_vision/audit.json
+          retention-days: 7
