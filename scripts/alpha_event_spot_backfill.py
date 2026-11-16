@@ -289,7 +289,7 @@ def _recover_one(event, *, fetch, now_ms, max_candidate_days):
 
 
 def repair_missing_spot_peaks(events, *, fetch, now_ms=None,
-                              max_events=24, max_candidate_days=10,
+                              max_events=25, max_candidate_days=10,
                               max_seconds=240):
     """Bounded recovery; no additional service or external write.
 
@@ -307,7 +307,20 @@ def repair_missing_spot_peaks(events, *, fetch, now_ms=None,
         previous = lp.get(REPAIR_KEY)
         peak = lp.get("max_since")
         missing = not (isinstance(peak, dict) and _positive(peak.get("price")))
-        if not missing and not (isinstance(previous, dict) and previous.get("version") == RECOVERY_VERSION):
+        # Explicit ROBO repair only: Binance's 2026-03-04 Spot listing
+        # announcement independently confirms this contract/chain and pair.
+        # Do not apply a ticker-based contradiction fix to other assets.
+        verified_robo_contradiction = (
+            str(e.get("symbol") or "").upper() == "ROBO"
+            and _positive(lp.get("vwap"))
+            and isinstance(peak, dict)
+            and _positive(peak.get("price"))
+            and float(peak["price"]) < float(lp["vwap"])
+            and lp.get("claim_method") != CLAIM_METHOD
+        )
+        if (not missing and not verified_robo_contradiction
+                and not (isinstance(previous, dict)
+                         and previous.get("version") == RECOVERY_VERSION)):
             continue
         checked_at = (previous or {}).get("checked_at") or ""
         selected.append((0 if missing else 1, str(checked_at), str(e.get("event_time") or ""), e))
