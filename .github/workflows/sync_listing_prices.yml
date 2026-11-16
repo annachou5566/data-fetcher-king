@@ -41,10 +41,6 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Verify Alpha Events Lite schedule, recovery and price integrity (offline)
-      working-directory: scripts
-      run: python -m unittest -q test_alpha_events_lite_schedule test_alpha_events_price_integrity test_alpha_event_claim_peak test_alpha_event_peak_liquidity
-
     - name: Cache pip
       uses: actions/cache@v4
       with:
@@ -55,6 +51,9 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
 
+    - name: Verify Alpha Events Lite schedule, recovery and price integrity (offline)
+      working-directory: scripts
+      run: python -m unittest -q test_alpha_events_lite_schedule test_alpha_events_price_integrity test_alpha_event_claim_peak test_alpha_event_peak_liquidity
     - name: Qualify isolated R2 CAS and restore
       id: history24h_cas
       if: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover }}
