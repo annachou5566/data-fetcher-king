@@ -39,6 +39,24 @@ class EventPriceAnchorTests(unittest.TestCase):
             candle(ms("2026-10-10T00:00:00Z"), .30),
         ]
 
+    def test_quote_volume_claim_vwap_ignores_a_large_intraminute_wick(self):
+        t = self.EVENT_MS + 60000
+        ordinary = candle(t, .10, volume=10)
+        ordinary[7] = "1.0"  # 10 tokens exchanged for 1 USDT
+        wick = candle(t + 60000, .50, volume=1)
+        wick[2] = "9.0"  # an isolated high cannot borrow the bar's volume
+        wick[7] = ".50"
+        with patch.object(s, "fetch_alpha_trade_klines_official",
+                          side_effect=lambda aid, interval, **kwargs:
+                          [ordinary, wick] if interval == "1m" else
+                          [candle(ms("2026-10-09T00:00:00Z"), .10)]):
+            price = s.fetch_listing_price(
+                "56", "0xabc", "2026-10-09", alpha_id="ALPHA_777",
+                alpha_listing_time_ms=self.OLD_LISTING_MS,
+                event_start_ms=self.EVENT_MS)
+        self.assertIsNotNone(price)
+        self.assertAlmostEqual(price["vwap"], (1 + .50) / (10 + 1), places=8)
+
     def test_utc_time_with_and_without_fraction(self):
         self.assertEqual(s._event_start_ms({"event_time": self.EVENT_TIME}), self.EVENT_MS)
         self.assertEqual(s._event_start_ms({"event_time": "2026-10-09T09:00:00Z"}), self.EVENT_MS)
