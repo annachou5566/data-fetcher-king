@@ -109,8 +109,9 @@ def apply_replacement(event, replacement):
     updated.update(replacement)
     updated["max_since"] = {"price": new_peak, "date": peak_date}
     updated["peak_quality"] = "pending_liquidity_scan"
-    updated.pop("peak_method", None)
-    updated.pop(RETRY_FIELD, None)
+    # Archive guard forbids removing any non-null legacy subfield.
+    # Retain old retry/peak receipts; new claim_method already means the
+    # row will not be selected for this legacy migration again.
     if isinstance(old.get("_peak_liquidity_v1"), dict):
         # Preserve prior verified scanning work for the same event anchor.
         updated["_peak_liquidity_v1"] = old["_peak_liquidity_v1"]
