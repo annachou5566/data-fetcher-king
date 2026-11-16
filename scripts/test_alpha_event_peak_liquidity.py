@@ -118,9 +118,31 @@ class LiquidityPeak(unittest.TestCase):
         alpha=lambda aid,s,t,l:[bar(s,.6)]
         spot=lambda sym,s,t,l:[bar(s,.8)]
         r,calls=run([e],now_ms=EVENT+2*DAY,pages=3,alpha=alpha,spot=spot)
-        self.assertEqual([v[0] for v in calls],["alpha","spot"])
+        self.assertEqual([v[0] for v in calls],["alpha","spot","spot"])
         self.assertEqual(e["listing_price"]["max_since"]["price"],.8)
         self.assertEqual(e["listing_price"][STATE_KEY]["status"],"caught_up")
+
+    def test_recent_spot_peak_updates_before_historical_scan_is_caught_up(self):
+        now = EVENT + 30 * DAY
+        e = event(peak=.04)
+        e["is_spot_listed"] = True
+        e["spot_listed_at"] = "2026-10-10"
+        e["listing_price"]["vwap"] = .036
+        e["listing_price"]["claim_method"] = "event_5m_quote_vwap"
+        e["listing_price"]["claim_quote_usd"] = 2000
+
+        def alpha_fn(aid, start, end, limit):
+            return [bar(start, .037)]
+        def spot_fn(sym, start, end, limit):
+            if start >= now - DAY - WINDOW_MS:
+                return [bar(now - 30 * 60_000, .055, quote=100000, trades=500)]
+            return [bar(start, .037)]
+        from alpha_event_peak_liquidity import WINDOW_MS
+        result, calls = run([e],now_ms=now,alpha=alpha_fn,spot=spot_fn,pages=1)
+        self.assertEqual(result["caught_up"],0)
+        self.assertEqual(result["recent_updated"],1)
+        self.assertAlmostEqual(e["listing_price"]["max_since"]["price"],.055)
+        self.assertEqual(e["listing_price"]["_peak_liquidity_v1"]["status"],"partial")
 
     def test_repeat_events_independent_anchors(self):
         e1=event("one",peak=0.2)
