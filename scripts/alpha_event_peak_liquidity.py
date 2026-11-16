@@ -78,7 +78,7 @@ def _process(event, *, anchor, alpha_id, alpha_listing_ms, spot_ms, fetch_alpha,
     lp = event["listing_price"]
     anchor = max(anchor, int(alpha_listing_ms or 0)) if not spot_ms or anchor < spot_ms else anchor
     if anchor > now_ms:
-        return False, "not_listed_yet"
+        return False, "not_listed_yet", False
     state = lp.get(STATE_KEY)
     if not isinstance(state, dict) or state.get("version") != 1 or state.get("anchor_ms") != anchor:
         state = {
@@ -91,6 +91,12 @@ def _process(event, *, anchor, alpha_id, alpha_listing_ms, spot_ms, fetch_alpha,
         cursor = anchor
     best = number(state.get("best_price")) or 0.0
     best_date = state.get("best_date")
+    if lp.get("claim_method") == "event_5m_quote_vwap" and number(lp.get("claim_quote_usd")):
+        # A verified executed 5m Claim VWAP is an actual price benchmark,
+        # so a genuine hold Peak cannot fall below it.
+        claim = number(lp.get("vwap")) or 0.0
+        if claim > best:
+            best, best_date = claim, lp.get("date")
     floor = quote_floor(event, number(lp.get("vwap")))
     scanned = 0
     holds = 0
@@ -143,6 +149,38 @@ def _process(event, *, anchor, alpha_id, alpha_listing_ms, spot_ms, fetch_alpha,
 
     if cursor >= now_ms - WINDOW_MS:
         status = "caught_up"
+
+    # A 1-day recent window is fetched separately from the historical
+    # checkpoint. This makes recently liquid Spot peaks visible quickly
+    # without pretending the entire old history was already scanned.
+    # Only completed five-minute bars with real quote volume can qualify.
+    recent_peak = False
+    recent_start = max(anchor, now_ms - 288 * WINDOW_MS)
+    if spot_ms is not None and now_ms >= spot_ms + WINDOW_MS:
+        recent_start = max(recent_start, spot_ms)
+    if recent_start < now_ms - WINDOW_MS:
+        spot_recent = bool(spot_ms is not None and recent_start >= spot_ms)
+        try:
+            if spot_recent:
+                recent_rows = fetch_spot(
+                    str(event.get("symbol") or event.get("token") or "").upper(),
+                    recent_start, now_ms - WINDOW_MS, 288)
+            else:
+                recent_rows = fetch_alpha(alpha_id, recent_start, now_ms - WINDOW_MS, 288)
+        except Exception:
+            recent_rows = None
+        if isinstance(recent_rows, list):
+            for bar in recent_rows:
+                try:
+                    stamp = int(float(bar[0]))
+                except (TypeError, ValueError, IndexError, OverflowError):
+                    continue
+                if not recent_start <= stamp <= now_ms - WINDOW_MS:
+                    continue
+                price = qualify_bar(bar, floor)
+                if price is not None and price > best:
+                    best, best_date, recent_peak = price, utc_day(stamp), True
+
     state.update({
         "cursor_ms": cursor, "best_price": best or None,
         "best_date": best_date, "quote_floor_usd": floor,
@@ -152,7 +190,7 @@ def _process(event, *, anchor, alpha_id, alpha_listing_ms, spot_ms, fetch_alpha,
     # Mark only state, no false peak publication if source is unavailable.
     lp[STATE_KEY] = state
     if not best or not best_date:
-        return bool(scanned), status
+        return bool(scanned), status, False
 
     old_peak = lp.get("max_since")
     old_value = number(old_peak.get("price")) if isinstance(old_peak, dict) else None
@@ -168,10 +206,15 @@ def _process(event, *, anchor, alpha_id, alpha_listing_ms, spot_ms, fetch_alpha,
             best, best_date = old_value, old_peak.get("date")
         lp["max_since"] = {"price": best, "date": best_date}
         lp["peak_method"] = METHOD
+        lp["peak_quality"] = ("history_verified_to_latest_complete_5m"
+                              if status == "caught_up" else "partial_history")
+        if old_value is None or best > old_value:
+            print(f"  [peak-5m-updated] {event.get('symbol') or event.get('token')} "
+                  f"Peak={old_value}->{best:.9g} status={status}", flush=True)
         event["ath_since_listing_price"] = best
         event["ath_since_listing_date"] = best_date
-        return True, status
-    return bool(scanned), status
+        return True, status, bool(recent_peak)
+    return bool(scanned), status, False
 
 
 def refresh_liquidity_peaks(events, *, event_ms, alpha_info, fetch_alpha,
@@ -200,14 +243,15 @@ def refresh_liquidity_peaks(events, *, event_ms, alpha_info, fetch_alpha,
         # The upstream Binance token-list identity was checked against this
         # exact event contract by alpha_info(); ticker alone is never enough.
         state = lp.get(STATE_KEY) or {}
-        eligible.append((str(state.get("checked_at") or ""), e, anchor,
+        priority = 0 if lp.get("peak_quality") == "pending_liquidity_scan" else 1
+        eligible.append((priority, str(state.get("checked_at") or ""), e, anchor,
                          sym, alpha_id, listing_ms))
-    eligible.sort(key=lambda x: (x[0], x[2], str(x[1].get("id") or "")))
+    eligible.sort(key=lambda x: (x[0], x[1], x[3], str(x[2].get("id") or "")))
     selected = eligible[:max_events]
     cache = {}
 
     def one(item):
-        _, e, anchor, sym, alpha_id, listing_ms = item
+        _, _, e, anchor, sym, alpha_id, listing_ms = item
         is_spot = bool(e.get("spot_listed") or e.get("is_spot_listed"))
         spot_ms = None
         if is_spot:
@@ -238,19 +282,20 @@ def refresh_liquidity_peaks(events, *, event_ms, alpha_info, fetch_alpha,
                     now_ms / 1000, timezone.utc).isoformat()
                 state["status"] = "spot_listing_day_unavailable"
                 lp[STATE_KEY] = state
-                return False, "spot_listing_day_unavailable"
+                return False, "spot_listing_day_unavailable", False
         return _process(e, anchor=anchor, alpha_id=alpha_id,
                         alpha_listing_ms=listing_ms, spot_ms=spot_ms,
                         fetch_alpha=fetch_alpha, fetch_spot=fetch_spot,
                         now_ms=now_ms, pages=pages_per_event)
 
     result = {"eligible": len(eligible), "selected": len(selected),
-              "advanced": 0, "caught_up": 0, "held": 0}
+              "advanced": 0, "caught_up": 0, "held": 0, "recent_updated": 0}
     # Serial processing avoids racing the per-run spot date resolution cache;
     # each HTTP request is already bounded by the upstream 15s timeouts.
     for item in selected:
-        advanced, status = one(item)
+        advanced, status, recent_updated = one(item)
         result["advanced"] += int(advanced)
+        result["recent_updated"] += int(recent_updated)
         result["caught_up"] += int(status == "caught_up")
         result["held"] += int(status.startswith("provider_unavailable") or status.endswith("_unavailable"))
     return result
