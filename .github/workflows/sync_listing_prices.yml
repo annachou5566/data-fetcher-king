@@ -53,7 +53,7 @@ jobs:
 
     - name: Verify Alpha Events Lite schedule, recovery and price integrity (offline)
       working-directory: scripts
-      run: python -m unittest -q test_alpha_events_lite_schedule test_alpha_events_price_integrity test_alpha_event_claim_peak test_alpha_event_peak_liquidity test_alpha_event_claim_repair
+      run: python -m unittest -q test_alpha_events_lite_schedule test_alpha_events_price_integrity test_alpha_event_claim_peak test_alpha_event_peak_liquidity test_alpha_event_claim_repair test_alpha_event_spot_backfill
     - name: Qualify isolated R2 CAS and restore
       id: history24h_cas
       if: ${{ github.event_name == 'workflow_dispatch' && inputs.legacy_history24h_cutover }}
