@@ -1,10 +1,10 @@
-"""Frozen identities of the 24 historically incomplete Spot-listed Alpha events.
+"""Frozen identities of 24 legacy missing-Peak Spot events and official ROBO.
 
 Snapshot: alpha-events/all.json, audited 2026-11-16.
 Each Spot pair's *earliest Binance 1d candle* was independently checked
 to match its recorded first_spot_day. This is a temporal listing witness;
 it is NOT an independent on-chain contract attestation for every asset.
-Only SENT and AVNT have additionally verified Binance notice contract URLs.
+SENT, AVNT, and ROBO have verified Binance notice contract URLs.
 Fail closed on unknown / modified symbol, chain, or contract.
 """
 
@@ -59,6 +59,9 @@ SPOT_MISSING_PEAK_ALLOWLIST = {'0G': {'chain': '56',
  'PROVE': {'chain': '1',
            'contract': '0x6BEF15D938d4E72056AC92Ea4bDD0D76B1C4ad29',
            'first_spot_day': '2025-08-05'},
+ 'ROBO': {'chain': '56',
+          'contract': '0x475cbf5919608e0c6af00e7bf87fab83bf3ef6e2',
+          'first_spot_day': '2026-03-04'},
  'SENT': {'chain': '1',
           'contract': '0x56A3BA04E95d34268A19b2a4474DC979baBDaf76',
           'first_spot_day': '2026-01-22'},
@@ -82,6 +85,7 @@ SPOT_MISSING_PEAK_ALLOWLIST = {'0G': {'chain': '56',
          'first_spot_day': '2025-09-15'}}
 
 OFFICIAL_CONTRACT_NOTICES = {
+    "ROBO": "https://www.binance.com/en/support/announcement/detail/82c9c8166a2a434681c20a23a346a5b8",
     "SENT": "https://www.binance.com/en-IN/support/announcement/detail/85af9e52f60547dd8f7b67fd3dc2f7b4",
     "AVNT": "https://www.binance.com/en/support/announcement/detail/50ff03bc1d94471181887c43b930d3f0",
 }
