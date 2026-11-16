@@ -43,7 +43,7 @@ jobs:
 
     - name: Verify Alpha Events Lite schedule, recovery and price integrity (offline)
       working-directory: scripts
-      run: python -m unittest -q test_alpha_events_lite_schedule test_alpha_events_price_integrity
+      run: python -m unittest -q test_alpha_events_lite_schedule test_alpha_events_price_integrity test_alpha_event_claim_peak test_alpha_event_peak_liquidity
 
     - name: Cache pip
       uses: actions/cache@v4
