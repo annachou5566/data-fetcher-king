@@ -263,9 +263,10 @@ def _recover_one(event, *, fetch, now_ms, max_candidate_days):
         "peak_quality": "spot_only_liquidity_verified_asof" if complete else "partial_spot_history",
         "peak_scope": "spot_since_verified_listing",  # no claim of unobserved Alpha history
     })
-    # Clear old retry marks after a fully evidenced repair.
-    lp.pop("_price_retry_after_utc", None)
-    lp.pop("_claim_5m_repair_retry_after_utc", None)
+    # Preserve legacy retry receipts even after successful recovery.
+    # The existing archived-price guard forbids erasing non-null fields
+    # inside listing_price. The new claim_method / recovery checkpoint
+    # already prevent these stale retry timestamps from re-triggering work.
     lp[REPAIR_KEY] = {
         **state, "version": RECOVERY_VERSION, "anchor_ms": anchor,
         "contract": event["contract_address"],
