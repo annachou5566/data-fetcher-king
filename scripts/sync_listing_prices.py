@@ -1111,13 +1111,52 @@ def _fetch_spot_verified_klines(symbol, interval, start_ms, end_ms=None, limit=1
     return None
 
 
+def _report_price_anomalies(events, emit=print):
+    """Report exactly which historic prices still lack trading proof.
+
+    Never modify event records or mistake legacy daily-close highs for
+    verified executed-volume 5m Peak values.
+    """
+    missing_claim = []
+    claim_above_peak = []
+    large_unverified = []
+    for e in events:
+        lp = e.get("listing_price") or {}
+        symbol = str(e.get("symbol") or e.get("token") or "?")
+        try:
+            claim = float(lp.get("vwap") or 0)
+            peak = float((lp.get("max_since") or {}).get("price") or 0)
+        except (ValueError, TypeError, OverflowError):
+            claim, peak = 0, 0
+        if not math.isfinite(claim) or claim <= 0:
+            missing_claim.append(symbol)
+        elif math.isfinite(peak) and peak > 0 and peak < claim:
+            status = (lp.get("_alpha_legacy_repair_v1") or {}).get("last_status")
+            claim_above_peak.append((symbol, str(status or "trade_evidence_unavailable")))
+        elif (math.isfinite(peak) and peak > 20 * claim
+              and lp.get("peak_method") != "highest_qualified_5m_quote_vwap"):
+            large_unverified.append(symbol)
+
+    emit("  [price-evidence-audit] "
+         f"missing_claim={len(missing_claim)} "
+         f"peak_below_claim={len(claim_above_peak)} "
+         f"high_ratio_legacy_unverified={len(large_unverified)} "
+         f"missing_claim_symbols={','.join(missing_claim) or '-'} "
+         f"below_claim_reasons={','.join(f'{name}:{why}' for name,why in claim_above_peak) or '-'} "
+         f"legacy_high_ratio_symbols={','.join(large_unverified) or '-'}",
+         flush=True)
+    return {"missing_claim": missing_claim,
+            "peak_below_claim": claim_above_peak,
+            "high_ratio_legacy_unverified": large_unverified}
+
+
 def _repair_spot_only_historical_peaks(events):
     """Approved legacy Spot contract backfill via existing All/History writer."""
     from alpha_event_spot_backfill import repair_missing_spot_peaks
     return repair_missing_spot_peaks(
         events,
         fetch=_fetch_spot_verified_klines,
-        max_events=24,
+        max_events=25,
         max_candidate_days=10,
         max_seconds=240,
     )
@@ -2292,6 +2331,9 @@ def main():
           f"eligible={peak_scan['eligible']} selected={peak_scan['selected']} "
           f"advanced={peak_scan['advanced']} caught_up={peak_scan['caught_up']} "
           f"held={peak_scan['held']} recent_updated={peak_scan['recent_updated']}")
+
+    # Price evidence report only: no synthetic quotes, no other R2 writer.
+    _report_price_anomalies(all_events)
 
     # [SỬA — GIAI ĐOẠN 0 tái cấu trúc kiến trúc, ĐÃ SỬA LẠI LẦN 2]
     # Lần sửa trước tôi bỏ luôn cả history.json — SAI, vì vừa xác nhận
