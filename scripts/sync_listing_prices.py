@@ -324,7 +324,7 @@ def _max_price_since(k_infos, since_date_str, ref_price=None):
 ALPHA_TRADE_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
 
 
-def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=None, limit=1500):
+def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=None, limit=1500, timeout_seconds=15):
     """
     Gọi API Alpha Klines CHÍNH THỨC, có docs công khai của Binance:
     https://developers.binance.com/docs/alpha/market-data/rest-api/klines
@@ -354,7 +354,7 @@ def fetch_alpha_trade_klines_official(alpha_id, interval, start_ms=None, end_ms=
         params["endTime"] = int(end_ms)
     try:
         res = requests.get(
-            ALPHA_TRADE_KLINES_URL, params=params, timeout=15,
+            ALPHA_TRADE_KLINES_URL, params=params, timeout=timeout_seconds,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         )
         if res.status_code != 200:
@@ -1197,6 +1197,44 @@ _ALPHA_STATUS_MAP = {}  # {SYMBOL: {"listingCex", "fullyDelisted", "alphaId", "c
 # Contract-bound, offline-verifiable chain identities from the already fetched
 # Binance Alpha token list. This existing writer ONLY updates All + History.
 _ALPHA_CHAIN_BY_EXACT_TOKEN = {}
+_ALPHA_BY_EXACT_TOKEN = {}
+
+
+def _verified_alpha_identity_index(tokens):
+    """Never collapse different token contracts into one reused ticker.
+
+    The Binance list may contain several same-symbol entries. A repeated
+    symbol+chain+contract is admitted only if alphaId/listingTime agree.
+    """
+    result, conflicted = {}, set()
+    for token in tokens:
+        if not isinstance(token, dict):
+            continue
+        symbol = str(token.get("symbol") or "").upper().strip()
+        contract = _alpha_contract_key(token.get("contractAddress"))
+        chain = _alpha_chain_id(token.get("chainId"))
+        alpha_id = token.get("alphaId")
+        if not symbol or not contract or not chain or not alpha_id:
+            continue
+        key = (symbol, contract, chain.removeprefix("CT_"))
+        value = (str(alpha_id), token.get("listingTime"))
+        if key in result and result[key] != value:
+            conflicted.add(key)
+        else:
+            result[key] = value
+    for key in conflicted:
+        result.pop(key, None)
+    return result
+
+
+def _get_alpha_info_exact(event):
+    symbol = str(event.get("symbol") or event.get("token") or "").upper().strip()
+    contract = _alpha_contract_key(event.get("contract_address"))
+    chain = _alpha_chain_id(event.get("chain_id"))
+    if not symbol or not contract or not chain:
+        return None, None
+    return _ALPHA_BY_EXACT_TOKEN.get(
+        (symbol, contract, chain.removeprefix("CT_")), (None, None))
 
 
 def _alpha_contract_key(address):
@@ -1819,8 +1857,9 @@ ALPHA_TOKEN_LIST_URL = "https://www.binance.com/bapi/defi/v1/public/wallet-direc
 
 
 def fetch_alpha_token_status_map():
-    global _ALPHA_CHAIN_BY_EXACT_TOKEN
+    global _ALPHA_CHAIN_BY_EXACT_TOKEN, _ALPHA_BY_EXACT_TOKEN
     _ALPHA_CHAIN_BY_EXACT_TOKEN = {}
+    _ALPHA_BY_EXACT_TOKEN = {}
     """
     Đối chiếu với danh sách token Alpha THẬT từ chính Binance — để phân
     biệt rạch ròi 2 trường hợp "no data" hoàn toàn khác nhau, mà log text
@@ -1851,6 +1890,7 @@ def fetch_alpha_token_status_map():
         if not isinstance(data, list):
             return {}
         _ALPHA_CHAIN_BY_EXACT_TOKEN = _verified_alpha_chain_index(data)
+        _ALPHA_BY_EXACT_TOKEN = _verified_alpha_identity_index(data)
         out = {}
         for t in data:
             sym = (t.get("symbol") or "").upper()
@@ -2200,6 +2240,28 @@ def main():
 
     filled_spot = enrich_spot_listing_prices(all_events)
     print(f"✅ Backfilled {filled_spot} giá lúc spot-listing (ngày lấy trực tiếp từ klines Binance)")
+
+    # Direct, contract+chain-verified historical Alpha 1m/5m recovery.
+    # This avoids the unreliable internal proxy's HTTP 503 retries for
+    # verified Alpha symbols. Only the existing pair CAS writer persists.
+    from alpha_event_alpha_repair import repair_exact_alpha_legacy
+    alpha_legacy = repair_exact_alpha_legacy(
+        all_events,
+        exact_info=_get_alpha_info_exact,
+        fetch=lambda aid,interval,start,end,lim:
+        fetch_alpha_trade_klines_official(
+            aid, interval, start_ms=start, end_ms=end, limit=lim, timeout_seconds=8),
+        max_events=128,
+        max_days=5,
+        max_workers=5,
+        max_seconds=210,
+    )
+    print("  [alpha-legacy-backfill] "
+          f"eligible={alpha_legacy['eligible']} selected={alpha_legacy['selected']} "
+          f"repaired={alpha_legacy['repaired']} held={alpha_legacy['held']} "
+          f"history_complete={alpha_legacy['history_complete']} "
+          f"budget_exhausted={alpha_legacy['budget_exhausted']}",
+          flush=True)
 
     # Repair legacy 24h/HLC3 Claim rows by exact 5m trade data first.
     # The same CAS-verified writer publishes All/History; never reset R2.
