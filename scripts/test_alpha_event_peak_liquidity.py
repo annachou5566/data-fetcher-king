@@ -131,6 +131,18 @@ class LiquidityPeak(unittest.TestCase):
         self.assertNotEqual(e1["listing_price"][STATE_KEY]["anchor_ms"],
                             e2["listing_price"][STATE_KEY]["anchor_ms"])
 
+    def test_missing_spot_day_does_not_starve_other_events(self):
+        missing = event(id="a", anchor="2026-10-09T09:00:00Z")
+        missing["is_spot_listed"] = True
+        healthy = event(id="b", anchor="2026-10-10T09:00:00Z")
+        events = [missing, healthy]
+        first, _ = run(events, resolve=lambda *args: None, max_events=1)
+        self.assertEqual(first["held"], 1)
+        self.assertIn(STATE_KEY, missing["listing_price"])
+        second, _ = run(events, max_events=1)
+        self.assertEqual(second["selected"], 1)
+        self.assertIn(STATE_KEY, healthy["listing_price"])
+
     def test_oldest_checked_first_fair_rotation(self):
         events=[event(id=f"e{i}") for i in range(3)]
         run(events,max_events=1)
