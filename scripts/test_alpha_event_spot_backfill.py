@@ -129,10 +129,112 @@ class HistoricalSpotBackfillTests(unittest.TestCase):
         self.assertEqual(enforce_no_unverified_history_admission([old], safe), 1)
 
     def test_exactly_24_frozen_legacy_contracts(self):
-        self.assertEqual(len(SPOT_MISSING_PEAK_ALLOWLIST), 24)
+        self.assertEqual(len(SPOT_MISSING_PEAK_ALLOWLIST), 25)
         self.assertEqual(SPOT_MISSING_PEAK_ALLOWLIST["SENT"]["chain"], "1")
         self.assertEqual(SPOT_MISSING_PEAK_ALLOWLIST["SENT"]["first_spot_day"],
                          "2026-01-22")
+
+    def test_official_robo_contradiction_recovered_from_real_spot_shape(self):
+        # Official Binance 2026-03-04 listing notice attests BSC contract,
+        # ROBO/USDT and the genuine first Spot trading date. In R2 the
+        # 20:00 UTC Alpha reward event used a legacy Claim above daily Peak.
+        from alpha_events_completion_only_guard import _no_price_erasure
+        from alpha_event_spot_backfill import CLAIM_METHOD
+        day=int(datetime(2026,3,4,tzinfo=timezone.utc).timestamp()*1000)
+        instant=day+20*3600_000
+        now=day+2*DAY_MS+2*3600_000
+        e=event("ROBO")
+        e["event_time"]="2026-03-04T20:00:00+00:00"
+        e["spot_listing_price"]={"vwap":0.04978564719035632,"date":"2026-03-04"}
+        e["listing_price"]={"vwap":0.04978564719035632,
+                            "date":"2026-03-04",
+                            "_price_retry_after_utc":"2026-11-16T10:00:00+00:00",
+                            "max_since":{"price":0.04636187,"date":"2026-03-04"}}
+        e["amount_per_user"]=600
+        before=copy.deepcopy(e)
+
+        def market(symbol, interval, start, end, limit):
+            if symbol!="ROBO":
+                return None
+            if interval=="1d" and start==0:
+                return [[day,.042,.06,.04,.041,1,0,1000,100]]
+            if interval=="1m":
+                return [[instant+i*60000,.043,.044,.042,.043,
+                         1000/.043,instant+i*60000+59999,1000,120,0,0,0]
+                        for i in range(12)]
+            if interval=="1d":
+                return [[day+j*DAY_MS,.04,high,.03,.04,1,0,quote,100]
+                        for j,(high,quote) in enumerate([
+                         (.045,90*2000),(.061,288*2000),(.039,1000)])]
+            if interval=="5m":
+                day_begin=(start//DAY_MS)*DAY_MS
+                if day_begin==day:
+                    # Binance started ROBO at 16:30 UTC.
+                    return [bar(day+i*WINDOW_MS,.041,quote=2000)
+                            for i in range(198,288)]
+                if day_begin==day+DAY_MS:
+                    return [bar(day+DAY_MS+i*WINDOW_MS,
+                                .05 if i==15 else .044,quote=2000)
+                            for i in range(288)]
+                return []
+            return None
+
+        result=repair_missing_spot_peaks([e],fetch=market,now_ms=now)
+        self.assertEqual(result["eligible"],1)
+        self.assertEqual(result["updated"],1)
+        self.assertEqual(result["recovered"],0)
+        self.assertEqual(result["complete_asof"],1)
+        self.assertTrue(_no_price_erasure(before,e))
+        self.assertEqual(e["listing_price"]["claim_method"],CLAIM_METHOD)
+        self.assertAlmostEqual(e["listing_price"]["vwap"],.043)
+        self.assertAlmostEqual(e["listing_price"]["max_since"]["price"],.05)
+        self.assertEqual(e["listing_price"]["max_since"]["date"],"2026-03-05")
+        self.assertEqual(e["listing_price"]["peak_scope"],"spot_since_verified_listing")
+        self.assertEqual(e["listing_price"]["_price_retry_after_utc"],
+                         before["listing_price"]["_price_retry_after_utc"])
+        # Next run only continues its own verified Spot checkpoint.
+        next_run=repair_missing_spot_peaks([e],fetch=market,now_ms=now)
+        self.assertEqual(next_run["recovered"],0)
+        self.assertEqual(next_run["complete_asof"],1)
+
+    def test_robo_contract_and_listing_mismatch_fail_closed(self):
+        e=event("ROBO")
+        e["event_time"]="2026-03-04T20:00:00+00:00"
+        e["listing_price"]["max_since"]={"price":.03,"date":"2026-03-04"}
+        for field,value in (("contract_address","0x"+"1"*40),
+                            ("chain_id","8453"),
+                            ("spot_listed_at","2026-03-05")):
+            bad=copy.deepcopy(e)
+            bad[field]=value
+            self.assertIsNone(_identity(bad))
+            def forbidden(*args,**kwargs):
+                raise AssertionError("Binance fetch on unverified identity")
+            self.assertEqual(repair_missing_spot_peaks(
+                [bad],fetch=forbidden,now_ms=NOW)["eligible"],0)
+
+    def test_price_evidence_audit_is_read_only_and_distinguishes_legacy(self):
+        import sync_listing_prices as price
+        before=[
+          {"symbol":"MISSING","listing_price":None},
+          {"symbol":"OLD","listing_price":{"vwap":.4,
+                      "max_since":{"price":.3},
+                      "_alpha_legacy_repair_v1":{"last_status":"alpha_1m_unavailable"}}},
+          {"symbol":"EXTREME","listing_price":{"vwap":.01,
+                      "max_since":{"price":.9}}},
+          {"symbol":"PROVEN","listing_price":{"vwap":.01,
+                      "max_since":{"price":.9},
+                      "peak_method":"highest_qualified_5m_quote_vwap"}},
+        ]
+        snapshot=copy.deepcopy(before)
+        messages=[]
+        out=price._report_price_anomalies(before,
+                 emit=lambda *args,**kwargs: messages.append(args[0]))
+        self.assertEqual(before,snapshot)
+        self.assertEqual(out["missing_claim"],["MISSING"])
+        self.assertEqual(out["peak_below_claim"],
+                         [("OLD","alpha_1m_unavailable")])
+        self.assertEqual(out["high_ratio_legacy_unverified"],["EXTREME"])
+        self.assertIn("peak_below_claim=1",messages[0])
 
     def test_pin_contract_chain_and_listing_day(self):
         e = event()
