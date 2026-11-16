@@ -22,6 +22,7 @@ import threading
 import random
 import urllib.parse
 import requests
+import math
 import zipfile
 import io
 import csv as _csv
@@ -209,6 +210,33 @@ def _compute_vwap(hourly_candles, target_date_str=None, start_ms=None, end_ms=No
             num += ((high + low + close) / 3) * vol
         den += vol
     return (num / den) if den > 0 else None
+
+
+def _compute_exact_trade_vwap(candles, start_ms, end_ms):
+    """Actual 1m/5m trade VWAP, or (None, 0) without complete quote volume."""
+    quote_total = base_total = 0.0
+    for k in candles:
+        try:
+            t = int(float(k[0]))
+            if t < start_ms or t > end_ms:
+                continue
+            base = float(k[5])
+            if base <= 0:
+                continue
+            quote = float(k[7])
+            low, high = float(k[3]), float(k[2])
+            price = quote / base if quote > 0 else 0
+            if (not all(math.isfinite(v) for v in (base, quote, low, high, price))
+                    or not (base > 0 and quote > 0 and low > 0)
+                    or not (low * .999 <= price <= high * 1.001)):
+                return None, 0.0
+        except (IndexError, TypeError, ValueError, OverflowError, ZeroDivisionError):
+            return None, 0.0
+        quote_total += quote
+        base_total += base
+    if base_total <= 0 or quote_total <= 0:
+        return None, 0.0
+    return quote_total / base_total, quote_total
 
 
 def _max_price_since(k_infos, since_date_str, ref_price=None):
@@ -524,7 +552,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                 claim_candles = [k for k in k_intraday if first_trade_ms <= int(k[0]) <= claim_end_ms]
                 open_price = fa.safe_float(claim_candles[0][1])
                 close_price = fa.safe_float(claim_candles[-1][4])
-                ref_price = _compute_vwap(k_intraday, start_ms=first_trade_ms, end_ms=claim_end_ms)
+                exact_claim, claim_quote = _compute_exact_trade_vwap(
+                    claim_candles, first_trade_ms, claim_end_ms)
+                ref_price = exact_claim or _compute_vwap(
+                    claim_candles, start_ms=first_trade_ms, end_ms=claim_end_ms)
                 if ref_price is None or ref_price <= 0:
                     _fail_reason_local.value = "Post-event VWAP unavailable"
                     return None
@@ -540,6 +571,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                     "date": actual_target_date_str,
                     "event_start_ms": event_ms,
                     "max_since": max_since,
+                    **({"claim_method": "event_5m_quote_vwap",
+                        "claim_quote_usd": claim_quote,
+                        "claim_source": "binance_alpha_1m"}
+                       if exact_claim is not None else {}),
                 }
             official_note = (f"API Alpha không trả nến 1 phút hợp lệ sau event cho "
                              f"alphaId={alpha_id} từ {target_date_str_real}; "
@@ -656,7 +691,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
                 # nhất quán với fix ở fetch_alpha_trade_klines_official,
                 # tránh lặp lại cùng loại lỗi nếu ngày không canh nửa đêm.
                 if first_trade_ms is not None:
-                    vwap = _compute_vwap(k_hourly, start_ms=first_trade_ms, end_ms=claim_end_ms)
+                    exact_claim, claim_quote = _compute_exact_trade_vwap(
+                        claim_candles, first_trade_ms, claim_end_ms)
+                    vwap = exact_claim or _compute_vwap(
+                        claim_candles, start_ms=first_trade_ms, end_ms=claim_end_ms)
         except Exception:
             pass
 
@@ -686,6 +724,10 @@ def fetch_listing_price(chain_id, contract, target_date_str, alpha_id=None, alph
             "date":  actual_date,
             "event_start_ms": event_start_ms if event_start_ms is not None else target_ms,
             "max_since": _max_price_since(k_max, actual_date, ref_price=ref_price),
+            **({"claim_method": "event_5m_quote_vwap",
+                "claim_quote_usd": claim_quote,
+                "claim_source": "binance_alpha_agg_5m"}
+               if vwap is not None and "exact_claim" in locals() and exact_claim is not None else {}),
         }
 
     _fail_reason_local.value = f"[official: {official_note}] {fail_reason}"
@@ -933,7 +975,7 @@ def fetch_listing_price_public_spot(symbol, target_date_str):
 
 
 
-def fetch_event_price_public_spot(symbol, event_start_ms):
+def fetch_event_price_public_spot(symbol, event_start_ms, spot_start_ms=None):
     """Fallback only: price an individual Alpha reward from post-event SPOT candles.
 
     Binance Vision 1m bars provide an independent event-time fallback after
@@ -943,11 +985,23 @@ def fetch_event_price_public_spot(symbol, event_start_ms):
     if event_start_ms is None:
         return None
     try:
-        intraday = _binance_public_klines(symbol, "1m", start_ms=event_start_ms, limit=30)
+        search_start_ms = max(event_start_ms, int(spot_start_ms or 0))
+        intraday = _binance_public_klines(symbol, "1m", start_ms=search_start_ms, limit=30)
+        if not intraday:
+            # Official public Spot market-data endpoint includes recent data
+            # before Binance Vision daily archives become available.
+            response = requests.get(
+                "https://data-api.binance.vision/api/v3/klines",
+                params={"symbol": f"{symbol}USDT", "interval": "1m",
+                        "startTime": search_start_ms, "limit": 30},
+                timeout=12,
+            )
+            if response.status_code == 200 and isinstance(response.json(), list):
+                intraday = response.json()
         if not intraday:
             return None
         intraday = sorted(
-            (k for k in intraday if int(k[0]) >= event_start_ms),
+            (k for k in intraday if int(k[0]) >= search_start_ms),
             key=lambda k: int(k[0]),
         )
         first_trade_ms = next(
@@ -957,7 +1011,8 @@ def fetch_event_price_public_spot(symbol, event_start_ms):
             return None
         claim_end_ms = first_trade_ms + CLAIM_WINDOW_MINUTES * 60_000 - 1
         claim = [k for k in intraday if first_trade_ms <= int(k[0]) <= claim_end_ms]
-        vwap = _compute_vwap(claim, start_ms=first_trade_ms, end_ms=claim_end_ms)
+        vwap, quote_total = _compute_exact_trade_vwap(
+            claim, first_trade_ms, claim_end_ms)
         if vwap is None or vwap <= 0 or not claim:
             return None
         day_start = (first_trade_ms // 86400000) * 86400000
@@ -965,7 +1020,7 @@ def fetch_event_price_public_spot(symbol, event_start_ms):
         daily = _binance_public_klines(symbol, "1d", start_ms=day_start, limit=1000)
         peak = _max_price_since(daily, event_date, ref_price=vwap) if daily else None
         if not peak or not peak.get("price"):
-            return None
+            peak = {"price": vwap, "date": event_date}
         return {
             "vwap": vwap,
             "open": fa.safe_float(claim[0][1]),
@@ -974,6 +1029,9 @@ def fetch_event_price_public_spot(symbol, event_start_ms):
             "event_start_ms": event_start_ms,
             "max_since": peak,
             "source": "public_spot_event",
+            "claim_method": "event_5m_quote_vwap",
+            "claim_quote_usd": quote_total,
+            "claim_source": "binance_spot_1m",
         }
     except Exception as ex:
         if DEBUG:
@@ -1216,10 +1274,34 @@ def _process_one(e, idx, total):
     )
     dex_fail_reason = getattr(_fail_reason_local, "value", None) if not result else None
 
-    if not result and e.get("spot_listed") and not e.get("listing_price_unavailable"):
-        # Claim/Peak on repeat rewards must never come from original spot-listing.
-        # Preserve the separate spot_listing_price pipeline as-is.
-        result = fetch_event_price_public_spot(symbol, event_ms)
+    st = _ALPHA_STATUS_MAP.get(str(symbol).upper()) or {}
+    exact_spot = (bool(_alpha_id) and st.get("listingCex") is True
+                  and (e.get("spot_listed") or e.get("is_spot_listed")))
+    if (not result or result.get("claim_method") != "event_5m_quote_vwap") and exact_spot:
+        # Verified Binance Alpha symbol+contract only. A cached Spot ticker
+        # or a token marked delisted cannot silently prove the same asset.
+        spot_ms = None
+        date = str(e.get("spot_listed_at") or "")[:10]
+        if not date and isinstance(e.get("spot_listing_price"), dict):
+            date = str(e["spot_listing_price"].get("date") or "")[:10]
+        try:
+            listed = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            proposed_ms = int(listed.timestamp() * 1000)
+            # TGE months before actual trading is not proof of a claimable
+            # event. Protect against borrowing a future token's listing.
+            if proposed_ms <= event_ms:
+                # The token was already on Spot when this later reward
+                # was claimed. Value the actual event minute, not its
+                # original Spot listing or the following calendar day.
+                spot_ms = event_ms
+            elif proposed_ms <= event_ms + 14 * 86400000:
+                spot_ms = proposed_ms
+        except (ValueError, TypeError, OverflowError):
+            pass
+        spot_result = fetch_event_price_public_spot(
+            symbol, event_ms, spot_start_ms=spot_ms) if spot_ms or not date else None
+        if spot_result and spot_result.get("claim_method") == "event_5m_quote_vwap":
+            result = spot_result
 
     tag = f"OK  vwap=${result['vwap']:.6f}  (open=${result['open']:.6f})" if result else "no data"
     print(f"  [{idx}/{total}] {symbol} ({date_str})... {tag}", flush=True)
@@ -1415,6 +1497,33 @@ def mark_event_anchor_reprices(events):
     return count
 
 
+def _normalize_verified_claim_peak(result):
+    """A real traded 5m Claim is a valid lower bound for the event Peak.
+
+    Do not apply this to unverifiable legacy HLC3 / 24h VWAP prices.
+    """
+    if not isinstance(result, dict):
+        return result
+    if (result.get("claim_method") != "event_5m_quote_vwap"
+            or not math.isfinite(float(result.get("claim_quote_usd") or 0))
+            or float(result.get("claim_quote_usd") or 0) <= 0):
+        return result
+    claim = float(result["vwap"])
+    peak = result.get("max_since")
+    try:
+        good_peak = (isinstance(peak, dict)
+                     and math.isfinite(float(peak.get("price")))
+                     and float(peak["price"]) >= claim)
+    except (ValueError, TypeError, OverflowError):
+        good_peak = False
+    if good_peak:
+        return result
+    result = dict(result)
+    result["max_since"] = {"price": claim, "date": result.get("date")}
+    result["peak_quality"] = "pending_liquidity_scan"
+    return result
+
+
 def enrich_events(events):
     """
     Mutates events in-place, returns count of newly-filled entries.
@@ -1467,6 +1576,9 @@ def enrich_events(events):
                 print(f"  [price-anchor-hold] {e.get('symbol')}: "
                       "provider price belongs to another date/event", flush=True)
                 result = None
+
+            if result:
+                result = _normalize_verified_claim_peak(result)
 
             if (result and e.get("id") in EVENT_ANCHOR_REPRICE_IDS
                     and had_last_good
@@ -2050,11 +2162,25 @@ def main():
     filled_spot = enrich_spot_listing_prices(all_events)
     print(f"✅ Backfilled {filled_spot} giá lúc spot-listing (ngày lấy trực tiếp từ klines Binance)")
 
+    # Repair legacy 24h/HLC3 Claim rows by exact 5m trade data first.
+    # The same CAS-verified writer publishes All/History; never reset R2.
+    from alpha_event_claim_repair import repair_legacy_claims
+    claim_repair = repair_legacy_claims(
+        all_events,
+        fetcher=lambda row: _process_one(row, 0, 0)[1],
+        limit=16,
+        max_workers=4,
+    )
+    print("  [claim-5m-repair] "
+          f"pending={claim_repair['pending']} selected={claim_repair['selected']} "
+          f"repaired={claim_repair['repaired']} held={claim_repair['held']} "
+          f"below_claim_remaining={claim_repair['legacy_below_claim_remaining']}")
+
     peak_scan = _refresh_event_liquidity_peaks(all_events)
     print("  [peak-liquidity] "
           f"eligible={peak_scan['eligible']} selected={peak_scan['selected']} "
           f"advanced={peak_scan['advanced']} caught_up={peak_scan['caught_up']} "
-          f"held={peak_scan['held']}")
+          f"held={peak_scan['held']} recent_updated={peak_scan['recent_updated']}")
 
     # [SỬA — GIAI ĐOẠN 0 tái cấu trúc kiến trúc, ĐÃ SỬA LẠI LẦN 2]
     # Lần sửa trước tôi bỏ luôn cả history.json — SAI, vì vừa xác nhận
