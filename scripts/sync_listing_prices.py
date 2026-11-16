@@ -1084,6 +1084,45 @@ def _fetch_spot_peak_klines(symbol, start_ms, end_ms, limit=1000):
     return [k for k in all_bars if start_ms <= int(float(k[0])) <= end_ms][:limit]
 
 
+def _fetch_spot_verified_klines(symbol, interval, start_ms, end_ms=None, limit=1000):
+    """Official Binance Spot market-data-only REST; read-only and bounded.
+
+    Exact 1m Claim and daily/5m upper-bound Peak verification. A provider
+    failure is NOT a verified empty market; no symbol/time guessing.
+    """
+    if interval not in ("1m", "5m", "1d"):
+        return None
+    params = {"symbol": f"{str(symbol).upper()}USDT",
+              "interval": interval, "startTime": int(start_ms),
+              "limit": min(max(1,int(limit)),1000)}
+    if end_ms is not None:
+        params["endTime"] = int(end_ms)
+    try:
+        response = requests.get("https://data-api.binance.vision/api/v3/klines",
+                                params=params, timeout=9)
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list):
+                return result
+    except Exception:
+        pass
+    if interval == "5m" and end_ms is not None:
+        return _fetch_spot_peak_klines(str(symbol).upper(), start_ms, end_ms, limit)
+    return None
+
+
+def _repair_spot_only_historical_peaks(events):
+    """Approved legacy Spot contract backfill via existing All/History writer."""
+    from alpha_event_spot_backfill import repair_missing_spot_peaks
+    return repair_missing_spot_peaks(
+        events,
+        fetch=_fetch_spot_verified_klines,
+        max_events=24,
+        max_candidate_days=10,
+        max_seconds=240,
+    )
+
+
 def _refresh_event_liquidity_peaks(events):
     """Incrementally repair Peak only, reusing the existing All/History writer."""
     from alpha_event_peak_liquidity import refresh_liquidity_peaks
@@ -2175,6 +2214,16 @@ def main():
           f"pending={claim_repair['pending']} selected={claim_repair['selected']} "
           f"repaired={claim_repair['repaired']} held={claim_repair['held']} "
           f"below_claim_remaining={claim_repair['legacy_below_claim_remaining']}")
+
+    # Contract-fenced legacy Spot backfill: runs after Claim integrity
+    # repairs and before Alpha+Spot incremental scanner. No new R2 writer.
+    legacy_spot = _repair_spot_only_historical_peaks(all_events)
+    print("  [spot-peak-backfill] "
+          f"eligible={legacy_spot['eligible']} selected={legacy_spot['selected']} "
+          f"recovered={legacy_spot['recovered']} updated={legacy_spot['updated']} "
+          f"complete_asof={legacy_spot['complete_asof']} "
+          f"held={legacy_spot['held']} budget_exhausted={legacy_spot['budget_exhausted']}",
+          flush=True)
 
     peak_scan = _refresh_event_liquidity_peaks(all_events)
     print("  [peak-liquidity] "
