@@ -9,6 +9,11 @@ from alpha_event_spot_backfill import (
     repair_missing_spot_peaks,
 )
 from alpha_event_peak_liquidity import WINDOW_MS
+from alpha_events_completion_only_guard import (
+    _no_price_erasure, ensure_all_contains_existing_history,
+    enforce_no_unverified_history_admission,
+    keep_existing_history_without_unverified_admission,
+)
 
 LISTED = int(datetime(2026, 1, 22, tzinfo=timezone.utc).timestamp() * 1000)
 NOW = LISTED + 2 * DAY_MS + 18 * 3600_000
@@ -97,6 +102,32 @@ class FakeMarket:
 
 
 class HistoricalSpotBackfillTests(unittest.TestCase):
+    def test_real_archived_price_guard_preserves_existing_retry_receipts(self):
+        # Production SENT preimage has BOTH legacy retry fields. Removing
+        # either one triggered WA_AE_COMPLETION_ONLY_HOLD_ALL_ARCHIVED_PRICE_ERASURE
+        # and prevented all 24 recovered peaks from reaching R2.
+        row = event()
+        row["listing_price"]["source"] = "public_spot"
+        row["listing_price"]["open"] = .011
+        row["listing_price"]["close"] = .02493
+        row["listing_price"]["_price_retry_after_utc"] = "2026-11-16T12:07:53+00:00"
+        row["listing_price"]["_claim_5m_repair_retry_after_utc"] = "2026-11-17T09:45:58+00:00"
+        old = copy.deepcopy(row)
+        repaired = repair_missing_spot_peaks(
+            [row], fetch=FakeMarket().fetch, now_ms=NOW)
+        self.assertEqual(repaired["recovered"], 1)
+        self.assertTrue(_no_price_erasure(old, row))
+        self.assertEqual(row["listing_price"]["_price_retry_after_utc"],
+                         old["listing_price"]["_price_retry_after_utc"])
+        self.assertEqual(row["listing_price"]["_claim_5m_repair_retry_after_utc"],
+                         old["listing_price"]["_claim_5m_repair_retry_after_utc"])
+        self.assertEqual(ensure_all_contains_existing_history([row], [old]), 1)
+        safe, withheld = keep_existing_history_without_unverified_admission(
+            [old], [row])
+        self.assertEqual(withheld, 0)
+        self.assertEqual(safe, [row])
+        self.assertEqual(enforce_no_unverified_history_admission([old], safe), 1)
+
     def test_exactly_24_frozen_legacy_contracts(self):
         self.assertEqual(len(SPOT_MISSING_PEAK_ALLOWLIST), 24)
         self.assertEqual(SPOT_MISSING_PEAK_ALLOWLIST["SENT"]["chain"], "1")
