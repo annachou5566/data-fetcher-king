@@ -196,8 +196,17 @@ def _compute_vwap(hourly_candles, target_date_str=None, start_ms=None, end_ms=No
         high, low, close, vol = fa.safe_float(k[2]), fa.safe_float(k[3]), fa.safe_float(k[4]), fa.safe_float(k[5])
         if vol <= 0:
             continue
-        typical = (high + low + close) / 3
-        num += typical * vol
+        # Binance 1m/5m klines include real quote-asset trade volume at
+        # index 7. That is the actual sum(price * executed quantity).
+        # Prefer quote/base over OHLC typical-price approximation.
+        quote = fa.safe_float(k[7]) if len(k) > 7 else 0
+        exact = quote / vol if quote > 0 else 0
+        if quote > 0 and low > 0 and low * 0.999 <= exact <= high * 1.001:
+            num += quote
+        else:
+            # Legacy agg-klines may omit quote volume. Keep the former
+            # volume-weighted approximation rather than fabricating trades.
+            num += ((high + low + close) / 3) * vol
         den += vol
     return (num / den) if den > 0 else None
 
@@ -970,6 +979,71 @@ def fetch_event_price_public_spot(symbol, event_start_ms):
         if DEBUG:
             print(f"[debug] event spot fallback unavailable for {symbol}: {ex}", end=" ")
         return None
+
+
+def _fetch_spot_peak_klines(symbol, start_ms, end_ms, limit=1000):
+    """Current Binance Spot 5m klines, with historical Vision fallback.
+
+    data-api.binance.vision is Binance's public market-data-only endpoint.
+    Unlike Vision monthly archives, it includes the current month and day.
+    A failing provider is never silently interpreted as an empty market.
+    """
+    pair = f"{symbol}USDT"
+    try:
+        response = requests.get(
+            "https://data-api.binance.vision/api/v3/klines",
+            params={"symbol": pair, "interval": "5m", "startTime": int(start_ms),
+                    "endTime": int(end_ms), "limit": min(1000, limit)},
+            timeout=12,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+
+    # Spot REST is sometimes unavailable from hosted runners. Never
+    # substitute the monthly archive alone: it excludes recent dates.
+    from datetime import timedelta as _timedelta
+    day = datetime.fromtimestamp(start_ms / 1000, timezone.utc).date()
+    last = datetime.fromtimestamp(end_ms / 1000, timezone.utc).date()
+    all_bars = []
+    monthly_cache = {}
+    while day <= last:
+        daily = _binance_vision_daily_klines(symbol, "5m", day.isoformat())
+        if daily is None:
+            ym = day.strftime("%Y-%m")
+            if ym not in monthly_cache:
+                monthly_cache[ym] = _binance_vision_monthly_klines(symbol, "5m", ym)
+            monthly = monthly_cache[ym]
+            if monthly is None:
+                return None
+            daily = [k for k in monthly if
+                     datetime.fromtimestamp(int(float(k[0])) / 1000, timezone.utc).date() == day]
+        all_bars.extend(daily)
+        day += _timedelta(days=1)
+    return [k for k in all_bars if start_ms <= int(float(k[0])) <= end_ms][:limit]
+
+
+def _refresh_event_liquidity_peaks(events):
+    """Incrementally repair Peak only, reusing the existing All/History writer."""
+    from alpha_event_peak_liquidity import refresh_liquidity_peaks
+
+    def alpha_5m(alpha_id, start_ms, end_ms, limit):
+        return fetch_alpha_trade_klines_official(
+            alpha_id, "5m", start_ms=start_ms, end_ms=end_ms, limit=limit)
+
+    return refresh_liquidity_peaks(
+        events,
+        event_ms=_event_start_ms,
+        alpha_info=_get_alpha_info,
+        fetch_alpha=alpha_5m,
+        fetch_spot=_fetch_spot_peak_klines,
+        spot_date_resolver=fetch_spot_listing_date,
+        max_events=12,
+        pages_per_event=3,
+    )
 
 
 def fetch_spot_listing_date(symbol, since_date_str=None):
@@ -1975,6 +2049,12 @@ def main():
 
     filled_spot = enrich_spot_listing_prices(all_events)
     print(f"✅ Backfilled {filled_spot} giá lúc spot-listing (ngày lấy trực tiếp từ klines Binance)")
+
+    peak_scan = _refresh_event_liquidity_peaks(all_events)
+    print("  [peak-liquidity] "
+          f"eligible={peak_scan['eligible']} selected={peak_scan['selected']} "
+          f"advanced={peak_scan['advanced']} caught_up={peak_scan['caught_up']} "
+          f"held={peak_scan['held']}")
 
     # [SỬA — GIAI ĐOẠN 0 tái cấu trúc kiến trúc, ĐÃ SỬA LẠI LẦN 2]
     # Lần sửa trước tôi bỏ luôn cả history.json — SAI, vì vừa xác nhận
