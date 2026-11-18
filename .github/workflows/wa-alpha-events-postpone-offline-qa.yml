@@ -8,6 +8,7 @@ on:
       - scripts/test_alpha_events_lite_schedule.py
       - .github/workflows/wa-alpha-events-postpone-offline-qa.yml
 
+# Read-only test: never accesses credentials, R2, or any deployment.
 permissions:
   contents: read
 
