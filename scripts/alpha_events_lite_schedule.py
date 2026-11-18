@@ -42,6 +42,24 @@ def _time(value):
     except ValueError: return None
     return dt if dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]+'Z'==value else None
 
+def _unverified_tge_or_schedule_revision(row):
+    """Do not infer TGE execution from an elapsed forecast or revised notice.
+
+    A schedule revision is not an event. The source owner must authenticate
+    original announcements, link revisions to exact canonical event identity,
+    and separately provide terminal proof before completion.
+    """
+    action = str(row.get('notice_stage') or row.get('notice_action') or '').strip().lower().replace('_', '-')
+    if action in {'postponed', 'delayed', 'rescheduled', 'cancelled', 'canceled', 'schedule-change'}:
+        return True
+    if str(row.get('status') or '').strip().upper() != 'PREDICTED':
+        return False
+    if row.get('event_type') not in (None, ''):
+        return False
+    distribution = str(row.get('distribution_type') or '').strip().lower().replace('_', '-')
+    return distribution in {'tge', 'prime-tge'}
+
+
 def _identity(current, prior):
     # Legacy Active may omit contract/chain already present in History.
     # Present mismatches still HOLD; absent values never erase old evidence.
@@ -113,6 +131,7 @@ def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows,
     for cid,raw in active.items():
         scheduled=_time(raw.get('event_time'))
         if scheduled is None or scheduled>now: continue
+        if _unverified_tge_or_schedule_revision(raw): continue
         prior_a=by_all.get(cid)
         prior_h=by_hist.get(cid)
         if prior_a is not None: _identity(raw,prior_a)
