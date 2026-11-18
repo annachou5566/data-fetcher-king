@@ -51,7 +51,7 @@ def _unverified_tge_or_schedule_revision(row):
     qualified terminal path. Other Lite overdue events keep their old policy.
     """
     def token(value):
-        return re.sub(r'[\\s_]+', '-', str(value or '').strip().lower())
+        return re.sub(r'[\s_]+', '-', str(value or '').strip().lower())
 
     notices = {
         token(row.get(field)) for field in (
