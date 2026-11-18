@@ -37,6 +37,39 @@ class TestSchedule(unittest.TestCase):
     def test_tge_source_revision_without_new_date_is_not_archived(self):
         p=run(p=[{**BASE,'event_time':None,'distribution_type':'TGE'}])
         self.assertEqual(p['promoted'], [])
+    def test_expired_tge_event_type_without_distribution_is_not_archived(self):
+        for status in ('PREDICTED', 'ended', 'LIVE'):
+            with self.subTest(status=status):
+                p=run(p=[{**BASE,'event_type':'TGE','status':status}])
+                self.assertEqual(p['promoted'], [])
+    def test_expired_listing_notice_is_not_confirmed_by_clock(self):
+        for kind in ('LISTING','SPOT_LISTING','FUTURES_LISTING','TOKEN_GENERATION_EVENT'):
+            with self.subTest(kind=kind):
+                p=run(p=[{**BASE,'event_type':kind}])
+                self.assertEqual(p['promoted'], [])
+    def test_normalizes_type_whitespace_and_underscore(self):
+        p=run(p=[{**BASE,'event_type':'  Token Generation Event '}])
+        self.assertEqual(p['promoted'], [])
+    def test_postponed_non_tge_notice_is_not_archived(self):
+        for key,value in (('notice_stage','POSTPONEMENT'),
+                          ('sourceMessageType','SCHEDULE_UPDATE'),
+                          ('status','RESCHEDULED')):
+            with self.subTest(field=key):
+                p=run(p=[{**BASE,'event_type':'AIRDROP',key:value}])
+                self.assertEqual(p['promoted'], [])
+    def test_does_not_guess_tge_from_token_symbol(self):
+        p=run(p=[{**BASE,'symbol':'TGE','event_type':'AIRDROP'}])
+        self.assertEqual(p['promoted'], [CID])
+    def test_cannot_rewrite_existing_tge_history_by_guard(self):
+        # Existing archives stay byte-identical until a separately approved
+        # exact-ID CAS reconciliation; this fix only prevents new admission.
+        row={**BASE,'event_type':'TGE','status':'expired_unverified',
+             'archive_reason':'scheduled_time_elapsed_unverified',
+             'lifecycle_state':'history','completion_verified':False}
+        p=run(a=[row],h=[copy.deepcopy(row)],p=[row])
+        self.assertEqual(p['promoted'], [])
+        self.assertEqual(p['all'], [row])
+        self.assertEqual(p['history'], [row])
     def test_replay_no_duplicate(self):
         p=run();again=run(p['all'],p['history']);self.assertEqual(p['all'],again['all'])
     def test_future_remains_active(self):
