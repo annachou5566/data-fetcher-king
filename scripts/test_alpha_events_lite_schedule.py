@@ -19,6 +19,24 @@ class TestSchedule(unittest.TestCase):
         self.assertEqual(len(p['all']),2);self.assertEqual(p['all'],p['history'])
         self.assertEqual(p['promoted'],[CID]);self.assertEqual(p['history'][-1]['status'],'expired_unverified')
         self.assertFalse(p['history'][-1]['completion_verified']);self.assertFalse(p['retire_live'])
+    def test_unverified_tge_forecast_is_not_archived_at_deadline(self):
+        scheduled={**BASE, 'symbol':'PREDICT', 'project_name':'predictdotfun',
+                   'distribution_type':'TGE', 'event_time':'2026-11-18T09:00:00.000Z'}
+        p=run(p=[scheduled], now=datetime(2026,11,18,18,tzinfo=timezone.utc))
+        self.assertEqual(p['promoted'], [])
+        self.assertEqual(len(p['history']), 1)
+    def test_postponed_notice_never_becomes_history_event(self):
+        for action in ('POSTPONED','DELAYED','RESCHEDULED','CANCELLED','SCHEDULE_CHANGE'):
+            with self.subTest(action=action):
+                p=run(p=[{**BASE,'notice_action':action, 'event_type':'TGE'}])
+                self.assertEqual(p['promoted'], [])
+    def test_expired_non_tge_unverified_archive_behavior_retained(self):
+        p=run()
+        self.assertEqual(p['promoted'], [CID])
+        self.assertEqual(p['history'][-1]['status'],'expired_unverified')
+    def test_tge_source_revision_without_new_date_is_not_archived(self):
+        p=run(p=[{**BASE,'event_time':None,'distribution_type':'TGE'}])
+        self.assertEqual(p['promoted'], [])
     def test_replay_no_duplicate(self):
         p=run();again=run(p['all'],p['history']);self.assertEqual(p['all'],again['all'])
     def test_future_remains_active(self):
