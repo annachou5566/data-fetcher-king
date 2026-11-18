@@ -43,22 +43,37 @@ def _time(value):
     return dt if dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]+'Z'==value else None
 
 def _unverified_tge_or_schedule_revision(row):
-    """Do not infer TGE execution from an elapsed forecast or revised notice.
+    """A schedule clock alone cannot promote a postponed notice or a TGE.
 
-    A schedule revision is not an event. The source owner must authenticate
-    original announcements, link revisions to exact canonical event identity,
-    and separately provide terminal proof before completion.
+    The existing Oracle source owner must bind a reschedule to the exact
+    canonical event. This price/History writer cannot authenticate the source
+    action and must leave TGE/listing confirmation to the separate signed,
+    qualified terminal path. Other Lite overdue events keep their old policy.
     """
-    action = str(row.get('notice_stage') or row.get('notice_action') or '').strip().lower().replace('_', '-')
-    if action in {'postponed', 'delayed', 'rescheduled', 'cancelled', 'canceled', 'schedule-change'}:
-        return True
-    if str(row.get('status') or '').strip().upper() != 'PREDICTED':
-        return False
-    if row.get('event_type') not in (None, ''):
-        return False
-    distribution = str(row.get('distribution_type') or '').strip().lower().replace('_', '-')
-    return distribution in {'tge', 'prime-tge'}
+    def token(value):
+        return re.sub(r'[\\s_]+', '-', str(value or '').strip().lower())
 
+    notices = {
+        token(row.get(field)) for field in (
+            'notice_action', 'notice_stage', 'source_message_type',
+            'sourceMessageType', 'announcement_action', 'status')
+    }
+    if notices & {
+        'postponed', 'delay', 'delayed', 'rescheduled', 'reschedule',
+        'schedule-change', 'date-change', 'cancelled', 'canceled',
+        'postponement', 'schedule-update'
+    }:
+        return True
+
+    # The scheduled-archive path has no authentic signed completion proof.
+    # Never infer LISTING/TGE completion from event_time, source channel,
+    # PREDICTED/ended status or a matching token name alone.
+    kind = {token(row.get(field)) for field in (
+        'event_type', 'distribution_type', 'eventType', 'distributionType')}
+    return bool(kind & {
+        'tge', 'prime-tge', 'token-generation-event', 'listing',
+        'spot-listing', 'futures-listing'
+    })
 
 def _identity(current, prior):
     # Legacy Active may omit contract/chain already present in History.
