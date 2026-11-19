@@ -2093,6 +2093,16 @@ def apply_alpha_status(events, status_map, futures_symbols=None):
 
 
 def main():
+    # PREDICT postponed History repair: exclusive source-only default OFF.
+    # Guard precedes any network, price enrichment, R2 or DB operations.
+    _ae_postpone_mode = os.getenv('WA_ALPHA_EVENTS_POSTPONEMENT_SOURCE_MODE', 'OFF')
+    if _ae_postpone_mode != 'OFF':
+        from alpha_events_postponement_entrypoint import run_existing_writer_postponement
+        return run_existing_writer_postponement(
+            mode=_ae_postpone_mode, r2_factory=get_r2, bucket=R2_BUCKET_NAME,
+            target_id=os.getenv('WA_ALPHA_EVENTS_POSTPONEMENT_TARGET_ID'),
+            canonical_reader=None, publisher_reader=None,
+            writer_approved=False, independent_provenance_verified=False)
     from alpha_events_completion_only_guard import (
         enforce_no_unverified_history_admission,
         keep_existing_history_without_unverified_admission,
