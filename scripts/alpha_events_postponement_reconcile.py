@@ -49,6 +49,17 @@ def _ids(rows, name):
     return ids
 
 
+def _is_tge(row):
+    # Canonical external-event summaries often have event_type=None. Exact
+    # source evidence is TGE; the R2 projection retains distribution_type.
+    def norm(v):
+        return re.sub(r'[\s_-]+', '-', str(v or '').strip().lower())
+    event, distribution = norm(row.get('event_type')), norm(row.get('distribution_type'))
+    if event and event not in TARGET_KIND: return False
+    if distribution and distribution not in TARGET_KIND: return False
+    return event in TARGET_KIND or distribution in TARGET_KIND
+
+
 def _legacy_other_pair(all_other, hist_other):
     # History must be a FULL exact multiset subset of All. All can legitimately
     # have additional Active/price-only rows; do not demand All==History.
@@ -84,7 +95,7 @@ def _canonical_proof(row, target_id, ack):
     refs=row.get('evidenceRefs')
     if not isinstance(event,dict) or not isinstance(refs,list) or len(refs)<2 or len(refs)>1000 or event.get('canonicalId')!=target_id:
         hold('CANONICAL_CUSTODY_INVALID')
-    if (event.get('eventType')!='TGE' or event.get('lifecycleState')!='PREDICTED' or
+    if (event.get('eventType') not in (None,'TGE') or event.get('lifecycleState')!='PREDICTED' or
         event.get('eventTime') is not None or event.get('eventEndTime') is not None or
         event.get('officialConfirmation') is not None):
         hold('CANONICAL_NOT_POSTPONED_TGE')
@@ -159,7 +170,7 @@ def _active_proof(active_versions, public_rows, publish_ack, target_id, canonica
     if (row.get('symbol')!=canonical.get('symbol') or
         row.get('event_time') is not None or row.get('status')!='PREDICTED' or
         row.get('notice_action')!='postponed' or row.get('official_action_verified') is True or
-        row.get('completion_verified') is True or row.get('event_type') not in TARGET_KIND):
+        row.get('completion_verified') is True or not _is_tge(row)):
         hold('ACTIVE_REVISION_NOT_POSTPONED')
     return {'revision':rev,'afterReceiptId':after,'activeSha256':_sha(active),
             'originalEventTime':origin['eventTime'],
@@ -170,7 +181,7 @@ def _active_proof(active_versions, public_rows, publish_ack, target_id, canonica
 
 def _target_valid(target, cid):
     return (target.get('id')==cid and target.get('status')=='expired_unverified' and
-            target.get('event_time') is not None and target.get('event_type') in TARGET_KIND and
+            target.get('event_time') is not None and _is_tge(target) and
             target.get('completion_verified') is not True and
             target.get('lifecycle_state') in ('history','HISTORY'))
 
