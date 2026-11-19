@@ -42,6 +42,39 @@ def _time(value):
     except ValueError: return None
     return dt if dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]+'Z'==value else None
 
+def _unverified_tge_or_schedule_revision(row):
+    """A schedule clock alone cannot promote a postponed notice or a TGE.
+
+    The existing Oracle source owner must bind a reschedule to the exact
+    canonical event. This price/History writer cannot authenticate the source
+    action and must leave TGE/listing confirmation to the separate signed,
+    qualified terminal path. Other Lite overdue events keep their old policy.
+    """
+    def token(value):
+        return re.sub(r'[\s_]+', '-', str(value or '').strip().lower())
+
+    notices = {
+        token(row.get(field)) for field in (
+            'notice_action', 'notice_stage', 'source_message_type',
+            'sourceMessageType', 'announcement_action', 'status')
+    }
+    if notices & {
+        'postponed', 'delay', 'delayed', 'rescheduled', 'reschedule',
+        'schedule-change', 'date-change', 'cancelled', 'canceled',
+        'postponement', 'schedule-update'
+    }:
+        return True
+
+    # The scheduled-archive path has no authentic signed completion proof.
+    # Never infer LISTING/TGE completion from event_time, source channel,
+    # PREDICTED/ended status or a matching token name alone.
+    kind = {token(row.get(field)) for field in (
+        'event_type', 'distribution_type', 'eventType', 'distributionType')}
+    return bool(kind & {
+        'tge', 'prime-tge', 'token-generation-event', 'listing',
+        'spot-listing', 'futures-listing'
+    })
+
 def _identity(current, prior):
     # Legacy Active may omit contract/chain already present in History.
     # Present mismatches still HOLD; absent values never erase old evidence.
@@ -113,6 +146,7 @@ def plan_scheduled_archive(all_rows, history_rows, active_versions, public_rows,
     for cid,raw in active.items():
         scheduled=_time(raw.get('event_time'))
         if scheduled is None or scheduled>now: continue
+        if _unverified_tge_or_schedule_revision(raw): continue
         prior_a=by_all.get(cid)
         prior_h=by_hist.get(cid)
         if prior_a is not None: _identity(raw,prior_a)
