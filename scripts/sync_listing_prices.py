@@ -2463,6 +2463,22 @@ def main():
         # enrichment remains unchanged for the already-owned legacy archive.
         previous_history, history24h_etag = history24h_snapshot(
             r2, R2_BUCKET_NAME, "alpha-events/history.json")
+        # Exact-ID, owner-approved manual PREDICT postponement correction.
+        # Same existing All/History CAS writer; no alternate cron, R2 client
+        # or guessed 706->674 Telegram receipt link. History removal occurs
+        # only after strict target preimage and price-preservation checks.
+        if lite_schedule_enabled:
+            from alpha_events_predict_postpone_once import (
+                repair_pair as repair_predict_pair,
+                keep_in_history as predict_keeps_history,
+            )
+            all_events, previous_history, predict_changed, predict_phase = repair_predict_pair(
+                all_events, previous_history)
+            history = [e for e in all_events
+                       if e.get("status") not in ("upcoming", "live")
+                       and predict_keeps_history(e)]
+            if predict_changed:
+                print(f"  [predict-postponement] exact-ID CAS stage={predict_phase}")
         # If a previous All-first CAS succeeded but History CAS lost its ACK,
         # recover only the exact pre-existing unverified History identities.
         # Do not admit arbitrary new events or overwrite verified completion.
